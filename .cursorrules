@@ -1,0 +1,7 @@
+# .cursorrules for iagent-mesh-sdk
+
+1. Always use Pydantic models for request/response bodies when creating new agents.
+2. The core framework is FastAPI, but user agents should never directly use `Request` or `Response` objects unless strictly necessary. They should rely on the `@app.execute()` decorator provided by `iagent_mesh.core`.
+3. Use typing and docstrings for all models.
+4. Stick to modern Python standards (Python 3.9+).
+5. For data processing, prefer `polars` over `pandas` where applicable, unless legacy libraries specifically require pandas.
