@@ -32,7 +32,7 @@ def scaffold_local_workspace(template_id: str, tool_name: str, tool_urn: str, ta
 def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group: str) -> str:
     """
     Publishes a local agent workspace to the iagent Mesh platform.
-    Mocks API provisioning, pushes code, and registers with DataHub.
+    Provisions via API, pushes code, and registers with DataHub.
     """
     try:
         assert settings.MESH_DEV_TOKEN is not None, "MESH_DEV_TOKEN is required"
@@ -43,8 +43,7 @@ def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group:
             headers={"Authorization": f"Bearer {settings.MESH_DEV_TOKEN}"}
         )
         response.raise_for_status()
-        # Assume provision API returns {"git_url": "..."} or similar. We will just extract the mock_git_url logically based on the prompt instructions to "Extract the returned git_url." If the schema is unknown, we will try response.json().get('git_url')
-        # However, to be safe since this might be a mock payload in our tests, we'll assign it from the response.
+        # Assume provision API returns {"git_url": "..."}
         git_url = response.json().get("git_url", f"https://{settings.GIT_SERVER_HOST}/{target_git_group}/{os.path.basename(local_directory)}.git")
         
         try:
@@ -54,8 +53,11 @@ def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group:
         except subprocess.CalledProcessError as e:
             return f"Failed to push to remote: {e.stderr.decode() if e.stderr else str(e)}"
         
-        # Mock a DataHub registration API call
-        # httpx.post(f"{settings.DATAHUB_URL}/entities", json={"urn": tool_urn})
+        # Register the new tool with DataHub
+        try:
+            httpx.post(f"{settings.DATAHUB_URL}/entities", json={"urn": tool_urn, "type": "AITool"})
+        except httpx.RequestError as e:
+            return f"Successfully published {tool_urn} to {git_url}, but failed to register with DataHub: {str(e)}"
         
         return f"Successfully published {tool_urn} from {local_directory} to {git_url} and registered with DataHub."
     except Exception as e:
