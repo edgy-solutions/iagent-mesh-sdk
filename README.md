@@ -12,6 +12,20 @@ This Hub leverages the **Inception Pattern** to dynamically scaffold new agent t
 - **MCP Server**: The `mcp_server/server.py` exposes tools (`scaffold_local_workspace`, `publish_local_to_mesh`) for intelligent IDE-based agent creation.
 - **Cloud Endpoints**: `app.py` exposes REST APIs (`scaffold_generator`, `mesh_publisher`) for the central orchestrator to provision workspaces dynamically.
 
+## Environment Configuration
+
+This SDK relies on centralized environment variables for all integrations to ensure no hardcoded enterprise strings are checked in. See the `.env.example` file in the root directory for a full list.
+
+**Required URLs:**
+- `DATAHUB_URL`: The active DataHub registration endpoint.
+- `GIT_PROVISION_API_URL`: The platform provisioning API for repositories.
+- `GIT_SERVER_HOST`: The core Git server hostname.
+- `ARTIFACTORY_BASE_URL`: The enterprise artifact repository.
+
+**Required Tokens (Depending on deployment):**
+- `PLATFORM_GIT_TOKEN`: Used by the cloud pod (`app.py`) for live git publishing.
+- `MESH_DEV_TOKEN`: Used by the local `mcp_server` to authenticate against provisioning APIs.
+
 ## Installation & Testing
 
 Data scientists can install the core SDK via:
