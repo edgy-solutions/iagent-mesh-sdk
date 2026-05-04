@@ -1,0 +1,13 @@
+[project]
+name = "REPLACE_ME_NAME"
+version = "0.1.0"
+description = "Instructor + Polars tool"
+dependencies = [
+    "iagent_mesh",
+    "pydantic",
+    "polars",
+    "instructor",
+    "openai",
+    "pyyaml"
+]
+requires-python = ">=3.9"

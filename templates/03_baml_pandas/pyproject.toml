@@ -1,0 +1,12 @@
+[project]
+name = "REPLACE_ME_NAME"
+version = "0.1.0"
+description = "BAML + Pandas tool"
+dependencies = [
+    "iagent_mesh",
+    "pydantic",
+    "polars",
+    "pandas",
+    "baml-client"
+]
+requires-python = ">=3.9"

@@ -1,0 +1,2 @@
+system_prompt: |
+  You are an expert at analyzing inventory. Extract high priority items and their total value.

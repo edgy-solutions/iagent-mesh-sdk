@@ -1,0 +1,9 @@
+[project]
+name = "REPLACE_ME_NAME"
+version = "0.1.0"
+description = "Pure math tool"
+dependencies = [
+    "iagent_mesh",
+    "pydantic"
+]
+requires-python = ">=3.9"
