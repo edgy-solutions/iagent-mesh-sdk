@@ -6,6 +6,7 @@ from pydantic import Field
 from iagent_mesh.models import ToolInput, ToolOutput
 from iagent_mesh.core import MeshTool
 from iagent_mesh.scaffold_core import generate_template_files
+from iagent_mesh.config import settings
 
 # 1. Define Schemas
 class ScaffoldInput(ToolInput):
@@ -47,16 +48,16 @@ def run_publish(data: PublishInput) -> PublishOutput:
     if not os.path.exists(target_path):
         raise ValueError(f"Workspace not found at {target_path}")
         
-    token = os.getenv("PLATFORM_GIT_TOKEN", "mock_token")
-    git_url = f"https://oauth2:{token}@git.sustainment.internal/{data.target_git_group}/{data.tool_name}.git"
+    assert settings.PLATFORM_GIT_TOKEN is not None, "PLATFORM_GIT_TOKEN is required"
+    git_url = f"https://oauth2:{settings.PLATFORM_GIT_TOKEN}@{settings.GIT_SERVER_HOST}/{data.target_git_group}/{data.tool_name}.git"
     
     # Initialize git, commit, and push
     subprocess.run(["git", "init"], cwd=target_path, check=True)
     subprocess.run(["git", "add", "."], cwd=target_path, check=True)
-    # The S2I hook generated a file, let's commit it all
     subprocess.run(["git", "commit", "-m", f"Automated DevEx Scaffold for {data.tool_name}"], cwd=target_path, check=True)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=target_path, check=True)
     subprocess.run(["git", "remote", "add", "origin", git_url], cwd=target_path, check=True)
-    # subprocess.run(["git", "push", "-u", "origin", "main"], cwd=target_path, check=True) # Mocked to prevent actual push errors
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=target_path, check=True)
     
     return PublishOutput(status="Success", git_url=git_url)
 

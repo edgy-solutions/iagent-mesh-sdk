@@ -1,6 +1,7 @@
 import os
 import shutil
 from pathlib import Path
+from iagent_mesh.config import settings
 
 def generate_template_files(template_id: str, tool_name: str, tool_urn: str, dest_dir: str) -> None:
     """Scaffold a new tool from a template."""
@@ -55,11 +56,38 @@ uv pip install --system -r pyproject.toml
     jenkins_content = f"""pipeline {{
     agent any
     stages {{
-        stage('Build') {{
+        stage('Bootstrap Runner') {{
+            steps {{
+                echo 'Downloading S2I, UV, and Bandit from Artifactory...'
+                sh '''
+                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/s2i/s2i-linux-amd64.tar.gz
+                    tar -xzf s2i-linux-amd64.tar.gz
+                    chmod +x s2i
+                    export PATH=$PATH:$(pwd)
+                    
+                    # Assuming uv and bandit are also available as binaries
+                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/uv/uv-linux-amd64.tar.gz
+                    tar -xzf uv-linux-amd64.tar.gz
+                    chmod +x uv
+                    
+                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/bandit/bandit-linux.tar.gz
+                    tar -xzf bandit-linux.tar.gz
+                    chmod +x bandit
+                '''
+            }}
+        }}
+        stage('Security Scan') {{
+            steps {{
+                echo 'Running Bandit Security Scan...'
+                sh './bandit -r .'
+            }}
+        }}
+        stage('Build & Push') {{
             steps {{
                 echo 'Building {tool_name} with S2I...'
-                // Placeholder for standard S2I build steps
-                sh 's2i build . python-39-centos7 {tool_name}:latest'
+                sh './s2i build . python-39-centos7 {settings.ARTIFACTORY_BASE_URL}/docker-local/{tool_name}:latest'
+                echo 'Pushing {tool_name} to Artifactory...'
+                sh 'docker push {settings.ARTIFACTORY_BASE_URL}/docker-local/{tool_name}:latest'
             }}
         }}
     }}

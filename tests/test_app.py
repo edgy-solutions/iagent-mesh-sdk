@@ -26,10 +26,8 @@ def test_scaffold_generator():
     assert os.path.exists(os.path.join(target_path, "app.py"))
 
 @patch("subprocess.run")
-@patch("os.getenv")
-def test_mesh_publisher(mock_getenv, mock_subprocess_run, tmp_path):
+def test_mesh_publisher(mock_subprocess_run, tmp_path):
     # Setup mock env and files
-    mock_getenv.return_value = "dummy_token"
     mock_subprocess_run.return_value.returncode = 0
     
     workspace_uuid = "test-uuid"
@@ -50,10 +48,10 @@ def test_mesh_publisher(mock_getenv, mock_subprocess_run, tmp_path):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "Success"
-    assert data["git_url"] == "https://oauth2:dummy_token@git.sustainment.internal/test-group/test-tool.git"
+    assert data["git_url"] == "https://oauth2:mock_token@mock-git-server/test-group/test-tool.git"
     
-    # Verify subprocess.run was called multiple times (init, add, commit, remote add)
-    assert mock_subprocess_run.call_count >= 4
+    # Verify subprocess.run was called multiple times (init, add, commit, branch, remote add, push)
+    assert mock_subprocess_run.call_count >= 6
     
     calls = mock_subprocess_run.call_args_list
     init_call = calls[0]
@@ -65,5 +63,11 @@ def test_mesh_publisher(mock_getenv, mock_subprocess_run, tmp_path):
     commit_call = calls[2]
     assert "commit" in commit_call[0][0]
     
-    remote_call = calls[3]
+    branch_call = calls[3]
+    assert "branch" in branch_call[0][0]
+    
+    remote_call = calls[4]
     assert "remote" in remote_call[0][0]
+    
+    push_call = calls[5]
+    assert "push" in push_call[0][0]

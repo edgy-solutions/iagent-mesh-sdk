@@ -1,8 +1,10 @@
 import os
 import inspect
 import logging
+import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
+from iagent_mesh.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MeshTool")
@@ -18,7 +20,14 @@ class MeshTool:
         # PLATFORM LOGIC: This runs when the S2I container boots.
         # Here is where you POST the OpenAPI schema to DataHub.
         logger.info(f"Registering {self.urn} to DataHub Mesh...")
-        # httpx.post("http://datahub:8080", json={"urn": self.urn})
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{settings.DATAHUB_URL}/entities",
+                    json={"urn": self.urn, "type": "AITool", "description": self.description}
+                )
+        except httpx.RequestError as e:
+            logger.warning(f"Failed to register to DataHub Mesh: {e}")
         yield
         logger.info(f"Deregistering {self.urn} from Mesh...")
 

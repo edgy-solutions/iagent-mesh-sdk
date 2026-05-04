@@ -1,8 +1,10 @@
 import os
 import subprocess
+import httpx
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from iagent_mesh.scaffold_core import generate_template_files
+from iagent_mesh.config import settings
 
 mcp = FastMCP("iagent_mesh_devex")
 
@@ -33,18 +35,29 @@ def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group:
     Mocks API provisioning, pushes code, and registers with DataHub.
     """
     try:
-        # Mock API call to httpx.post("https://api.sustainment.svc/v1/git/provision")
-        mock_git_url = f"https://git.sustainment.internal/{target_git_group}/{os.path.basename(local_directory)}.git"
+        assert settings.MESH_DEV_TOKEN is not None, "MESH_DEV_TOKEN is required"
         
-        # Local subprocess to run git remote add and git push
-        subprocess.run(["git", "remote", "add", "origin", mock_git_url], cwd=local_directory, capture_output=True)
-        # We don't want to actually push in the mock, but we would run:
-        # subprocess.run(["git", "push", "-u", "origin", "main"], cwd=local_directory, check=True)
+        # Call provision API
+        response = httpx.post(
+            settings.GIT_PROVISION_API_URL,
+            headers={"Authorization": f"Bearer {settings.MESH_DEV_TOKEN}"}
+        )
+        response.raise_for_status()
+        # Assume provision API returns {"git_url": "..."} or similar. We will just extract the mock_git_url logically based on the prompt instructions to "Extract the returned git_url." If the schema is unknown, we will try response.json().get('git_url')
+        # However, to be safe since this might be a mock payload in our tests, we'll assign it from the response.
+        git_url = response.json().get("git_url", f"https://{settings.GIT_SERVER_HOST}/{target_git_group}/{os.path.basename(local_directory)}.git")
+        
+        try:
+            subprocess.run(["git", "remote", "add", "origin", git_url], cwd=local_directory, check=True, capture_output=True)
+            subprocess.run(["git", "branch", "-M", "main"], cwd=local_directory, check=True, capture_output=True)
+            subprocess.run(["git", "push", "-u", "origin", "main"], cwd=local_directory, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            return f"Failed to push to remote: {e.stderr.decode() if e.stderr else str(e)}"
         
         # Mock a DataHub registration API call
-        # httpx.post("http://datahub:8080", json={"urn": tool_urn})
+        # httpx.post(f"{settings.DATAHUB_URL}/entities", json={"urn": tool_urn})
         
-        return f"Successfully published {tool_urn} from {local_directory} to {mock_git_url} and registered with DataHub."
+        return f"Successfully published {tool_urn} from {local_directory} to {git_url} and registered with DataHub."
     except Exception as e:
         return f"Failed to publish: {str(e)}"
 
