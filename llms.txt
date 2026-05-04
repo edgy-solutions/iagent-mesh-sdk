@@ -2,3 +2,4 @@ LLM Integration Guidelines:
 - Agents should leverage Instructor, BAML, or Langchain/LlamaIndex depending on the exact use case.
 - Base URLs for Local/Private inference (like vLLM) should be configurable.
 - The `iagent_mesh` does not tie you to any specific LLM provider, providing maximum flexibility to the data scientist.
+- **DevEx Integration**: Use the repository's built-in FastMCP Server (`mcp_server/server.py`) to give your LLM IDE the ability to locally scaffold and publish new tools (The Inception Pattern).

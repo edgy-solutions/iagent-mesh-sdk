@@ -5,3 +5,5 @@
 3. Use typing and docstrings for all models.
 4. Stick to modern Python standards (Python 3.9+).
 5. For data processing, prefer `polars` over `pandas` where applicable, unless legacy libraries specifically require pandas.
+8. **Testing**: Always ensure the core architecture and scaffolding logic passes the pytest regression suite (`python -m pytest`) before committing.
+9. **DevEx Hub**: When creating new templates, ensure they are placed in `templates/` with a `template.yaml` and do not break the scaffolding scripts or the `mcp_server`.
