@@ -32,7 +32,7 @@ def scaffold_local_workspace(template_id: str, tool_name: str, tool_urn: str, ta
 def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group: str) -> str:
     """
     Publishes a local agent workspace to the iagent Mesh platform.
-    Provisions via API, pushes code, and registers with DataHub.
+    Provisions via API and pushes code.
     """
     try:
         assert settings.MESH_DEV_TOKEN is not None, "MESH_DEV_TOKEN is required"
@@ -53,13 +53,7 @@ def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group:
         except subprocess.CalledProcessError as e:
             return f"Failed to push to remote: {e.stderr.decode() if e.stderr else str(e)}"
         
-        # Register the new tool with DataHub
-        try:
-            httpx.post(f"{settings.DATAHUB_URL}/entities", json={"urn": tool_urn, "type": "AITool"})
-        except httpx.RequestError as e:
-            return f"Successfully published {tool_urn} to {git_url}, but failed to register with DataHub: {str(e)}"
-        
-        return f"Successfully published {tool_urn} from {local_directory} to {git_url} and registered with DataHub."
+        return f"Successfully published {tool_urn} from {local_directory} to {git_url}."
     except Exception as e:
         return f"Failed to publish: {str(e)}"
 
