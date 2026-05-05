@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from pydantic import Field
 from iagent_mesh.models import ToolInput, ToolOutput
 from iagent_mesh.core import MeshTool
-from iagent_mesh.scaffold_core import generate_template_files
+from iagent_mesh.scaffold_core import generate_template_files, publish_workspace_to_git
 from iagent_mesh.config import settings
 
 # 1. Define Schemas
@@ -51,13 +51,11 @@ def run_publish(data: PublishInput) -> PublishOutput:
     assert settings.PLATFORM_GIT_TOKEN is not None, "PLATFORM_GIT_TOKEN is required"
     git_url = f"https://oauth2:{settings.PLATFORM_GIT_TOKEN}@{settings.GIT_SERVER_HOST}/{data.target_git_group}/{data.tool_name}.git"
     
-    # Initialize git, commit, and push
-    subprocess.run(["git", "init"], cwd=target_path, check=True)
-    subprocess.run(["git", "add", "."], cwd=target_path, check=True)
-    subprocess.run(["git", "commit", "-m", f"Automated DevEx Scaffold for {data.tool_name}"], cwd=target_path, check=True)
-    subprocess.run(["git", "branch", "-M", "main"], cwd=target_path, check=True)
-    subprocess.run(["git", "remote", "add", "origin", git_url], cwd=target_path, check=True)
-    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=target_path, check=True)
+    # Use centralized utility
+    try:
+        publish_workspace_to_git(target_path, git_url)
+    except RuntimeError as e:
+        raise ValueError(str(e))
     
     return PublishOutput(status="Success", git_url=git_url)
 

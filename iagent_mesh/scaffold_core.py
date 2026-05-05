@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from iagent_mesh.config import settings
 
@@ -93,5 +94,18 @@ uv pip install --system -r pyproject.toml
     }}
 }}"""
     jenkinsfile.write_text(jenkins_content, encoding="utf-8")
-    
     print(f"Scaffolded {tool_name} from {template_id} to {dest_dir}")
+
+def publish_workspace_to_git(workspace_dir: str, git_url: str) -> None:
+    """Centralized utility to initialize, commit, and push a workspace to a git remote."""
+    try:
+        # We use check=True and capture_output=True so we can retrieve stderr on failure
+        subprocess.run(["git", "init"], cwd=workspace_dir, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=workspace_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Automated DevEx Scaffold"], cwd=workspace_dir, check=True, capture_output=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=workspace_dir, check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", git_url], cwd=workspace_dir, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=workspace_dir, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.decode() if e.stderr else str(e)
+        raise RuntimeError(f"Git publishing failed: {error_msg}")
