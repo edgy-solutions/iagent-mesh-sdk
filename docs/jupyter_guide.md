@@ -113,14 +113,31 @@ def investigate_supplier(data: SupplierInput) -> InvestigationOutput:
     return InvestigationOutput(root_cause_analysis=verdict)
 ```
 
-### Scaffolding to Production
-To turn this notebook into a production repository, use the provided interactive scaffolding wizard:
+## 5. From Notebook to Production (The Template Smorgasbord)
 
-```bash
-# In your terminal
-./scripts/scaffold.sh
-# Follow the interactive prompts to select your template and tool name!
-```
+Your notebook is the perfect place to prototype your data logic and prompts. Once your agent or tool is working, you need to package it for the Mesh. 
+
+Instead of writing Dockerfiles, Kubernetes manifests, and FastAPI boilerplate from scratch, you pull from our curated smorgasbord of enterprise templates (e.g., `instructor_polars`, `smolagents_router`, `basic_meshtool`).
+
+### Step 1: Scaffold your workspace
+Generate a fresh template using any of these three methods:
+
+1. **Ask the Central AI (The Control Plane):** Use your `MeshClient` to ask Engine A to do it for you:
+   `client.ask("Scaffold a new smolagents template named supply_chain_investigator")`
+   
+2. **Ask your IDE (The MCP Server):** If you are using an AI IDE (like Cursor or Windsurf) connected to your local workspace, just ask it! Our local MCP server allows your IDE to scaffold templates autonomously.
+   
+3. **Use the Terminal Wizard:**
+   ```bash
+   # Run the interactive wizard to select your template
+   ./scripts/scaffold.sh
+   ```
+
+### Step 2: Paste and Publish
+Once your template is generated:
+1. Copy your prototyped Pydantic models and `@app.execute()` function from your notebook into the new `app.py` file.
+2. Push the repository to Git (or ask the MCP server to `publish` it for you). 
+3. Our GitOps pipeline will automatically build your container, deploy it, and dynamically register your Domain Node to the global Mesh!
 
 ---
 
