@@ -36,174 +36,54 @@ df = lf.collect()
 print(df.head())
 ```
 
-## 3. Prompt Engineering the Mesh (Tool Registration)
+## 3. Building Your Own Node (Moving to the IDE)
 
-When you turn your Python logic into a Mesh Tool, you are not just writing an API—**you are prompt engineering the central AI.** The Central Orchestrator reads your `description` strings to decide when and how to route traffic to you. The better your descriptions, the smarter the Central AI becomes at using your tool.
+Your notebook is perfect for prototyping data logic (Data Plane) and asking the AI questions (Control Plane). But when you are ready to turn your logic into an enterprise capability, **you move out of the notebook and into your IDE.**
 
-### Scenario C: Steering the Central AI with Pydantic
-```python
-from iagent_mesh.core import MeshTool
-from iagent_mesh.models import ToolInput, ToolOutput
-from pydantic import Field
-from dag_tools.cortex_data.client import CortexDataClient
-
-# 1. PROMPT ENGINEERING YOUR INPUTS
-# These descriptions tell the Central LLM exactly how to format the data before calling you.
-class AnalysisInput(ToolInput):
-    facility_id: str = Field(
-        ..., 
-        description="The exact ID of the facility (e.g., 'FAC-123'). If the user provides a city name, you must look up the facility_id first."
-    )
-    confidence: float = Field(
-        0.95, 
-        description="Statistical confidence threshold. Default to 0.95 unless the user specifies otherwise."
-    )
-
-class AnalysisOutput(ToolOutput):
-    score: float
-    recommendation: str
-
-# 2. PROMPT ENGINEERING YOUR TOOL
-# This acts as the System Prompt for your capability in the mesh.
-app = MeshTool(
-    name="reliability_analyzer", 
-    description="USE THIS TOOL ONLY when asked to perform deep statistical reliability analysis. Do not use this for simple metrics."
-)
-
-@app.execute()
-def my_analysis(data: AnalysisInput) -> AnalysisOutput:
-    # Crunch the numbers using the Data Plane
-    client = CortexDataClient()
-    lf = client.get_dataframe("urn:li:dataset:...")
-    
-    return AnalysisOutput(score=42.0, recommendation="Inspect turbine blade pitch.")
-```
-
-## 4. The Agentic Tool (Building a Sub-Swarm)
-
-Sometimes, pure math isn't enough. If your tool needs to perform complex reasoning *before* returning an answer to the Central Orchestrator, you can embed your own local LLM agent directly inside the Mesh Tool! 
-
-You control the brain of your specific domain.
-
-### Scenario D: Putting an Agent inside a Tool
-```python
-from iagent_mesh.core import MeshTool
-from pydantic import Field
-from smolagents import CodeAgent, HfApiModel # Or LangChain, Ollama, etc.
-from dag_tools.cortex_data.client import CortexDataClient
-
-app = MeshTool(
-    name="supply_chain_investigator", 
-    description="Pass a supplier ID to this tool, and it will autonomously investigate their recent delays."
-)
-
-@app.execute()
-def investigate_supplier(data: SupplierInput) -> InvestigationOutput:
-    # 1. Pull the massive datasets locally
-    client = CortexDataClient()
-    df_delays = client.get_dataframe("urn:li:dataset:supplier_delays").collect()
-    
-    # 2. Spin up your own LOCAL agent to reason over the data!
-    local_agent = CodeAgent(tools=[], model=HfApiModel())
-    
-    prompt = f"Analyze this delay data for {data.supplier_id} and determine the root cause: {df_delays.to_pandas()}"
-    verdict = local_agent.run(prompt)
-    
-    # 3. Return the intelligent verdict back up to the Central Orchestrator
-    return InvestigationOutput(root_cause_analysis=verdict)
-```
-
-## 5. Integrating Legacy Frameworks (LangChain & LlamaIndex)
-
-If you have already built robust RAG pipelines in LlamaIndex or complex agentic loops in LangChain, **do not rewrite them!** Instead, wrap them in a `MeshTool`. The Central AI (Engine A) will act as your "Front Desk." It will parse the messy human prompt, extract the exact entities your LangChain/LlamaIndex setup needs, and hand you a perfectly formatted Pydantic object to kick off your existing graph.
-
-### Scenario E: The LlamaIndex / LangChain Adapter
-```python
-from iagent_mesh.core import MeshTool
-from iagent_mesh.models import ToolInput, ToolOutput
-from pydantic import Field
-from typing import Literal
-
-# Import your legacy frameworks!
-from llama_index.core import VectorStoreIndex, Document
-from langchain.agents import initialize_agent, AgentType
-from langchain.chat_models import ChatOpenAI
-
-# 1. PROMPT ENGINEER YOUR INGRESS
-# Engine A does the heavy NLP parsing so your LlamaIndex/LangChain code doesn't have to.
-class EnterprisePolicyInput(ToolInput):
-    clean_query: str = Field(
-        ..., 
-        description="Rewrite the user's messy prompt into a highly optimized search query for a Vector DB."
-    )
-    policy_domain: Literal["HR", "IT", "Finance"] = Field(
-        ..., 
-        description="Classify the domain of the question to route to the correct LlamaIndex store."
-    )
-    requires_approval: bool = Field(
-        False, 
-        description="Set to True if the user is asking to modify a policy or execute a financial transaction."
-    )
-
-class PolicyOutput(ToolOutput):
-    final_answer: str
-    sources_cited: list[str]
-
-# 2. REGISTER THE NODE
-app = MeshTool(
-    name="enterprise_policy_router", 
-    description="ROUTE ALL company policy, IT troubleshooting, and HR questions here."
-)
-
-@app.execute()
-def legacy_framework_router(data: EnterprisePolicyInput) -> PolicyOutput:
-    # --- YOUR EXISTING LLAMA-INDEX / LANGCHAIN CODE LIVES HERE ---
-    
-    if data.requires_approval:
-        # Route to a LangChain execution agent for action-taking
-        llm = ChatOpenAI(temperature=0)
-        agent = initialize_agent(tools=[...], llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
-        result = agent.run(f"Execute approval workflow for: {data.clean_query}")
-        return PolicyOutput(final_answer=result, sources_cited=["LangChain Execution Env"])
-        
-    else:
-        # Route to LlamaIndex for heavy RAG
-        # Because Engine A already classified 'policy_domain', you know exactly which index to load!
-        index = load_my_llama_index(domain=data.policy_domain) 
-        query_engine = index.as_query_engine()
-        
-        # Notice we use the 'clean_query' that Engine A optimized for us
-        response = query_engine.query(data.clean_query) 
-        
-        sources = [node.node.metadata.get('file_name') for node in response.source_nodes]
-        return PolicyOutput(final_answer=str(response), sources_cited=sources)
-```
-
-## 6. From Notebook to Production (The Template Smorgasbord)
-
-Your notebook is the perfect place to prototype your data logic and prompts. Once your agent or tool is working, you need to package it for the Mesh. 
-
-Instead of writing Dockerfiles, Kubernetes manifests, and FastAPI boilerplate from scratch, you pull from our curated smorgasbord of enterprise templates (e.g., `instructor_polars`, `smolagents_router`, `basic_meshtool`).
+We provide a curated catalog of production-ready templates. You do not need to write boilerplate!
 
 ### Step 1: Scaffold your workspace
 Generate a fresh template using any of these three methods:
 
-1. **Ask the Central AI (The Control Plane):** Use your `MeshClient` to ask Engine A to do it for you:
+1. **Ask the Central AI:** Use your `MeshClient` in this notebook:
    `client.ask("Scaffold a new smolagents template named supply_chain_investigator")`
-   
-2. **Ask your IDE (The MCP Server):** If you are using an AI IDE (like Cursor or Windsurf) connected to your local workspace, just ask it! Our local MCP server allows your IDE to scaffold templates autonomously.
-   
-3. **Use the Terminal Wizard:**
-   ```bash
-   # Run the interactive wizard to select your template
-   ./scripts/scaffold.sh
-   ```
+2. **Ask your IDE:** If using an AI IDE (Cursor/Windsurf), ask the local MCP server to do it.
+3. **Use the Terminal Wizard:** Run `./scripts/scaffold.sh` and follow the prompts.
 
-### Step 2: Paste and Publish
-Once your template is generated:
-1. Copy your prototyped Pydantic models and `@app.execute()` function from your notebook into the new `app.py` file.
-2. Push the repository to Git (or ask the MCP server to `publish` it for you). 
-3. Our GitOps pipeline will automatically build your container, deploy it, and dynamically register your Domain Node to the global Mesh!
+### Step 2: Choose Your Architecture (The Template Catalog)
+
+When scaffolding, you will be asked to select a template. Choose the one that fits your architecture. (Note: The generated files will always contain the most up-to-date platform standards and `nest_asyncio` patches).
+
+#### Template 1: `01_pure_math` (The Logic Tool)
+* **Best for:** Synchronous Python math, physics calculations, or deterministic logic.
+* **How it works:** A lightweight, pure-Python wrapper. Perfect for moving your proven notebook algorithms into the Mesh without any LLM or database overhead.
+
+#### Template 2: `02_instructor_polars` (The Standard Data Tool)
+* **Best for:** Data crunching and high-performance analytical queries.
+* **How it works:** Wires up `Polars` for fast data access via the Data Plane. It uses the `instructor` pattern to ensure the Mesh Orchestrator extracts exactly the entities your analysis needs.
+
+#### Template 3: `03_baml_pandas` (The Hybrid Tool)
+* **Best for:** Legacy Pandas workflows that require advanced LLM extraction.
+* **How it works:** Combines the familiarity of Pandas with the power of the `BAML` Rust compiler. Use this if you need to extract complex structures from unstructured documents in your data pipeline.
+
+#### Template 4: `smolagents_subswarm` (The Agentic Tool)
+* **Best for:** Complex, multi-step reasoning that requires an autonomous loop.
+* **How it works:** You become a Node Commander. The template wires up a local `CodeAgent` safely inside your tool. The Central AI routes the hard questions to your tool, and your local agent investigates it autonomously before returning the verdict.
+
+#### Template 5: `legacy_adapter` (The Framework Wrapper)
+* **Best for:** Existing LlamaIndex RAG pipelines or LangChain routing setups.
+* **How it works:** Do not rewrite your old code! This template acts as a "Smart Ingress Controller." Engine A parses the messy human prompt, classifies the intent, and hands your legacy LangChain/LlamaIndex code the exact clean query it needs to run.
+
+### Step 3: Publish to the Mesh
+Once you have filled in your business logic in the generated `app.py`, push the repository to Git (or ask the MCP server to `publish` it). Our GitOps pipeline will build, deploy, and dynamically register your Domain Node to the global Mesh!
+
+---
+
+> ### 💡 Platform Pro-Tip: `def` vs `async def`
+> The `MeshTool` templates support both asynchronous and synchronous Python.
+> * **Use standard `def` (Recommended):** If you are crunching Polars DataFrames (`df.collect()`), stick to standard `def`. We will execute it safely in a background thread.
+> * **Use `async def`:** Only if your tool is a lightweight router making numerous downstream HTTP calls.
+
 
 ---
 
