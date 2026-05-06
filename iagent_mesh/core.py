@@ -2,8 +2,12 @@ import os
 import inspect
 import logging
 import httpx
+import nest_asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
+
+# Apply nest_asyncio globally to allow nested event loops (e.g. agents inside tools)
+nest_asyncio.apply()
 from iagent_mesh.config import settings
 
 logging.basicConfig(level=logging.INFO)

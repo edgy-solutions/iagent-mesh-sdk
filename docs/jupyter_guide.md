@@ -121,3 +121,11 @@ To turn this notebook into a production repository, use the provided interactive
 ./scripts/scaffold.sh
 # Follow the interactive prompts to select your template and tool name!
 ```
+
+---
+
+> ### 💡 Platform Pro-Tip: `def` vs `async def`
+> The `MeshTool` framework supports both asynchronous and synchronous Python!
+> * **Use standard `def` (Recommended):** If your tool does heavy data crunching with Polars/Pandas (`df.collect()`), use standard `def`. The platform will automatically execute your heavy math in a background thread so your API remains responsive.
+> * **Use `async def`:** Only use this if your tool acts as a lightweight router making numerous downstream `httpx` or database calls.
+
