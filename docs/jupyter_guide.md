@@ -1,94 +1,123 @@
 # DevEx Hub: Jupyter Notebook Quickstart
 
-Welcome to the iagent Mesh! As a Data Scientist, you have access to two distinct layers of the platform directly from your secured JupyterHub environment.
+Welcome to the iagent Mesh! As a Data Scientist, you have access to three distinct layers of the platform directly from your secured JupyterHub environment.
 
-## 1. The Control Plane (Interacting with the AI)
+## 1. The Control Plane (Commanding the AI)
 
-The Control Plane allows you to chat with the central AI orchestrator (Engine A). You can ask it to find assets, scaffold new tools, or trigger deployments. 
-
-Auth is handled invisibly via Keycloak because the `MESH_DEV_TOKEN` is automatically injected into your Jupyter environment. All you need to do is import the `MeshClient`:
+The Control Plane allows you to chat with the central AI orchestrator (Engine A). Auth is handled invisibly via Keycloak because the `MESH_DEV_TOKEN` is automatically injected into your Jupyter environment. 
 
 ### Scenario A: Asking the AI Orchestrator to do work
-#### Python
 ```python
 from iagent_mesh import MeshClient
 
-# Initialize the client (automatically picks up your secure MESH_DEV_TOKEN)
 client = MeshClient()
 
-# Ask the orchestrator a question or give it a command
+# Command the orchestrator to act on your behalf
 response = client.ask("Find the latest 'Asset Reliability' dataset and scaffold a new BAML tool for it.")
-
 print(response)
 ```
 
 ## 2. The Data Plane (Working with Big Data)
 
-Once the AI orchestrator tells you where a dataset lives (e.g., an S3 path or a DataHub URN), you can load the heavy Parquet or CSV files directly into your notebook.
+Once you know where a dataset lives, load the heavy Parquet or CSV files directly into your notebook. We do not stream big data through the AI. Instead, `dag_tools` provides a unified, zero-trust data plane that handles credential minting invisibly.
 
-You don't stream big data through the AI! Instead, `dag_tools` implements a unified, zero-trust data plane through the **Cortex Data Client**, which handles authorization, credential minting, and data fetching under the hood.
-
-### Scenario B: Loading raw data directly from the Data Plane (Zero-Config)
-#### Python
+### Scenario B: Loading raw data securely (Zero-Config)
 ```python
 import polars as pl
 from dag_tools.cortex_data.client import CortexDataClient
 
-# 1. Initialize the Universal Data Client
-# Zero-Config! Automatically picks up CORTEX_BROKER_URL and MESH_DEV_TOKEN
+# Zero-Config! Automatically picks up CORTEX_BROKER_URL and your MESH_DEV_TOKEN
 client = CortexDataClient()
 
-# 2. Fetch the DataHub URN directly
+# Fetch the DataHub URN directly. Topaz handles RLS and Column Masking automatically.
 lf = client.get_dataframe("urn:li:dataset:(urn:li:dataPlatform:s3,reliability_metrics,PROD)")
 
-# 3. Compute and view the data
 df = lf.collect()
 print(df.head())
 ```
 
-## 3. The "Inception" Workflow (Turning Logic into a Mesh Tool)
+## 3. Prompt Engineering the Mesh (Tool Registration)
 
-Once you've finalized your logic in Jupyter, you can turn your function into a registered Mesh Tool that the central AI can call.
+When you turn your Python logic into a Mesh Tool, you are not just writing an API—**you are prompt engineering the central AI.** The Central Orchestrator reads your `description` strings to decide when and how to route traffic to you. The better your descriptions, the smarter the Central AI becomes at using your tool.
 
-### Scenario C: Building and Registering a Mesh Tool
-#### Python
+### Scenario C: Steering the Central AI with Pydantic
 ```python
 from iagent_mesh.core import MeshTool
 from iagent_mesh.models import ToolInput, ToolOutput
 from pydantic import Field
+from dag_tools.cortex_data.client import CortexDataClient
 
-# 1. Define your Input/Output schemas
+# 1. PROMPT ENGINEERING YOUR INPUTS
+# These descriptions tell the Central LLM exactly how to format the data before calling you.
 class AnalysisInput(ToolInput):
-    facility_id: str = Field(..., description="The ID of the target facility.")
+    facility_id: str = Field(
+        ..., 
+        description="The exact ID of the facility (e.g., 'FAC-123'). If the user provides a city name, you must look up the facility_id first."
+    )
+    confidence: float = Field(
+        0.95, 
+        description="Statistical confidence threshold. Default to 0.95 unless the user specifies otherwise."
+    )
 
 class AnalysisOutput(ToolOutput):
     score: float
+    recommendation: str
 
-# 2. Wrap your logic in the MeshTool
-app = MeshTool(name="my_custom_analysis", description="Detailed reliability analysis.")
+# 2. PROMPT ENGINEERING YOUR TOOL
+# This acts as the System Prompt for your capability in the mesh.
+app = MeshTool(
+    name="reliability_analyzer", 
+    description="USE THIS TOOL ONLY when asked to perform deep statistical reliability analysis. Do not use this for simple metrics."
+)
 
 @app.execute()
 def my_analysis(data: AnalysisInput) -> AnalysisOutput:
-    # Use the client we initialized above!
-    from dag_tools.cortex_data.client import CortexDataClient
+    # Crunch the numbers using the Data Plane
     client = CortexDataClient()
     lf = client.get_dataframe("urn:li:dataset:...")
     
-    # ... logic ...
-    return AnalysisOutput(score=42.0)
+    return AnalysisOutput(score=42.0, recommendation="Inspect turbine blade pitch.")
+```
+
+## 4. The Agentic Tool (Building a Sub-Swarm)
+
+Sometimes, pure math isn't enough. If your tool needs to perform complex reasoning *before* returning an answer to the Central Orchestrator, you can embed your own local LLM agent directly inside the Mesh Tool! 
+
+You control the brain of your specific domain.
+
+### Scenario D: Putting an Agent inside a Tool
+```python
+from iagent_mesh.core import MeshTool
+from pydantic import Field
+from smolagents import CodeAgent, HfApiModel # Or LangChain, Ollama, etc.
+from dag_tools.cortex_data.client import CortexDataClient
+
+app = MeshTool(
+    name="supply_chain_investigator", 
+    description="Pass a supplier ID to this tool, and it will autonomously investigate their recent delays."
+)
+
+@app.execute()
+def investigate_supplier(data: SupplierInput) -> InvestigationOutput:
+    # 1. Pull the massive datasets locally
+    client = CortexDataClient()
+    df_delays = client.get_dataframe("urn:li:dataset:supplier_delays").collect()
+    
+    # 2. Spin up your own LOCAL agent to reason over the data!
+    local_agent = CodeAgent(tools=[], model=HfApiModel())
+    
+    prompt = f"Analyze this delay data for {data.supplier_id} and determine the root cause: {df_delays.to_pandas()}"
+    verdict = local_agent.run(prompt)
+    
+    # 3. Return the intelligent verdict back up to the Central Orchestrator
+    return InvestigationOutput(root_cause_analysis=verdict)
 ```
 
 ### Scaffolding to Production
-To turn this notebook into a production repository, use the provided scaffolding scripts:
+To turn this notebook into a production repository, use the provided interactive scaffolding wizard:
 
-#### Bash
 ```bash
 # In your terminal
 ./scripts/scaffold.sh
 # Follow the interactive prompts to select your template and tool name!
 ```
-
-### Summary
-- Use **`iagent_mesh.MeshClient`** to tell the AI what to do.
-- Use **`CortexDataClient()`** for zero-config, secure data access.
-- Use **`MeshTool`** to wrap and register your logic for the AI Orchestrator.
