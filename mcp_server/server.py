@@ -9,7 +9,7 @@ from iagent_mesh.config import settings
 mcp = FastMCP("iagent_mesh_devex")
 
 @mcp.tool()
-def scaffold_local_workspace(template_id: str, tool_name: str, tool_urn: str, target_directory: str) -> str:
+def scaffold_local_workspace(template_id: str, tool_name: str, target_directory: str, is_mcp: bool = False) -> str:
     """
     Scaffolds a new agent tool workspace locally.
     
@@ -17,6 +17,12 @@ def scaffold_local_workspace(template_id: str, tool_name: str, tool_urn: str, ta
     from the user's active IDE workspace, or ask if unknown.
     """
     try:
+        # Enforce standardized URN based on type
+        if is_mcp:
+            tool_urn = f"urn:li:mcpServer:{tool_name}"
+        else:
+            tool_urn = f"urn:li:aitool:{tool_name}"
+
         generate_template_files(template_id, tool_name, tool_urn, target_directory)
         
         # Run local git init and git commit
@@ -29,7 +35,7 @@ def scaffold_local_workspace(template_id: str, tool_name: str, tool_urn: str, ta
         return f"Failed to scaffold: {str(e)}"
 
 @mcp.tool()
-def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group: str) -> str:
+def publish_local_to_mesh(local_directory: str, tool_name: str, target_git_group: str) -> str:
     """
     Publishes a local agent workspace to the iagent Mesh platform.
     Provisions via API and pushes code.
@@ -51,7 +57,7 @@ def publish_local_to_mesh(local_directory: str, tool_urn: str, target_git_group:
         except RuntimeError as e:
             return str(e)
         
-        return f"Successfully published {tool_urn} from {local_directory} to {git_url}."
+        return f"Successfully published {tool_name} from {local_directory} to {git_url}."
     except Exception as e:
         return f"Failed to publish: {str(e)}"
 

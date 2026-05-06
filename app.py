@@ -12,7 +12,7 @@ from iagent_mesh.config import settings
 class ScaffoldInput(ToolInput):
     template_id: str = Field(...)
     tool_name: str = Field(...)
-    tool_urn: str = Field(...)
+    is_mcp: bool = Field(False)
 
 class ScaffoldOutput(ToolOutput):
     workspace_uuid: str
@@ -21,7 +21,7 @@ class ScaffoldOutput(ToolOutput):
 class PublishInput(ToolInput):
     workspace_uuid: str = Field(...)
     tool_name: str = Field(...)
-    tool_urn: str = Field(...)
+    is_mcp: bool = Field(False)
     target_git_group: str = Field(...)
 
 class PublishOutput(ToolOutput):
@@ -29,8 +29,8 @@ class PublishOutput(ToolOutput):
     git_url: str
 
 # 2. Initialize MeshTools
-scaffold_tool = MeshTool(urn="urn:li:tool:scaffold_generator", description="Scaffolds a DevEx template")
-publish_tool = MeshTool(urn="urn:li:tool:mesh_publisher", description="Publishes a DevEx workspace to Git")
+scaffold_tool = MeshTool(name="scaffold_generator", description="Scaffolds a DevEx template")
+publish_tool = MeshTool(name="mesh_publisher", description="Publishes a DevEx workspace to Git")
 
 # 3. Define Tool Logic
 @scaffold_tool.execute()
@@ -38,7 +38,13 @@ def run_scaffold(data: ScaffoldInput) -> ScaffoldOutput:
     workspace_uuid = str(uuid.uuid4())
     target_path = f"/tmp/{workspace_uuid}"
     
-    generate_template_files(data.template_id, data.tool_name, data.tool_urn, target_path)
+    # Enforce standardized URN based on type
+    if data.is_mcp:
+        tool_urn = f"urn:li:mcpServer:{data.tool_name}"
+    else:
+        tool_urn = f"urn:li:aitool:{data.tool_name}"
+    
+    generate_template_files(data.template_id, data.tool_name, tool_urn, target_path)
     
     return ScaffoldOutput(workspace_uuid=workspace_uuid, target_path=target_path)
 

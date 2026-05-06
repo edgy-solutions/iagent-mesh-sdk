@@ -2,7 +2,7 @@ import os
 import httpx
 
 class MeshClient:
-    def __init__(self, gateway_url: str = "http://gateway.sustainment.svc:8080/execute"):
+    def __init__(self, gateway_url: str = "http://cortex-bff.local.svc:8000/orchestrate"):
         self.gateway_url = gateway_url
         self.token = os.getenv("MESH_DEV_TOKEN")
         

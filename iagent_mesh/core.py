@@ -10,10 +10,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MeshTool")
 
 class MeshTool:
-    def __init__(self, urn: str, description: str):
-        self.urn = urn
+    def __init__(self, name: str, description: str, is_mcp: bool = False):
+        self.name = name
         self.description = description
-        self.app = FastAPI(title=urn, description=description, lifespan=self._lifespan)
+        self.is_mcp = is_mcp
+        self.urn = f"urn:li:mcpServer:{name}" if is_mcp else f"urn:li:aitool:{name}"
+        self.app = FastAPI(title=self.urn, description=description, lifespan=self._lifespan)
 
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
@@ -23,14 +25,21 @@ class MeshTool:
             # 1. Automatically grab the exact JSON schema generated from the Pydantic models
             openapi_spec = app.openapi()
             
-            # 2. Grab the live cluster URL (injected by your Kubernetes deployment)
+            # 2. Determine Entity Type from URN
+            entity_type = "AITool"
+            if self.urn.startswith("urn:li:mcpServer:"):
+                entity_type = "MCPServer"
+            elif self.urn.startswith("urn:li:aitool:"):
+                entity_type = "AITool"
+
+            # 3. Grab the live cluster URL (injected by your Kubernetes deployment)
             # Example fallback: http://tool-name.mesh-tools.svc.cluster.local:8000/execute
             live_endpoint = os.getenv("MESH_TOOL_ENDPOINT", f"http://localhost:8000/execute")
 
-            # 3. Build the payload that actually empowers the LLM
+            # 4. Build the payload that actually empowers the LLM
             registration_payload = {
                 "urn": self.urn,
-                "type": "AITool",
+                "type": entity_type,
                 "description": self.description,
                 "endpoint_url": live_endpoint,
                 "openapi_schema": openapi_spec  # <--- This is the magic key

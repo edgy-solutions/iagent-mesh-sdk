@@ -12,7 +12,7 @@ class DummyOutput(ToolOutput):
 
 @pytest.fixture
 def mesh_tool():
-    tool = MeshTool(urn="urn:test:dummy", description="Dummy test tool")
+    tool = MeshTool(name="dummy", description="Dummy test tool")
     
     @tool.execute()
     def dummy_func(data: DummyInput) -> DummyOutput:
@@ -25,9 +25,9 @@ def client(mesh_tool):
     return TestClient(mesh_tool.app)
 
 def test_tool_initialization(mesh_tool):
-    assert mesh_tool.urn == "urn:test:dummy"
+    assert mesh_tool.urn == "urn:li:aitool:dummy"
     assert mesh_tool.description == "Dummy test tool"
-    assert mesh_tool.app.title == "urn:test:dummy"
+    assert mesh_tool.app.title == "urn:li:aitool:dummy"
 
 def test_topaz_zero_trust_failure(client, monkeypatch):
     # Ensure LOCAL_DEV is not set

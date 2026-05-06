@@ -10,7 +10,7 @@ def test_scaffold_generator():
     payload = {
         "template_id": "01_pure_math",
         "tool_name": "test-tool",
-        "tool_urn": "urn:test:tool"
+        "is_mcp": False
     }
     
     response = client.post("/scaffold/execute", json=payload, headers={"Authorization": "mock_token"})
@@ -39,7 +39,7 @@ def test_mesh_publisher(mock_subprocess_run, tmp_path):
     payload = {
         "workspace_uuid": workspace_uuid,
         "tool_name": "test-tool",
-        "tool_urn": "urn:test:tool",
+        "is_mcp": False,
         "target_git_group": "test-group"
     }
     

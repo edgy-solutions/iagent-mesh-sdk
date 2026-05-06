@@ -26,7 +26,12 @@ SELECTED_TEMPLATE="${TEMPLATES[$((choice-1))]}"
 TEMPLATE_DIR="../templates/$SELECTED_TEMPLATE"
 
 read -p "Enter Tool Name (e.g., my_new_tool): " TOOL_NAME
-read -p "Enter Tool URN (e.g., urn:li:tool:my_new_tool): " TOOL_URN
+read -p "Is this an MCP Server? (y/n) [n]: " IS_MCP
+if [[ "$IS_MCP" =~ ^[Yy]$ ]]; then
+    TOOL_URN="urn:li:mcpServer:$TOOL_NAME"
+else
+    TOOL_URN="urn:li:aitool:$TOOL_NAME"
+fi
 read -p "Target Directory (e.g., ./my_new_tool): " TARGET_DIR
 read -p "Is 'uv' installed? (y/n): " UV_INSTALLED
 
@@ -44,10 +49,8 @@ done
 # Perform string replacements
 if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/REPLACE_ME_NAME/$TOOL_NAME/g" "$TARGET_DIR/pyproject.toml" "$TARGET_DIR/app.py"
-    sed -i '' "s/REPLACE_ME_URN/$TOOL_URN/g" "$TARGET_DIR/pyproject.toml" "$TARGET_DIR/app.py"
 else
     sed -i "s/REPLACE_ME_NAME/$TOOL_NAME/g" "$TARGET_DIR/pyproject.toml" "$TARGET_DIR/app.py"
-    sed -i "s/REPLACE_ME_URN/$TOOL_URN/g" "$TARGET_DIR/pyproject.toml" "$TARGET_DIR/app.py"
 fi
 
 # Generate .s2i/bin/assemble
