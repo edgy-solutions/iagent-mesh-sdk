@@ -2,6 +2,8 @@
 
 This repository serves as the Data-Driven Developer Experience (DevEx) Hub and provides the `iagent_mesh` SDK core library, which includes universal contracts and an infrastructure wrapper for the iagent Mesh platform.
 
+> 📖 **Architectural Guide:** Read [Launch Domain Nodes, Not Scripts](docs/architecture_manifesto.md) to understand why this framework is required for enterprise AI deployments.
+
 ## Architecture & Features
 
 This Hub leverages the **Inception Pattern** to dynamically scaffold new agent tools.
