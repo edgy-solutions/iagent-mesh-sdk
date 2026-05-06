@@ -1,0 +1,15 @@
+[project]
+name = "REPLACE_ME_NAME"
+version = "0.1.0"
+description = "A legacy framework adapter for LlamaIndex/LangChain on the iagent Mesh"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "iagent-mesh",
+    "llama-index-core",
+    "langchain",
+    "langchain-openai",
+    "nest_asyncio"
+]

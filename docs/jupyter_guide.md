@@ -113,7 +113,73 @@ def investigate_supplier(data: SupplierInput) -> InvestigationOutput:
     return InvestigationOutput(root_cause_analysis=verdict)
 ```
 
-## 5. From Notebook to Production (The Template Smorgasbord)
+## 5. Integrating Legacy Frameworks (LangChain & LlamaIndex)
+
+If you have already built robust RAG pipelines in LlamaIndex or complex agentic loops in LangChain, **do not rewrite them!** Instead, wrap them in a `MeshTool`. The Central AI (Engine A) will act as your "Front Desk." It will parse the messy human prompt, extract the exact entities your LangChain/LlamaIndex setup needs, and hand you a perfectly formatted Pydantic object to kick off your existing graph.
+
+### Scenario E: The LlamaIndex / LangChain Adapter
+```python
+from iagent_mesh.core import MeshTool
+from iagent_mesh.models import ToolInput, ToolOutput
+from pydantic import Field
+from typing import Literal
+
+# Import your legacy frameworks!
+from llama_index.core import VectorStoreIndex, Document
+from langchain.agents import initialize_agent, AgentType
+from langchain.chat_models import ChatOpenAI
+
+# 1. PROMPT ENGINEER YOUR INGRESS
+# Engine A does the heavy NLP parsing so your LlamaIndex/LangChain code doesn't have to.
+class EnterprisePolicyInput(ToolInput):
+    clean_query: str = Field(
+        ..., 
+        description="Rewrite the user's messy prompt into a highly optimized search query for a Vector DB."
+    )
+    policy_domain: Literal["HR", "IT", "Finance"] = Field(
+        ..., 
+        description="Classify the domain of the question to route to the correct LlamaIndex store."
+    )
+    requires_approval: bool = Field(
+        False, 
+        description="Set to True if the user is asking to modify a policy or execute a financial transaction."
+    )
+
+class PolicyOutput(ToolOutput):
+    final_answer: str
+    sources_cited: list[str]
+
+# 2. REGISTER THE NODE
+app = MeshTool(
+    name="enterprise_policy_router", 
+    description="ROUTE ALL company policy, IT troubleshooting, and HR questions here."
+)
+
+@app.execute()
+def legacy_framework_router(data: EnterprisePolicyInput) -> PolicyOutput:
+    # --- YOUR EXISTING LLAMA-INDEX / LANGCHAIN CODE LIVES HERE ---
+    
+    if data.requires_approval:
+        # Route to a LangChain execution agent for action-taking
+        llm = ChatOpenAI(temperature=0)
+        agent = initialize_agent(tools=[...], llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
+        result = agent.run(f"Execute approval workflow for: {data.clean_query}")
+        return PolicyOutput(final_answer=result, sources_cited=["LangChain Execution Env"])
+        
+    else:
+        # Route to LlamaIndex for heavy RAG
+        # Because Engine A already classified 'policy_domain', you know exactly which index to load!
+        index = load_my_llama_index(domain=data.policy_domain) 
+        query_engine = index.as_query_engine()
+        
+        # Notice we use the 'clean_query' that Engine A optimized for us
+        response = query_engine.query(data.clean_query) 
+        
+        sources = [node.node.metadata.get('file_name') for node in response.source_nodes]
+        return PolicyOutput(final_answer=str(response), sources_cited=sources)
+```
+
+## 6. From Notebook to Production (The Template Smorgasbord)
 
 Your notebook is the perfect place to prototype your data logic and prompts. Once your agent or tool is working, you need to package it for the Mesh. 
 
