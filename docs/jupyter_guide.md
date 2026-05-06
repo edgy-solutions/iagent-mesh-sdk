@@ -36,7 +36,46 @@ df = lf.collect()
 print(df.head())
 ```
 
-## 3. Building Your Own Node (Moving to the IDE)
+## 3. The Anatomy of a Domain Node (A Conceptual Look)
+
+Before you generate a full project, here is a look at the raw engine. This is all it takes to turn your Python logic into a secure, globally discoverable AI Node on the Mesh. 
+
+Notice how there is no API routing, no Keycloak validation, and no HTTP boilerplate. You just define your Pydantic schema (which acts as the prompt for the Central AI) and write your logic. 
+
+```python
+from iagent_mesh.core import MeshTool
+from iagent_mesh.models import ToolInput, ToolOutput
+from pydantic import Field
+
+# 1. Prompt Engineer the Central AI using strict types and descriptions
+class AnomalyInput(ToolInput):
+    dataset_name: str = Field(..., description="The name of the dataset to analyze.")
+    sensitivity: float = Field(0.9, description="Threshold for flagging anomalies.")
+
+class AnomalyOutput(ToolOutput):
+    flagged_records: int
+    summary: str
+
+# 2. Register your Node to the global Mesh
+app = MeshTool(
+    name="basic_anomaly_detector", 
+    description="ROUTE traffic here when the user asks to find outliers or anomalies in a dataset."
+)
+
+# 3. Write your clean business logic
+@app.execute()
+def detect_anomalies(data: AnomalyInput) -> AnomalyOutput:
+    # Topaz security and Trace IDs are already handled invisibly!
+    print(f"Scanning {data.dataset_name} at {data.sensitivity} sensitivity...")
+    
+    # ... your Polars/Pandas/Agentic logic goes here ...
+    
+    return AnomalyOutput(flagged_records=42, summary="Found severe outliers in Q3 data.")
+```
+
+*This is just the appetizer. When you are ready to build for real, proceed to Section 4 to scaffold your production-ready workspace!*
+
+## 4. Building Your Own Node (Moving to the IDE)
 
 Your notebook is perfect for prototyping data logic (Data Plane) and asking the AI questions (Control Plane). But when you are ready to turn your logic into an enterprise capability, **you move out of the notebook and into your IDE.**
 
