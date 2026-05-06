@@ -18,7 +18,8 @@ def test_scaffold_generation(tmp_path):
     
     # 2. Test Variable Injection
     app_content = app_py.read_text(encoding="utf-8")
-    assert "urn:test" in app_content
+    assert "test-tool" in app_content
+    assert "REPLACE_ME_NAME" not in app_content
     assert "REPLACE_ME_URN" not in app_content
     
     toml_content = pyproject_toml.read_text(encoding="utf-8")

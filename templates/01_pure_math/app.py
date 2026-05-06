@@ -10,7 +10,7 @@ class MathInput(ToolInput):
 class MathOutput(ToolOutput):
     projected_wear: float
 
-app = MeshTool(urn="REPLACE_ME_URN", description="Calculates rotor wear limits.")
+app = MeshTool(name="REPLACE_ME_NAME", description="Calculates rotor wear limits.")
 
 @app.execute()
 def calculate_wear(data: MathInput) -> MathOutput:

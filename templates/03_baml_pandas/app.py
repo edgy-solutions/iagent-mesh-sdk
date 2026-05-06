@@ -13,7 +13,7 @@ class LegacyModelInput(ToolInput):
 class LegacyModelOutput(ToolOutput):
     baml_analysis: BamlExtractedOutput
 
-app = MeshTool(urn="REPLACE_ME_URN", description="Pandas + BAML")
+app = MeshTool(name="REPLACE_ME_NAME", description="Pandas + BAML")
 
 @app.execute()
 async def run_legacy_analysis(data: LegacyModelInput) -> LegacyModelOutput:

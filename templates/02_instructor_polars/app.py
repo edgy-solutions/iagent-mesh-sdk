@@ -15,7 +15,7 @@ class InventoryOutput(ToolOutput):
     total_value: float
 
 # 2. Initialize the Mesh Tool
-app = MeshTool(urn="REPLACE_ME_URN", description="Analyzes inventory via Polars")
+app = MeshTool(name="REPLACE_ME_NAME", description="Analyzes inventory via Polars")
 
 # 3. Write the Logic
 @app.execute()
