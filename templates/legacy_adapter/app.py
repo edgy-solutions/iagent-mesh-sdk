@@ -33,7 +33,9 @@ class PolicyOutput(ToolOutput):
 # REPLACE_ME_NAME is automatically swapped by scaffold.sh
 app = MeshTool(
     name="REPLACE_ME_NAME", 
-    description="A legacy adapter node. Wraps existing LlamaIndex/LangChain RAG pipelines."
+    description="A legacy adapter node. Wraps existing LlamaIndex/LangChain RAG pipelines.",
+    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
+    # ontology_uris=["mro:MaintenanceWorkOrder", "logistics:DelayInvestigation"]
 )
 
 @app.execute()

@@ -15,7 +15,15 @@ class InventoryOutput(ToolOutput):
     total_value: float
 
 # 2. Initialize the Mesh Tool
-app = MeshTool(name="REPLACE_ME_NAME", description="Analyzes inventory via Polars")
+app = MeshTool(
+    name="REPLACE_ME_NAME", 
+    description="Analyzes inventory via Polars",
+    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
+    # ontology_uris=[
+    #     "mro:MaintenanceWorkOrder", 
+    #     "logistics:DelayInvestigation"
+    # ]
+)
 
 # 3. Write the Logic
 @app.execute()

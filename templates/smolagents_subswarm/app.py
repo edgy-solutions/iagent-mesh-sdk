@@ -19,7 +19,9 @@ class InvestigationOutput(ToolOutput):
 # REPLACE_ME_NAME is automatically swapped by scaffold.sh
 app = MeshTool(
     name="REPLACE_ME_NAME", 
-    description="An autonomous agent node. Route complex, multi-step investigations here."
+    description="An autonomous agent node. Route complex, multi-step investigations here.",
+    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
+    # ontology_uris=["agentic:InvestigationLoop", "mro:RootCauseAnalysis"]
 )
 
 @app.execute()

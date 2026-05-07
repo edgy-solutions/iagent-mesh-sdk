@@ -14,10 +14,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MeshTool")
 
 class MeshTool:
-    def __init__(self, name: str, description: str, is_mcp: bool = False):
+    def __init__(self, name: str, description: str, is_mcp: bool = False, ontology_uris: list[str] = None):
         self.name = name
         self.description = description
         self.is_mcp = is_mcp
+        self.ontology_uris = ontology_uris or [f"provisional:{name}"]
         self.urn = f"urn:li:mcpServer:{name}" if is_mcp else f"urn:li:aitool:{name}"
         self.app = FastAPI(title=self.urn, description=description, lifespan=self._lifespan)
 
@@ -46,7 +47,8 @@ class MeshTool:
                 "type": entity_type,
                 "description": self.description,
                 "endpoint_url": live_endpoint,
-                "openapi_schema": openapi_spec  # <--- This is the magic key
+                "openapi_schema": openapi_spec,
+                "ontology_uris": self.ontology_uris
             }
 
             async with httpx.AsyncClient() as client:

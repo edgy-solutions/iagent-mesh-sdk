@@ -13,7 +13,12 @@ class LegacyModelInput(ToolInput):
 class LegacyModelOutput(ToolOutput):
     baml_analysis: BamlExtractedOutput
 
-app = MeshTool(name="REPLACE_ME_NAME", description="Pandas + BAML")
+app = MeshTool(
+    name="REPLACE_ME_NAME", 
+    description="Pandas + BAML",
+    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
+    # ontology_uris=["mro:VibrationAnalysis", "mro:PredictiveMaintenance"]
+)
 
 @app.execute()
 async def run_legacy_analysis(data: LegacyModelInput) -> LegacyModelOutput:

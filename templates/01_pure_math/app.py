@@ -10,7 +10,12 @@ class MathInput(ToolInput):
 class MathOutput(ToolOutput):
     projected_wear: float
 
-app = MeshTool(name="REPLACE_ME_NAME", description="Calculates rotor wear limits.")
+app = MeshTool(
+    name="REPLACE_ME_NAME", 
+    description="Calculates rotor wear limits.",
+    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
+    # ontology_uris=["mro:RotorAssembly", "mro:MaintenanceMetric"]
+)
 
 @app.execute()
 def calculate_wear(data: MathInput) -> MathOutput:
