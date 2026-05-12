@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /c/Users/cnogr/git/invincible-agent/src/iagent 2>&1 | head -40)",
+      "Read(//c/Users/cnogr/git/invincible-agent/src/iagent/**)",
+      "Bash(python -m pytest -v)",
+      "PowerShell(python --version)",
+      "PowerShell(python -m pytest --version)",
+      "PowerShell(py --version)",
+      "PowerShell(py -m pytest --version)",
+      "PowerShell(py -m pytest -v 2>&1)",
+      "PowerShell(py -m pytest tests/test_client.py -v 2>&1)",
+      "PowerShell(py -m pytest tests/test_core.py -v 2>&1)",
+      "PowerShell(py -m pytest tests/test_scaffold_core.py -v 2>&1)"
+    ]
+  }
+}
