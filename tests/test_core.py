@@ -383,9 +383,40 @@ def test_lifespan_emits_to_datahub_when_enabled(fake_datahub, monkeypatch):
     assert props["mesh_requires_human_approval"] == "true"
     assert props["mesh_namespace_authority"] == "domain"  # mro: is a domain
     assert props["mesh_endpoint_url"] == "http://my-tool.svc:8000/execute"
+    # Per ADR-0009: domains are a scope filter, JSON-encoded list. Omitting
+    # the constructor arg yields an empty list ("[]"), meaning domain-agnostic.
+    assert json.loads(props["mesh_domains"]) == []
     assert json.loads(props["mesh_openapi_schema"])["info"]["title"].startswith("urn:li:mlModel")
     assert props["mesh_sdk_version"] == "0.1.0"
     assert props["mesh_tool_version"] == "0.1.0"
+
+
+def test_domains_field_is_published(fake_datahub, monkeypatch):
+    """Per ADR-0009: ``domains`` list survives round-trip through DataHub
+    customProperties as a JSON-encoded array string."""
+    monkeypatch.setenv("MESH_REGISTER_ON_STARTUP", "true")
+    monkeypatch.setenv("DATAHUB_GMS_URL", "http://fake-gms:8080")
+
+    from iagent_mesh import config as _config
+    from iagent_mesh import core as _core
+    new_settings = _config.Settings()
+    monkeypatch.setattr(_config, "settings", new_settings)
+    monkeypatch.setattr(_core, "settings", new_settings)
+
+    tool = _make_tool(
+        name="domain_scoped",
+        domains=["MAINTENANCE", "MANUFACTURING"],
+    )
+
+    @tool.execute()
+    def f(data: DummyInput) -> DummyOutput:
+        return DummyOutput(result=data.value)
+
+    with TestClient(tool.app):
+        pass
+
+    props = _FakeEmitter.instances[0].emitted[0].aspect.customProperties
+    assert json.loads(props["mesh_domains"]) == ["MAINTENANCE", "MANUFACTURING"]
 
 
 def test_lifespan_swallows_registration_errors(fake_datahub, monkeypatch):

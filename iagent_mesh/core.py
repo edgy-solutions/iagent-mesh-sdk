@@ -80,8 +80,19 @@ class MeshTool:
                                     (``rdfs:label`` / ``skos:altLabel``).
                                     Engine O's NL → verb classifier matches
                                     against these.
-    :param owner_persona:           UI roster tag (e.g. ``"MECHANIC"``).
-                                    Not used for routing, only for display.
+    :param owner_persona:           **Answerer persona** (engine-side) — the
+                                    voice/shape the engine uses to respond.
+                                    Per ADR-0009 this drives BAML response-
+                                    union resolution and Engine F's UI
+                                    archetype. NOT the user's persona.
+    :param domains:                 Domain scopes this tool serves (e.g.
+                                    ``["MAINTENANCE", "MANUFACTURING"]`` or
+                                    ``["DATA_ENGINEERING"]``). Per ADR-0009
+                                    domain is a scope filter, not a routing
+                                    key — ``/find_tool`` filters predicate
+                                    matches against the caller's entitled
+                                    domains. Empty list / None means the
+                                    tool is domain-agnostic.
     :param cost_class:              ``"fast" | "medium" | "slow"`` — supervisor
                                     composition prefers cheaper paths.
     :param requires_human_approval: If true, the supervisor pauses for HITL
@@ -100,6 +111,7 @@ class MeshTool:
         output_uri: str,
         verb_synonyms: Optional[list[str]] = None,
         owner_persona: Optional[str] = None,
+        domains: Optional[list[str]] = None,
         cost_class: str = "fast",
         requires_human_approval: bool = False,
         version: str = "0.1.0",
@@ -113,6 +125,7 @@ class MeshTool:
         self.output_uri = output_uri
         self.verb_synonyms = list(verb_synonyms or [])
         self.owner_persona = owner_persona
+        self.domains = list(domains or [])
         self.cost_class = cost_class
         self.requires_human_approval = requires_human_approval
         self.version = version
@@ -257,6 +270,9 @@ class MeshTool:
             "mesh_namespace_authority":     self.namespace_authority,
             # Routing / policy metadata
             "mesh_owner_persona":           self.owner_persona or "",
+            # Per ADR-0009: domains are a scope filter, not a routing key.
+            # JSON-encoded list (DataHub custom properties must be strings).
+            "mesh_domains":                 json.dumps(self.domains),
             "mesh_cost_class":              self.cost_class,
             "mesh_requires_human_approval": "true" if self.requires_human_approval else "false",
             # Runtime
