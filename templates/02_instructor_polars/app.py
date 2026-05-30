@@ -14,15 +14,20 @@ class InventoryOutput(ToolOutput):
     high_priority_items: list[str]
     total_value: float
 
-# 2. Initialize the Mesh Tool
+# 2. Initialize the Mesh Tool — this tool is a predicate edge in the graph:
+#
+#     (logistics:InventorySnapshot) --[logistics:analyzeFacilityInventory]--> (logistics:InventorySummary)
+#
+# See ADR-0004 for the model, ADR-0005 for namespacing.
 app = MeshTool(
-    name="REPLACE_ME_NAME", 
-    description="Analyzes inventory via Polars",
-    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
-    # ontology_uris=[
-    #     "mro:MaintenanceWorkOrder", 
-    #     "logistics:DelayInvestigation"
-    # ]
+    name="REPLACE_ME_NAME",
+    description="Analyzes facility inventory via Polars over a Parquet snapshot.",
+    verb="logistics:analyzeFacilityInventory",
+    input_uri="logistics:InventorySnapshot",
+    output_uri="logistics:InventorySummary",
+    verb_synonyms=["inventory rollup", "summarize inventory", "facility totals"],
+    owner_persona="LOGISTICS",
+    cost_class="medium",
 )
 
 # 3. Write the Logic

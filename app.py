@@ -28,9 +28,32 @@ class PublishOutput(ToolOutput):
     status: str
     git_url: str
 
-# 2. Initialize MeshTools
-scaffold_tool = MeshTool(name="scaffold_generator", description="Scaffolds a DevEx template")
-publish_tool = MeshTool(name="mesh_publisher", description="Publishes a DevEx workspace to Git")
+# 2. Initialize MeshTools — these are platform tools (the DevEx Hub itself
+# exists only because the mesh exists), so they use the ``mesh:`` namespace
+# per ADR-0005. The predicate edges they create are:
+#
+#     (mesh:ScaffoldRequest) --[mesh:scaffoldWorkspace]--> (mesh:ScaffoldedWorkspace)
+#     (mesh:PublishRequest)  --[mesh:publishWorkspace]-->  (mesh:GitDeployment)
+scaffold_tool = MeshTool(
+    name="scaffold_generator",
+    description="Scaffolds a DevEx template into a fresh workspace directory.",
+    verb="mesh:scaffoldWorkspace",
+    input_uri="mesh:ScaffoldRequest",
+    output_uri="mesh:ScaffoldedWorkspace",
+    verb_synonyms=["scaffold", "generate workspace", "create from template"],
+    owner_persona="DATA_STEWARD",
+    cost_class="fast",
+)
+publish_tool = MeshTool(
+    name="mesh_publisher",
+    description="Publishes a scaffolded workspace to a managed git remote.",
+    verb="mesh:publishWorkspace",
+    input_uri="mesh:PublishRequest",
+    output_uri="mesh:GitDeployment",
+    verb_synonyms=["publish", "push to git", "deploy workspace"],
+    owner_persona="DATA_STEWARD",
+    cost_class="medium",
+)
 
 # 3. Define Tool Logic
 @scaffold_tool.execute()

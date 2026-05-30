@@ -19,10 +19,13 @@ This Hub leverages the **Inception Pattern** to dynamically scaffold new agent t
 This SDK relies on centralized environment variables for all integrations to ensure no hardcoded enterprise strings are checked in. See the `.env.example` file in the root directory for a full list.
 
 **Required URLs:**
-- `DATAHUB_URL`: The active DataHub registration endpoint.
 - `GIT_PROVISION_API_URL`: The platform provisioning API for repositories.
 - `GIT_SERVER_HOST`: The core Git server hostname.
 - `ARTIFACTORY_BASE_URL`: The enterprise artifact repository.
+
+**Optional URLs / tokens (only needed if `MESH_REGISTER_ON_STARTUP=true`):**
+- `DATAHUB_GMS_URL`: The DataHub GMS endpoint the SDK pushes registrations to.
+- `DATAHUB_TOKEN`: Bearer token for the GMS emitter.
 
 **Required Tokens (Depending on deployment):**
 - `PLATFORM_GIT_TOKEN`: Used by the cloud pod (`app.py`) for live git publishing.

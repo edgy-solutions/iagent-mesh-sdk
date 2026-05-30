@@ -42,40 +42,48 @@ def test_template_scaffold_and_load(template_id, tmp_path):
         sys.modules[mod] = mock_mod
         
     tool_name = f"test-{template_id}".replace("_", "-")
-    tool_urn = f"urn:li:aitool:{tool_name}"
+    # tool_urn is now derived by MeshTool itself from name; no REPLACE_ME_URN in
+    # the templates. We still pass a value to ``generate_template_files`` so the
+    # scaffolder's signature is satisfied, but the templates won't substitute it.
+    tool_urn = f"urn:li:mlModel:(urn:li:dataPlatform:mesh,{tool_name},PROD)"
     dest_dir = tmp_path / template_id
-    
+
     # 1. Scaffold the template
     generate_template_files(template_id, tool_name, tool_urn, str(dest_dir))
-    
+
     app_path = dest_dir / "app.py"
     assert app_path.exists(), f"app.py missing for template {template_id}"
-    
+
     # 2. Dynamically load the generated app.py
     # We use a unique module name for each template to avoid import caching issues
     spec = importlib.util.spec_from_file_location(f"module_{template_id}", str(app_path))
     module = importlib.util.module_from_spec(spec)
-    
-    # We mock the environment since some templates might try to call DataHub or other APIs at startup
-    os.environ["DATAHUB_URL"] = "http://mock-datahub"
+
+    # Templates' lifespan skips registration by default (MESH_REGISTER_ON_STARTUP
+    # not set); LOCAL_DEV bypasses the Topaz auth check.
     os.environ["LOCAL_DEV"] = "true"
-    
+    os.environ.pop("MESH_REGISTER_ON_STARTUP", None)
+
     try:
         spec.loader.exec_module(module)
-        
-        # 3. Assertions: Check if 'app' exists and is a MeshTool (or has the expected FastAPI app)
+
+        # 3. Assertions: Check that 'app' exists and is a MeshTool with the
+        # expected URN (derived by MeshTool from the substituted name).
         assert hasattr(module, "app"), f"Template {template_id} failed to export 'app'"
-        
-        # Depending on the template, 'app' might be a MeshTool instance or a FastAPI instance
-        # Most of our templates use 'app = MeshTool(...)'
+
         from iagent_mesh.core import MeshTool
         if isinstance(module.app, MeshTool):
             assert module.app.name == tool_name
-            assert module.app.urn == tool_urn
-            assert module.app.app.title == tool_urn
+            expected_urn = f"urn:li:mlModel:(urn:li:dataPlatform:mesh,{tool_name},PROD)"
+            assert module.app.urn == expected_urn
+            assert module.app.app.title == expected_urn
+            # Predicate fields must be set per the new SDK contract.
+            assert ":" in module.app.verb, "template did not set a namespaced verb"
+            assert ":" in module.app.input_uri
+            assert ":" in module.app.output_uri
         else:
-            # Fallback for templates that might expose the FastAPI app directly
+            # Fallback for templates that expose the FastAPI app directly.
             assert hasattr(module.app, "title")
-            
+
     except Exception as e:
         pytest.fail(f"Template {template_id} failed to load or has syntax errors: {e}")

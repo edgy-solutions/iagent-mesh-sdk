@@ -13,11 +13,17 @@ class LegacyModelInput(ToolInput):
 class LegacyModelOutput(ToolOutput):
     baml_analysis: BamlExtractedOutput
 
+# Predicate edge:
+#     (mro:VibrationDataset) --[mro:detectVibrationAnomalies]--> (mro:AnomalyReport)
 app = MeshTool(
-    name="REPLACE_ME_NAME", 
-    description="Pandas + BAML",
-    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
-    # ontology_uris=["mro:VibrationAnalysis", "mro:PredictiveMaintenance"]
+    name="REPLACE_ME_NAME",
+    description="Detects vibration anomalies; Polars ingest, Pandas crunch, BAML extract.",
+    verb="mro:detectVibrationAnomalies",
+    input_uri="mro:VibrationDataset",
+    output_uri="mro:AnomalyReport",
+    verb_synonyms=["find vibration outliers", "anomaly detection"],
+    owner_persona="MECHANIC",
+    cost_class="slow",  # BAML extraction over an LLM is not cheap
 )
 
 @app.execute()

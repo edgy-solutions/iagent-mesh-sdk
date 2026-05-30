@@ -10,11 +10,24 @@ class MathInput(ToolInput):
 class MathOutput(ToolOutput):
     projected_wear: float
 
+# This tool is a typed predicate in the mesh's predicate graph (ADR-0004):
+#
+#     (mro:ComponentSnapshot) --[mro:projectComponentWear]--> (mro:WearProjection)
+#
+# ``verb``, ``input_uri``, ``output_uri`` are required. Pick concept URIs from
+# the IOF MRO ontology (or your domain's equivalent); pick the verb from the
+# same ontology if it exists, or mint a ``mesh:`` verb if it doesn't.
+# See ADR-0005 for namespacing conventions and ADR-0007 for the survey rule
+# before minting platform concepts.
 app = MeshTool(
-    name="REPLACE_ME_NAME", 
-    description="Calculates rotor wear limits.",
-    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
-    # ontology_uris=["mro:RotorAssembly", "mro:MaintenanceMetric"]
+    name="REPLACE_ME_NAME",
+    description="Projects component wear over flight-hour exposure.",
+    verb="mro:projectComponentWear",          # rdf:Property in the MRO ontology
+    input_uri="mro:ComponentSnapshot",         # rdfs:domain
+    output_uri="mro:WearProjection",           # rdfs:range
+    verb_synonyms=["project wear", "estimate wear", "compute wear limit"],
+    owner_persona="MECHANIC",
+    cost_class="fast",
 )
 
 @app.execute()

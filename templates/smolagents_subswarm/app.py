@@ -17,11 +17,22 @@ class InvestigationOutput(ToolOutput):
     findings: str
 
 # REPLACE_ME_NAME is automatically swapped by scaffold.sh
+# Predicate edge — autonomous multi-step investigation:
+#     (mesh:InvestigationTarget) --[mesh:investigateEntity]--> (mesh:InvestigationFindings)
+#
+# Investigation loops are mesh-internal (no domain ontology has a clean
+# concept for "agent ran a tool-use loop and produced findings"); the verb
+# lives in the platform namespace.
 app = MeshTool(
-    name="REPLACE_ME_NAME", 
-    description="An autonomous agent node. Route complex, multi-step investigations here.",
-    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
-    # ontology_uris=["agentic:InvestigationLoop", "mro:RootCauseAnalysis"]
+    name="REPLACE_ME_NAME",
+    description="Autonomous CodeAgent investigation loop. Inputs an entity, outputs findings.",
+    verb="mesh:investigateEntity",
+    input_uri="mesh:InvestigationTarget",
+    output_uri="mesh:InvestigationFindings",
+    verb_synonyms=["investigate", "root cause", "drill down"],
+    owner_persona="AUDITOR",
+    cost_class="slow",  # agentic loops are not cheap
+    requires_human_approval=False,
 )
 
 @app.execute()

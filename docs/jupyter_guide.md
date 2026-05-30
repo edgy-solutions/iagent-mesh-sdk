@@ -56,10 +56,24 @@ class AnomalyOutput(ToolOutput):
     flagged_records: int
     summary: str
 
-# 2. Register your Node to the global Mesh
+# 2. Register your Node as a typed predicate in the mesh's predicate graph.
+#    The verb is the *operation* (a named relation between concept classes);
+#    input_uri / output_uri are the typed endpoints. The router (Engine O)
+#    discovers your tool by walking the predicate graph -- it does NOT
+#    pattern-match the description.
+#
+#    See the SDK ADRs for the model:
+#      - ADR-0004: predicate-graph routing
+#      - ADR-0005: domain (mro:, logistics:, ...) vs platform (mesh:) prefixes
 app = MeshTool(
-    name="basic_anomaly_detector", 
-    description="ROUTE traffic here when the user asks to find outliers or anomalies in a dataset."
+    name="basic_anomaly_detector",
+    description="Flags anomalies in a dataset given a sensitivity threshold.",
+    verb="mro:detectVibrationAnomalies",        # what this tool DOES
+    input_uri="mro:VibrationDataset",            # what it consumes
+    output_uri="mro:AnomalyReport",              # what it produces
+    verb_synonyms=["find anomalies", "flag outliers"],
+    owner_persona="MECHANIC",
+    cost_class="medium",
 )
 
 # 3. Write your clean business logic
@@ -67,11 +81,17 @@ app = MeshTool(
 def detect_anomalies(data: AnomalyInput) -> AnomalyOutput:
     # Topaz security and Trace IDs are already handled invisibly!
     print(f"Scanning {data.dataset_name} at {data.sensitivity} sensitivity...")
-    
+
     # ... your Polars/Pandas/Agentic logic goes here ...
-    
+
     return AnomalyOutput(flagged_records=42, summary="Found severe outliers in Q3 data.")
 ```
+
+> **Note** — DataHub registration is opt-in. Set
+> `MESH_REGISTER_ON_STARTUP=true` (plus `DATAHUB_GMS_URL` and
+> `DATAHUB_TOKEN`) when you want the tool to announce itself to the
+> mesh; leave it unset for local-dev. The tool always serves requests
+> regardless.
 
 *This is just the appetizer. When you are ready to build for real, proceed to Section 4 to scaffold your production-ready workspace!*
 

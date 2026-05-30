@@ -31,11 +31,23 @@ class PolicyOutput(ToolOutput):
     sources_cited: list[str]
 
 # REPLACE_ME_NAME is automatically swapped by scaffold.sh
+# Predicate edge — the platform's "query existing RAG over enterprise policy":
+#     (mesh:PolicyQuery) --[mesh:queryEnterprisePolicy]--> (mesh:PolicyAnswer)
+#
+# The mesh: prefix marks this as a platform-internal verb (ADR-0005). This
+# wrapper exists because the mesh exists -- legacy RAG pipelines don't have
+# a natural place in a domain ontology. If a domain ontology grows a
+# matching concept, you can re-register against it without breaking
+# anything (the URI just changes).
 app = MeshTool(
-    name="REPLACE_ME_NAME", 
-    description="A legacy adapter node. Wraps existing LlamaIndex/LangChain RAG pipelines.",
-    # Link this tool to the Enterprise Ontology so the Mesh can route to it:
-    # ontology_uris=["mro:MaintenanceWorkOrder", "logistics:DelayInvestigation"]
+    name="REPLACE_ME_NAME",
+    description="Adapter node wrapping a LlamaIndex / LangChain RAG pipeline.",
+    verb="mesh:queryEnterprisePolicy",
+    input_uri="mesh:PolicyQuery",
+    output_uri="mesh:PolicyAnswer",
+    verb_synonyms=["look up policy", "consult policy RAG", "ask the policy index"],
+    owner_persona="TECH_WRITER",
+    cost_class="medium",
 )
 
 @app.execute()
