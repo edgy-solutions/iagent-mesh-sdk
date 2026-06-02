@@ -12,7 +12,8 @@ mesh is supposed to support.
 | **ClickHouse** | ✅ PASS | 264s | `clickhouse-connect` Arrow path. `connectorx` doesn't speak clickhouse. |
 | **S3 Parquet (MinIO)** | ✅ PASS | 236s | `pl.scan_parquet` + `aws_endpoint_url` + `aws_allow_http=true`. |
 | **S3 Delta Lake (MinIO)** | ✅ PASS | 249s | `pl.scan_delta` + same storage_options. `deltalake` package required. |
-| **S3 Iceberg (MinIO)** | ⚠️ Stuck on supervisor, no data-layer signal | 25 min before cancel | `pl.scan_iceberg` is the wrong shape for SQL-catalog tables (see "Iceberg gap"), AND in this run the supervisor's `create_task_plan` op hung — likely Engine O's /plan hit the gfx1151 wedge state from earlier sustained inference. Two compounding failures; couldn't separate them in this session. |
+| **S3 Iceberg (MinIO)** | ✅ PASS | 313s | (after the fix described in "Iceberg fix landed" below) — `pyiceberg.load_catalog` + `catalog.load_table()` + `pl.scan_iceberg(table_obj)` against a Postgres-backed SqlCatalog. |
+| **Engine A (mesh:analyzeWithCodeAgent)** | ✅ PASS | 289s | (after the fixes described in "Engine A path" below) — supervisor routed to Engine A on a maintenance-domain query; smolagent ran tool calls, returned KNOWLEDGE_DOCUMENT via Engine F. |
 
 Same logical data returned correctly in every case: top-5 customers by
 revenue, descending — Gamma LLC (120k), Epsilon Corp (110k), Delta
@@ -104,73 +105,45 @@ values — `postgres`, `clickhouse`, `s3_parquet`, `s3_delta`,
 
 Broker pod env extended with `CH_*` and `S3_*` variables.
 
-## Iceberg gap
+## Iceberg fix landed
 
-`pl.scan_iceberg(s3://bucket/path/...)` only works when the Iceberg
-table is laid out in **Hadoop catalog format** (specifically,
-`metadata/version-hint.text` must exist). pyiceberg's `SqlCatalog` (and
-its `RestCatalog` and `GlueCatalog`) write tables WITHOUT
-`version-hint.text` — they track current metadata pointer in their
-own catalog table/service.
+The first iceberg run failed because `pl.scan_iceberg(s3://bucket/path/...)`
+only works when the Iceberg table is laid out in **Hadoop catalog
+format** (specifically, `metadata/version-hint.text` must exist).
+pyiceberg's `SqlCatalog` (and its `RestCatalog` and `GlueCatalog`)
+write tables WITHOUT `version-hint.text` — they track current metadata
+pointer in their own catalog table/service.
 
-Confirmed locally:
+**Final solution (commit `c002b77` in dag-tools):** load the table
+through `pyiceberg.catalog.load_catalog()`, call `load_table()`, then
+pass the Table OBJECT to `pl.scan_iceberg(table)`. Polars 1.x accepts
+both forms.
+
+Sandbox plumbing for the fix:
+- Created a `iceberg_catalog` database on `iagent-postgresql`
+- Re-seeded the table using `pyiceberg.SqlCatalog` with the Postgres
+  URI as `uri` and `s3://iagent-data/iceberg_warehouse_pg` as warehouse
+- Domain broker now returns these extras in `s3_iceberg` credentials:
+  ```
+  catalog_uri      = postgresql+psycopg2://iagent:.../iceberg_catalog
+  warehouse_uri    = s3://iagent-data/iceberg_warehouse_pg
+  table_identifier = sales.customers
+  catalog_type     = sql
+  ```
+- CortexDataClient's `s3_iceberg` branch consumes those + the existing
+  S3 storage keys to build the catalog and load the table.
+
+The original failure signature (preserved here so future readers can
+recognize the same symptom in other deployments):
 ```
 ICEBERG ERR: FileNotFoundError:
   Path does not exist 'iagent-data/iceberg_warehouse/sales/customers/
   metadata/version-hint.text'
 ```
 
-This is a real architectural gap in CortexDataClient. The fix is to
-load tables through `pyiceberg.catalog.load_catalog` (REST or SQL
-catalog reference required), then `table.scan().to_polars()` rather
-than `pl.scan_iceberg(uri)`. The new code path would look roughly:
-
-```python
-elif source_type == "s3_iceberg":
-    from pyiceberg.catalog import load_catalog
-    catalog = load_catalog(
-        "sandbox",
-        **{
-            "type": "sql",
-            "uri": credentials["catalog_uri"],
-            "warehouse": credentials["warehouse_uri"],
-            "s3.endpoint": credentials.get("aws_endpoint_url"),
-            "s3.access-key-id": credentials["aws_access_key_id"],
-            "s3.secret-access-key": credentials["aws_secret_access_key"],
-        },
-    )
-    table = catalog.load_table(credentials["table_identifier"])
-    df = table.scan().to_pandas()  # or to_arrow
-    lf = pl.from_pandas(df).lazy()
-```
-
-That requires the broker ticket to carry `catalog_uri`,
-`warehouse_uri`, and `table_identifier` in addition to the S3
-creds. Out of scope for the overnight run; documenting for the next
-session.
-
-The Iceberg sandbox test never reached the data-fetch step — the
-supervisor's `create_task_plan` op (which calls Engine O's /plan)
-hung at the start and the run sat in STARTED status for 25 minutes
-before being terminated. The likely cause is that earlier sustained
-inference from Test 3 (digital twin) left ai1's gfx1151 GPU in the
-wedge state described in `STRIX_HALO_OLLAMA_DIAGNOSTICS.md`, and
-Engine O's /plan call to Ollama hung indefinitely.
-
-So the iceberg test doesn't have a clean data-layer failure signal —
-we couldn't separate "the iceberg code path is broken (Hadoop vs SQL
-catalog)" from "the GPU is wedged so nothing can run." Both are real
-issues, but the run aborted before reaching the layer that would
-have demonstrated the catalog issue.
-
-Local validation HAS proven the catalog issue is real:
-```
-PYTHONIOENCODING=utf-8 python verify_polars_s3.py
-ICEBERG ERR: FileNotFoundError: Path does not exist
-  'iagent-data/iceberg_warehouse/sales/customers/metadata/version-hint.text'
-```
-
-So the catalog code path needs work regardless of GPU stability.
+If you see that, the table was written by a SQL/REST/Glue catalog
+but the reader is using the bare-URI form of `pl.scan_iceberg`.
+Switch to the catalog form (as we did) and the table loads.
 
 ## Gotchas observed overnight
 
@@ -201,26 +174,65 @@ So the catalog code path needs work regardless of GPU stability.
 The DA flow now demonstrably works against 5 distinct backend shapes:
 - One relational over wire protocol (Postgres via ADBC)
 - One columnar OLAP over wire protocol (ClickHouse via clickhouse-connect)
-- Three S3-resident formats (Parquet, Delta — both passing — and Iceberg
-  pending the catalog code path)
+- Three S3-resident formats (Parquet, Delta, Iceberg — all passing,
+  Iceberg via a Postgres-backed SqlCatalog)
+
+Plus the Engine A path (mesh:analyzeWithCodeAgent) — smolagent loop
+through the Restate ingress, validated on a maintenance-domain query.
 
 The supervisor → broker → CortexDataClient → DuckDB chain is uniform;
 each new backend was a CortexDataClient code patch + a broker URN
-mapping + an Engine DA prompt hint. The architecture is correct; only
-Iceberg needs more work and that's catalog-shape, not S3-access.
+mapping + an Engine DA prompt hint. The architecture extends cleanly.
+
+## Engine A path
+
+The Engine A test (`mesh:analyzeWithCodeAgent`) needed two fixes
+beyond what was already in main:
+
+1. **`analyze_proxy` timeout 300s → 900s** — same shape as the
+   Engine E proxy bug from yesterday. The httpx call to the Restate
+   ingress had a 300s cap, but slow Ollama backends make the
+   smolagent loop take longer; the proxy returned 502 mid-loop and
+   the supervisor reported a pipeline failure.
+
+2. **Defensive payload mapping in the handler** — Engine A's BAML
+   contract requires `task_description` and `dataset_id`. The
+   supervisor sends `user_query` and (for analyst-style queries)
+   no `dataset_id`. Engine A's `AgentTask(**request)` instantiation
+   tripped a pydantic `ValidationError` on every invocation. Since
+   Restate's retry policy keeps re-firing failed invocations, the
+   proxy's call to the ingress hung in a retry loop and the
+   supervisor eventually timed out anyway.
+
+   Fix: `request.setdefault("task_description", request.get("user_query") or "Analyze")`
+   and `request.setdefault("dataset_id", "")` before constructing
+   the AgentTask. Direct callers using the canonical AgentTask
+   shape still work.
+
+After both fixes, Engine A completed a maintenance-domain query end
+to end (289s wall-clock). The agent honestly reported that DataHub
+(in mock mode in sandbox) had no failure-mode data rather than
+hallucinating — which is the desired grounded behavior.
 
 ## Open items / next session
 
-- [ ] Implement Iceberg catalog code path in CortexDataClient
-      (see "Iceberg gap" above for sketch).
-- [ ] Decide on a single Iceberg catalog deployment for sandbox —
-      SQL catalog with a sidecar pod is simplest; REST catalog
-      (e.g. Polaris/Tabular) is closer to prod-shape.
+- [x] ~~Implement Iceberg catalog code path in CortexDataClient~~
+      — done via `pyiceberg.load_catalog` + Table-object form of
+      `pl.scan_iceberg` (commit `c002b77` in dag-tools).
+- [ ] Decide on a longer-term Iceberg catalog deployment for
+      sandbox — current setup uses a `iceberg_catalog` database on
+      the existing `iagent-postgresql`. A dedicated REST catalog
+      (Polaris/Tabular) would be closer to prod-shape, but the
+      SqlCatalog approach is the lowest-friction option and
+      validates the same client code path.
 - [ ] Consider adding `clickhouse-connect` HTTPS support / TLS for
       non-sandbox use; current path uses plain HTTP port 8123.
 - [ ] Document the broker → CortexDataClient credential contract
       so future backends (Snowflake, Databricks, BigQuery) follow
       the same shape.
+- [ ] Promote the Engine A `task_description` defensive mapping
+      into a proper SDK helper so future engines avoid the same
+      pydantic-ValidationError-into-Restate-retry-loop trap.
 
 ## Cross-references
 
