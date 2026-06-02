@@ -1,0 +1,267 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iagent-domain-broker-code
+  namespace: sandbox
+data:
+  broker.py: |
+    import logging, os
+    from contextlib import asynccontextmanager
+    from typing import Dict, Any
+    import httpx
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("broker")
+
+    CENTRAL_GATEWAY_URL = os.environ["CENTRAL_GATEWAY_URL"]
+    BROKER_URL = os.environ["BROKER_URL"]
+    PG_HOST = os.environ.get("PG_HOST", "iagent-postgresql")
+    PG_PORT = int(os.environ.get("PG_PORT", "5432"))
+    PG_USER = os.environ["PG_USER"]
+    PG_PASSWORD = os.environ["PG_PASSWORD"]
+    PG_DATABASE = os.environ["PG_DATABASE"]
+    # ClickHouse
+    CH_HOST = os.environ.get("CH_HOST", "iagent-clickhouse")
+    CH_PORT = int(os.environ.get("CH_PORT", "8123"))
+    CH_USER = os.environ.get("CH_USER", "iagent")
+    CH_PASSWORD = os.environ.get("CH_PASSWORD", "")
+    CH_DATABASE = os.environ.get("CH_DATABASE", "iagent")
+    # MinIO (S3-compatible)
+    S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "http://iagent-minio:9000")
+    S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "")
+    S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
+    S3_REGION = os.environ.get("S3_REGION", "us-east-1")
+
+    # Hardcoded for sandbox: two URNs covering Tests 1 and 3.
+    # URN keys must match what callers ask for.
+    LOCAL_ASSETS: Dict[str, Dict[str, Any]] = {
+        "urn:li:dataset:(urn:li:dataPlatform:postgres,sales_customers,PROD)": {
+            "io_manager_type": "postgres",
+            "schema": "public",
+            "table": "customers",
+        },
+        "urn:li:dataset:(urn:li:dataPlatform:postgres,instance_state,PROD)": {
+            "io_manager_type": "postgres",
+            "schema": "public",
+            "table": "instance_state",
+        },
+        # ClickHouse — same customer data, different backend.
+        "urn:li:dataset:(urn:li:dataPlatform:clickhouse,sales_customers,PROD)": {
+            "io_manager_type": "clickhouse",
+            "schema": "iagent",
+            "table": "customers",
+        },
+        # S3 (MinIO) backends — same customer data, three different formats.
+        "urn:li:dataset:(urn:li:dataPlatform:s3,sales_customers_parquet,PROD)": {
+            "io_manager_type": "s3_parquet",
+            "bucket": "iagent-data",
+            "prefix": "sales_customers_parquet/data.parquet",
+        },
+        "urn:li:dataset:(urn:li:dataPlatform:s3,sales_customers_delta,PROD)": {
+            "io_manager_type": "s3_delta",
+            "bucket": "iagent-data",
+            "prefix": "sales_customers_delta",
+        },
+        "urn:li:dataset:(urn:li:dataPlatform:s3,sales_customers_iceberg,PROD)": {
+            "io_manager_type": "s3_iceberg",
+            "bucket": "iagent-data",
+            "prefix": "iceberg_warehouse/sales/customers",
+        },
+    }
+
+    class ResolveRequest(BaseModel):
+        urn: str
+
+    async def _register_once(c):
+        urns = list(LOCAL_ASSETS.keys())
+        r = await c.post(
+            f"{CENTRAL_GATEWAY_URL}/api/v1/internal/register",
+            json={"broker_url": BROKER_URL, "asset_urns": urns},
+        )
+        r.raise_for_status()
+
+    async def _re_register_loop():
+        # Redis TTL on mesh_route:* keys is 5 minutes. Re-register every
+        # 2 minutes so a single hiccup doesn't blow the routing table away.
+        import asyncio
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as c:
+                    await _register_once(c)
+                    log.info(f"re-registered {len(LOCAL_ASSETS)} assets with gateway")
+            except Exception as e:
+                log.error(f"re-register failed: {e}")
+            await asyncio.sleep(120)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        import asyncio
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                await _register_once(c)
+                log.info(f"initial register: {len(LOCAL_ASSETS)} assets")
+        except Exception as e:
+            log.error(f"initial register failed: {e}")
+        task = asyncio.create_task(_re_register_loop())
+        yield
+        task.cancel()
+
+    app = FastAPI(lifespan=lifespan, title="Sandbox Domain Broker")
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "assets": len(LOCAL_ASSETS)}
+
+    @app.post("/api/v1/internal/resolve")
+    async def resolve(req: ResolveRequest):
+        info = LOCAL_ASSETS.get(req.urn)
+        if not info:
+            raise HTTPException(404, f"URN not registered: {req.urn}")
+        io_type = info["io_manager_type"]
+        if io_type == "postgres":
+            return {
+                "source_type": "postgres",
+                "physical_uri": f"postgres://{PG_HOST}:{PG_PORT}/{info['schema']}/{info['table']}",
+                "credentials": {
+                    "username": PG_USER,
+                    "password": PG_PASSWORD,
+                    "database": PG_DATABASE,
+                },
+            }
+        if io_type == "clickhouse":
+            return {
+                "source_type": "clickhouse",
+                "physical_uri": f"clickhouse://{CH_HOST}:{CH_PORT}/{info['schema']}/{info['table']}",
+                "credentials": {
+                    "username": CH_USER,
+                    "password": CH_PASSWORD,
+                    "database": CH_DATABASE,
+                },
+            }
+        if io_type in ("s3_parquet", "s3_delta", "s3_iceberg"):
+            bucket = info["bucket"]
+            prefix = info["prefix"]
+            return {
+                "source_type": io_type,
+                "physical_uri": f"s3://{bucket}/{prefix}",
+                "credentials": {
+                    "aws_access_key_id": S3_ACCESS_KEY,
+                    "aws_secret_access_key": S3_SECRET_KEY,
+                    "aws_session_token": "",
+                    "aws_endpoint_url": S3_ENDPOINT_URL,
+                    "aws_region": S3_REGION,
+                },
+            }
+        raise HTTPException(400, f"unsupported io_type={io_type}")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iagent-domain-broker
+  namespace: sandbox
+  labels:
+    app: iagent-domain-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iagent-domain-broker
+  template:
+    metadata:
+      labels:
+        app: iagent-domain-broker
+    spec:
+      containers:
+        - name: broker
+          image: python:3.12-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              pip install --no-cache-dir --quiet fastapi httpx pydantic hypercorn
+              exec hypercorn /code/broker.py:app --bind 0.0.0.0:8000
+          ports:
+            - containerPort: 8000
+          env:
+            - name: CENTRAL_GATEWAY_URL
+              value: "http://iagent-central-gateway:8090"
+            - name: BROKER_URL
+              value: "http://iagent-domain-broker:8000"
+            - name: PG_HOST
+              value: "iagent-postgresql"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_USER
+              value: "iagent"
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: iagent-secrets
+                  key: BPMN_POSTGRES_PASSWORD
+            - name: PG_DATABASE
+              value: "iagent"
+            - name: CH_HOST
+              value: "iagent-clickhouse"
+            - name: CH_PORT
+              value: "8123"
+            - name: CH_USER
+              value: "iagent"
+            - name: CH_PASSWORD
+              value: "changeme-clickhouse-sandbox"
+            - name: CH_DATABASE
+              value: "iagent"
+            - name: S3_ENDPOINT_URL
+              value: "http://iagent-minio:9000"
+            - name: S3_ACCESS_KEY
+              value: "minio-sandbox"
+            - name: S3_SECRET_KEY
+              value: "minio-sandbox-secret"
+            - name: S3_REGION
+              value: "us-east-1"
+          volumeMounts:
+            - name: code
+              mountPath: /code
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: code
+          configMap:
+            name: iagent-domain-broker-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iagent-domain-broker
+  namespace: sandbox
+  labels:
+    app: iagent-domain-broker
+spec:
+  selector:
+    app: iagent-domain-broker
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: iagent-clickhouse
+  namespace: sandbox
+  labels:
+    app: iagent-clickhouse
+spec:
+  serviceName: iagent-clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iagent-clickhouse
+  template:
+    metadata:
+      labels:
+        app: iagent-clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.8
+          ports:
+            - name: native
+              containerPort: 9000
+            - name: http
+              containerPort: 8123
+          env:
+            - name: CLICKHOUSE_USER
+              value: iagent
+            - name: CLICKHOUSE_PASSWORD
+              value: changeme-clickhouse-sandbox
+            - name: CLICKHOUSE_DB
+              value: iagent
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            tcpSocket:
+              port: 8123
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8123
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iagent-clickhouse
+  namespace: sandbox
+  labels:
+    app: iagent-clickhouse
+spec:
+  selector:
+    app: iagent-clickhouse
+  ports:
+    - name: native
+      port: 9000
+      targetPort: 9000
+    - name: http
+      port: 8123
+      targetPort: 8123

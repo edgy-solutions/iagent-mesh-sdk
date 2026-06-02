@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: iagent-minio
+  namespace: sandbox
+  labels:
+    app: iagent-minio
+spec:
+  serviceName: iagent-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iagent-minio
+  template:
+    metadata:
+      labels:
+        app: iagent-minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2026-05-15T00-00-00Z
+          args:
+            - server
+            - /data
+            - --console-address
+            - :9001
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              value: minio-sandbox
+            - name: MINIO_ROOT_PASSWORD
+              value: minio-sandbox-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iagent-minio
+  namespace: sandbox
+  labels:
+    app: iagent-minio
+spec:
+  selector:
+    app: iagent-minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
