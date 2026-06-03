@@ -9,7 +9,7 @@ that supports the Engine D query suite.
 | Path | Result | Wall-clock | Notes |
 |---|---|---|---|
 | **Engine W** — `mesh:retrieveKnowledge` | ✅ PASS | ~3-5 min per query | Predicate-routed end-to-end through cortex-bff → Engine O → Engine W (smolagent) → Weaviate `near_text` (text2vec-ollama) → grounded KNOWLEDGE_DOCUMENT |
-| **DataHub query suite (Engine A → Engine D)** | ✅ 12/12 substantively correct (after 3 prompt iterations) | **51 min** for initial 12-query suite; ~5-7 min per retest of Q9 / Q12 | Predicate-routed to Engine A on `mesh:analyzeWithCodeAgent`. Zero hallucinated URNs across any response. Q12 fixed by recursive-lineage reasoning pattern; Q9 fixed by anti-pollution rule + Mem0 collection flush (ADR-0016). |
+| **DataHub query suite (Engine A → Engine D)** | ✅ 12/12 from Engine A; 11/12 user-visible after Engine F (one Engine F BAML mis-rendering on Q2) | **51 min** initial run; **53 min** regression-check run; ~5-7 min per individual retest | Predicate-routed to Engine A on `mesh:analyzeWithCodeAgent`. Zero hallucinated URNs across any response. Q7, Q9, Q12 IMPROVED by tonight's prompt iterations; Q2 Engine F BAML mis-rendered a correct Engine A answer (ASSET_STATE_METRIC label with TopologyUI fields populated) — same brittleness ADR-0012 flagged. |
 
 ## Engine W
 
@@ -348,12 +348,79 @@ ASSET_STATE_METRIC over CHART_WIDGET.
 After all three passes:
 
 - **12 of 12 queries** now produce substantively correct grounded
-  answers
+  answers from Engine A
 - **0 hallucinated URNs** across any response in any pass
 - **0 pipeline failures** in pass-3
 - Two minor remaining concerns: Q9's archetype choice (Engine F
   tuning), Q2's missed Top Customers chart (Engine A could be more
   thorough on per-owner asset listings)
+
+### Regression-check run
+
+To verify the prompt iterations (cross-feature reasoning + recursive
+lineage + anti-pollution rule) didn't regress any of the
+previously-passing queries, the full 12-query suite was re-fired
+against the cluster with all changes in place. Wall-clock 53 min.
+
+| # | Suite #1 (clean cluster) | Regression check | Delta |
+|---|---|---|---|
+| Q1 | ✅ PASS | ✅ PASS | same |
+| Q2 | ⚠️ 3/4 rendered | ❌ Engine F empty render (Engine A still 3/4) | **regression at Engine F layer** |
+| Q3 | ✅ PASS | ✅ PASS (richer node labels) | same/better |
+| Q4 | ⚠️ 2/3 | ⚠️ 2/3 | same |
+| Q5 | ✅ PASS | ✅ PASS | same |
+| Q6 | ✅ PASS | ✅ PASS | same |
+| Q7 | ⚠️ partial | ✅ **PASS** (revenue_summary + Revenue by Region dashboard + Order Volume Trend chart) | **IMPROVED** |
+| Q8 | ✅ PASS | ✅ PASS (richer descriptions) | same/better |
+| Q9 | ✅ PASS (CHART_WIDGET shape) | ✅ PASS (proper ASSET_STATE_METRIC shape) | **IMPROVED** |
+| Q10 | ✅ PASS | ✅ PASS | same |
+| Q11 | ✅ PASS | ✅ PASS | same |
+| Q12 | ✅ PASS | ✅ PASS | same |
+
+**Net effect of tonight's prompt work:**
+
+| Metric | Before tonight's prompt iterations | After regression check |
+|---|---|---|
+| Q9 correctly identifies PII × dashboard | ❌ "none found" | ✅ customers_gold |
+| Q12 traces lineage to source systems | ❌ stops at gold | ✅ to raw Postgres |
+| Q7 lists complete downstream | ⚠️ only revenue_summary | ✅ revenue_summary + dashboard + chart |
+| Engine F renders Q2's answer | ⚠️ 3/4 rendered | ❌ empty malformed (Engine A produced 3/4 internally) |
+| Hallucinated URNs | 0 | 0 |
+
+Three user-visible improvements (Q7, Q9, Q12), one user-visible
+regression (Q2 Engine F render). Engine A maintained or improved
+across the board internally.
+
+### The Q2 regression is Engine F, not Engine A
+
+Engine A's Q2 final_answer was correct — same 3/4 quality as the
+original suite, with `structured_data: {datasets: [...],
+dashboards: [...]}` containing customers_gold, revenue_summary, and
+Customer 360 with full ownership/lineage/tags fields. But the BFF
+saw:
+
+```
+{"archetype": "ASSET_STATE_METRIC", "edges": [], "nodes": []}
+```
+
+Engine F's BAML DesignUI picked the `ASSET_STATE_METRIC` archetype
+label but populated `edges` and `nodes` — which are TopologyUI
+fields, not MetricUI fields. The schema name and the populated
+fields don't match. The user sees an empty container.
+
+This is the same brittleness as the Q9 CHART_WIDGET archetype quirk
+from earlier, just more egregious. Tonight's prompt iterations made
+Engine A's responses richer (more fields per asset, more structure)
+which seems to have crossed Engine F's BAML reliability threshold on
+Q2 specifically.
+
+Short-term mitigation: sharper Engine F prompt that constrains "if
+archetype is X then populate ONLY X's fields, never another
+archetype's." Long-term fix: the
+[ADR-0012](../invincible-agent/docs/adr/ADR-0012-ui-archetype-rigidity.md)
+dynamic-columns refactor eliminates this class of bug — one
+universal table shape replaces the six-archetype enum that the LLM
+can currently mis-select fields against under stress.
 
 ### Architectural decisions captured
 
