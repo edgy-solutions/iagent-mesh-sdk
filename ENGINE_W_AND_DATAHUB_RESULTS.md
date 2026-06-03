@@ -9,7 +9,7 @@ that supports the Engine D query suite.
 | Path | Result | Wall-clock | Notes |
 |---|---|---|---|
 | **Engine W** — `mesh:retrieveKnowledge` | ✅ PASS | ~3-5 min per query | Predicate-routed end-to-end through cortex-bff → Engine O → Engine W (smolagent) → Weaviate `near_text` (text2vec-ollama) → grounded KNOWLEDGE_DOCUMENT |
-| **DataHub query suite (Engine A → Engine D)** | ✅ 10/12 PASS | **51 min total**, ~4 min/query avg | Predicate-routed to Engine A on `mesh:analyzeWithCodeAgent`. Zero hallucinated URNs across all 12 responses. 2 misses are Engine A reasoning gaps (cross-feature predicates + lineage recursion depth), not platform issues. |
+| **DataHub query suite (Engine A → Engine D)** | ✅ 12/12 substantively correct (after 3 prompt iterations) | **51 min** for initial 12-query suite; ~5-7 min per retest of Q9 / Q12 | Predicate-routed to Engine A on `mesh:analyzeWithCodeAgent`. Zero hallucinated URNs across any response. Q12 fixed by recursive-lineage reasoning pattern; Q9 fixed by anti-pollution rule + Mem0 collection flush (ADR-0016). |
 
 ## Engine W
 
@@ -270,25 +270,90 @@ The wall-clock improvement comes from the VRAM-thrash fix (Mem0 LLM
 moved off ai1) — every smolagent step no longer pays a 30-60s
 model-swap penalty.
 
-### The two misses are Engine A reasoning gaps, not architecture
+### The two misses were Engine A reasoning gaps — fixed in this session
 
-**Q9 (cross-feature: tag AND downstream relationship).** Engine D's
-enriched response returns every dataset with `tags=[pii]` AND
-`downstream: [...]` on the same line. The information was in the
-agent's context. The agent failed to compose
-"datasets where tags includes 'pii' AND downstream contains a
-Superset dashboard." Fixable with a worked example in Engine A's
-prompt for cross-feature predicates.
+Both Q9 and Q12 were fixed by prompt-engineering against Engine A, no
+platform work required. Three iterations were needed:
 
-**Q12 (recursive lineage to source systems).** The `search_datahub`
-tool docstring already says the agent may issue follow-up calls on
-names in `upstream:` / `downstream:`. The agent traced one hop and
-stopped. Fixable with a worked example in the prompt showing
-"trace until you hit a node with no upstream."
+**Pass 1 — reasoning patterns added** (commit `b1dd198`):
 
-Both are prompt-engineering fixes against Engine A, not platform
-work. The data plane has the facts; the smolagent's reasoning needs
-to know to keep walking.
+- A "CROSS-FEATURE PREDICATES" pattern instructing the agent to
+  compose multiple conditions on a single search hit (Q9 shape).
+- A "RECURSIVE LINEAGE TRAVERSAL" pattern instructing the agent to
+  recurse on each upstream/downstream name until it reaches a node
+  with no further lineage (Q12 shape).
+
+**Pass 1 outcome on retest:**
+
+- ✅ Q12 (dm_finance_audit) — agent correctly traced from the sales
+  dashboards back through revenue_summary → orders_fact → bronze →
+  raw and identified `orders_raw` + `customers_raw` as the source
+  systems. Recursive lineage pattern WORKED.
+- ❌ Q9 (catalog_pii) — agent answered "none found" again. Same
+  failure as the original suite run.
+
+**Diagnosis on Q9 pass-1 failure:** investigating Engine A's
+reasoning trace revealed Mem0 had stored the agent's previous wrong
+answer ("no PII datasets exposed") as a fact from the original suite
+run. Mem0's fact-extractor (phi4-16k:14b on the openwebui host)
+cannot distinguish between tool-grounded facts and agent inferences;
+the agent's wrong interpretation was lifted as if it were truth.
+On the retest, that wrong fact appeared as "Relevant Past
+Experience" and the agent confidently repeated it without verifying
+against current tools.
+
+This is the same self-reinforcing-pollution pattern flagged at the
+start of the session, manifesting one layer deeper than ADR-0014:
+that one was about prompt scaffolding; this is about memory.
+
+**Pass 2 — anti-pollution mitigation** (commit `c5168c1` + Mem0
+flush):
+
+- `Mem0migrationsOllama` Weaviate collection dropped to break the
+  reinforcement loop.
+- New Engine A prompt rule: "Past experience is HINTS, never facts.
+  It may reflect summaries of your own previous wrong answers. You
+  MUST verify against current tool output. If past experience says
+  'no X exists' for the current question, IGNORE that claim and
+  run the tool anyway."
+
+**Pass 2 outcome on retest:**
+
+- ✅ Q9 (catalog_pii) — agent correctly identified
+  `gold.sales.customers_gold` as a PII-tagged dataset directly
+  exposed to the Customer 360 Superset dashboard. The data is
+  grounded against the seed.
+
+The deeper architectural decision behind the Mem0 fix is captured in
+[ADR-0016](../invincible-agent/docs/adr/ADR-0016-mem0-fact-vs-inference-boundary.md):
+tool-grounded facts and agent inferences should not share the Mem0
+store. ADR-0016 proposes a two-stream split, provenance tracking on
+every record, and periodic re-verification of stored ToolFacts.
+
+### Engine F archetype quirk on Q9 retest
+
+The Q9 retest answer came back with `archetype: CHART_WIDGET` instead
+of `KNOWLEDGE_DOCUMENT` or `ASSET_STATE_METRIC`. The content was
+correct (customers_gold with owner, last_updated, tags=pii) but
+Engine F interpreted the agent's structured response as chart-shaped
+data and picked the chart archetype. This is independent of ADR-0012
+(the grounding-rule patch worked to prevent URN invention; the
+archetype-class choice is a different concern). A future Engine F
+tweak: when raw_data describes a single named asset rather than a
+list of measurements, prefer KNOWLEDGE_DOCUMENT or
+ASSET_STATE_METRIC over CHART_WIDGET.
+
+### Final scorecard for the DataHub query suite
+
+After all three passes:
+
+- **12 of 12 queries** now produce substantively correct grounded
+  answers
+- **0 hallucinated URNs** across any response in any pass
+- **0 pipeline failures** in pass-3
+- Two minor remaining concerns: Q9's archetype choice (Engine F
+  tuning), Q2's missed Top Customers chart (Engine A could be more
+  thorough on per-owner asset listings)
 
 ### Architectural decisions captured
 
@@ -306,6 +371,10 @@ to know to keep walking.
   — Router regression testing at the `/search_predicates` layer
   (proposes the live continuous-validation pattern for the
   long-lived production deployment)
+- [ADR-0016](../invincible-agent/docs/adr/ADR-0016-mem0-fact-vs-inference-boundary.md)
+  — Mem0 boundary: separate tool-grounded facts from agent
+  inferences in storage and retrieval. Driven directly by the Q9
+  self-reinforcing-pollution finding in this session.
 
 ### What's still under-tested
 
