@@ -11,6 +11,26 @@ that supports the Engine D query suite.
 | **Engine W** — `mesh:retrieveKnowledge` | ✅ PASS | ~3-5 min per query | Predicate-routed end-to-end through cortex-bff → Engine O → Engine W (smolagent) → Weaviate `near_text` (text2vec-ollama) → grounded KNOWLEDGE_DOCUMENT |
 | **DataHub query suite (Engine A → Engine D)** | ✅ 12/12 from Engine A; 11/12 user-visible after Engine F (one Engine F BAML mis-rendering on Q2) | **51 min** initial run; **53 min** regression-check run; ~5-7 min per individual retest | Predicate-routed to Engine A on `mesh:analyzeWithCodeAgent`. Zero hallucinated URNs across any response. Q7, Q9, Q12 IMPROVED by tonight's prompt iterations; Q2 Engine F BAML mis-rendered a correct Engine A answer (ASSET_STATE_METRIC label with TopologyUI fields populated) — same brittleness ADR-0012 flagged. |
 
+## Suite run history
+
+Each row is one fire of the 12-query DataHub suite (or a focused
+retest). New rows go at the bottom as the suite is re-run.
+
+| # | Date / time | Cluster state / commits | Engine A internally correct | User-visible after Engine F | Hallucinated URNs | Wall-clock | Notes |
+|---|---|---|---|---|---|---|---|
+| 1 | 2026-06-03 02:20 UTC | Polluted: `sandbox_urn_hints` still in Engine DA; broker `LOCAL_ASSETS` still seeded with overnight-coverage URNs; Engine A excluded from DATA_ENGINEERING | n/a — agent fed hallucinations | 4 / 12 substantively right | 8 / 12 responses contained stale URNs | ~72 min | Discovery run that exposed the routing+pollution chain |
+| 2 | 2026-06-03 13:30 UTC | Clean: ADR-0014 cleanup applied, Engine A verb sharpened + DATA_ENGINEERING domain added, Mem0 schema fix + LLM moved to openwebui phi4-16k, Mem0 collection flushed | 10 / 12 | 10 / 12 | 0 | 51 min | First clean baseline run |
+| 3 | 2026-06-03 16:05 UTC | `b1dd198` adds cross-feature + recursive-lineage reasoning patterns to Engine A | Q9+Q12 focused retest | Q12 ✅ ; Q9 ❌ (Mem0-poisoned past experience) | 0 | ~10 min for the two queries | Q9 still wrong; investigation revealed self-reinforcing pollution from earlier session's wrong answer |
+| 4 | 2026-06-03 16:36 UTC | `c5168c1` adds anti-pollution rule + Mem0 collection re-flushed | Q9 focused retest | Q9 ✅ found `customers_gold` (with CHART_WIDGET archetype quirk) | 0 | ~5 min | Anti-pollution rule worked; Engine F archetype choice noted as separate concern |
+| 5 | 2026-06-03 17:01 UTC | Same as #4, full regression check after all prompt iterations | 12 / 12 | 11 / 12 (Q2 Engine F mis-render) | 0 | 53 min | Q7 and Q9 IMPROVED (downstream now complete, proper archetype); Q2 REGRESSION at Engine F layer — same ADR-0012 brittleness, surfaced more often when Engine A's responses got richer |
+
+**How to add a new row:** record the date, the commit SHAs of the
+prompt / config / cluster state, the count from Engine A's `final_answer`
+calls vs the count as it appears in the user-visible UI payload,
+hallucinated-URN count, wall-clock, and a one-line "why this run."
+This gives future sessions a baseline to compare against without
+re-deriving what each run was testing.
+
 ## Engine W
 
 ### What ships now
