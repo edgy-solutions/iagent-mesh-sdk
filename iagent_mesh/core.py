@@ -80,6 +80,21 @@ class MeshTool:
                                     (``rdfs:label`` / ``skos:altLabel``).
                                     Engine O's NL → verb classifier matches
                                     against these.
+    :param verb_anti_synonyms:      NL phrases that should REPEL this verb
+                                    from being selected. Per the ADR-0008
+                                    follow-up on confidently-wrong routing,
+                                    Engine O's ``/search_predicates`` does a
+                                    post-filter re-rank that penalizes a
+                                    candidate verb whose similarity to the
+                                    query against ``verb_anti_synonyms`` is
+                                    high. Use these for cases where
+                                    ``verb_synonyms`` alone can't disambiguate
+                                    — e.g. ``mesh:traceLineage`` is
+                                    semantically close to catalog enumeration
+                                    questions ("what tables do you have") but
+                                    should not handle them; the right move is
+                                    to list those exact phrasings as
+                                    anti-synonyms here.
     :param owner_persona:           **Answerer persona** (engine-side) — the
                                     voice/shape the engine uses to respond.
                                     Per ADR-0009 this drives BAML response-
@@ -110,6 +125,7 @@ class MeshTool:
         input_uri: str,
         output_uri: str,
         verb_synonyms: Optional[list[str]] = None,
+        verb_anti_synonyms: Optional[list[str]] = None,
         owner_persona: Optional[str] = None,
         domains: Optional[list[str]] = None,
         cost_class: str = "fast",
@@ -124,6 +140,7 @@ class MeshTool:
         self.input_uri = input_uri
         self.output_uri = output_uri
         self.verb_synonyms = list(verb_synonyms or [])
+        self.verb_anti_synonyms = list(verb_anti_synonyms or [])
         self.owner_persona = owner_persona
         self.domains = list(domains or [])
         self.cost_class = cost_class
@@ -265,6 +282,7 @@ class MeshTool:
             # Predicate identity + typing
             "mesh_verb_iri":                self.verb,
             "mesh_verb_synonyms":           json.dumps(self.verb_synonyms),
+            "mesh_verb_anti_synonyms":      json.dumps(self.verb_anti_synonyms),
             "mesh_input_uri":               self.input_uri,
             "mesh_output_uri":              self.output_uri,
             "mesh_namespace_authority":     self.namespace_authority,
