@@ -213,18 +213,33 @@ class MeshTool:
             yield
             return
 
-        logger.info("Registering %s to DataHub...", self.urn)
+        # MESH_REGISTRAR_URL toggles between the gateway path (the
+        # architecturally-correct way; the gateway handles DataHub emit +
+        # Contract D validation centrally) and the direct DataHub path
+        # (legacy; the SDK ships acryl-datahub and emits the MCP itself).
+        # Engines migrate at their own pace by setting MESH_REGISTRAR_URL.
+        registrar_url = os.getenv("MESH_REGISTRAR_URL", "").rstrip("/")
+        target = (
+            f"mesh-registrar ({registrar_url})"
+            if registrar_url
+            else "DataHub (direct)"
+        )
+        logger.info("Registering %s to %s...", self.urn, target)
         try:
-            self._emit_to_datahub(app.openapi())
-            logger.info("✅ Successfully registered %s to DataHub.", self.urn)
+            if registrar_url:
+                self._emit_to_registrar(registrar_url, app.openapi())
+            else:
+                self._emit_to_datahub(app.openapi())
+            logger.info("✅ Successfully registered %s to %s.", self.urn, target)
         except Exception as e:  # noqa: BLE001  — registration failure must not crash the tool
             # Per ADR-0006, DataHub is the inbox; runtime serving happens
             # locally. A failed registration should NOT take the tool down.
             logger.warning(
-                "⚠️ Failed to register %s to DataHub: %s. "
+                "⚠️ Failed to register %s to %s: %s. "
                 "Tool will keep serving requests; routing will resume after "
                 "the next successful registration cycle.",
                 self.urn,
+                target,
                 e,
             )
 
@@ -265,6 +280,60 @@ class MeshTool:
         emitter = DatahubRestEmitter(gms_server=gms_url, token=token)
         mcp = MetadataChangeProposalWrapper(entityUrn=self.urn, aspect=props)
         emitter.emit(mcp)
+
+    def _emit_to_registrar(self, registrar_url: str, openapi_spec: dict) -> None:
+        """Register via the mesh-registrar gateway.
+
+        The agent doesn't need to know DataHub's protocol or ship
+        ``acryl-datahub`` — the gateway translates the manifest into a
+        DataHub MCP and emits it, and enforces ADR-0019 Contract D
+        (``input_uri``/``output_uri`` must resolve to real
+        :OntologyClass nodes) at registration time. On Contract D
+        rejection the gateway returns HTTP 422 with the offending
+        URI(s); this method surfaces that as a registration failure
+        the agent's lifespan logs.
+
+        Engines opt into this path by setting ``MESH_REGISTRAR_URL`` to
+        the gateway's service URL (e.g.
+        ``http://iagent-mesh-registrar:8090``). When unset the SDK
+        falls through to ``_emit_to_datahub`` — the legacy direct path
+        — so engines migrate at their own pace.
+        """
+        import httpx
+
+        endpoint_url = os.getenv(
+            "MESH_TOOL_ENDPOINT", "http://localhost:8000/execute"
+        )
+
+        # The manifest mirrors mesh-registrar's RegistrationManifest
+        # pydantic model (agent_fleet/mesh_registrar/main.py).
+        manifest = {
+            "name": self.urn.split(",")[1] if "," in self.urn else self.urn,
+            "verb_iri": self.verb,
+            "input_uri": self.input_uri,
+            "output_uri": self.output_uri,
+            "endpoint_url": endpoint_url,
+            "owner_persona": self.owner_persona or "",
+            "domains": self.domains,
+            "description": self.description,
+            "verb_synonyms": self.verb_synonyms,
+            "verb_anti_synonyms": self.verb_anti_synonyms,
+            "cost_class": self.cost_class,
+            "requires_human_approval": self.requires_human_approval,
+            "version": getattr(self, "version", "0.1.0"),
+            "openapi_schema": json.dumps(openapi_spec),
+        }
+
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(f"{registrar_url}/v1/register", json=manifest)
+            if resp.status_code == 200:
+                return
+            # 422 = Contract D rejection (specific URI missing); 502 =
+            # gateway couldn't reach DataHub. Surface both with enough
+            # detail that the operator can act.
+            raise RuntimeError(
+                f"mesh-registrar returned {resp.status_code}: {resp.text[:500]}"
+            )
 
     def _registration_custom_properties(
         self, endpoint_url: str, openapi_spec: dict
