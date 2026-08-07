@@ -164,8 +164,18 @@ def make_transport_auth_dependency(component: str = "mesh-tool"):
         caller = verify_bearer(_bearer_from(request.headers.get("Authorization")))
         posture = resolve_posture()
 
+        # GAUGE DISCRIMINANT. `caller: none` has two causes — a caller that never minted, and
+        # one whose mint FAILED — and they mean opposite things for migration readiness. The
+        # caller may state which via X-Auth-Status. That header is DIAGNOSTIC ONLY: it is
+        # caller-asserted, unverifiable, and never reaches an authorization decision. Logged
+        # as `claimed:` so no reader mistakes it for a verified fact.
+        detail = caller.reason
+        if caller.reason == "absent":
+            claimed = request.headers.get("X-Auth-Status")
+            detail = f"absent, claimed:{claimed}" if claimed else "absent, no mint attempted"
+
         logger.info("caller: %s (%s) posture=%s path=%s",
-                    caller.authz_id or "none", caller.reason, posture, request.url.path)
+                    caller.authz_id or "none", detail, posture, request.url.path)
 
         if posture == POSTURE_REQUIRE:
             if caller.reason == "absent":

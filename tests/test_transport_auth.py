@@ -140,3 +140,32 @@ def test_REQUIRE_admits_a_verified_caller(monkeypatch):
     good = jwt.encode({"email": "svc:supervisor"}, "k", algorithm="HS256")
     r = _client_with_dependency().get("/ping", headers={"Authorization": f"Bearer {good}"})
     assert r.status_code == 200
+
+
+# --- the gauge discriminant --------------------------------------------------
+def test_absent_caller_records_whether_a_mint_was_attempted(caplog):
+    """TWO CAUSES, ONE SYMPTOM. A caller that never minted and one whose mint FAILED both
+    arrive as `caller: none`, and they mean opposite things for migration readiness — the
+    first is an unmigrated caller, the second is a Keycloak blip. Without the discriminant a
+    blip reads as readiness REGRESSING and the contract flip's gauge inherits noise it
+    cannot explain."""
+    import logging
+    client = _client_with_dependency()
+
+    with caplog.at_level(logging.INFO, logger="iagent_mesh.transport_auth"):
+        client.get("/ping")
+    assert "no mint attempted" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="iagent_mesh.transport_auth"):
+        client.get("/ping", headers={"X-Auth-Status": "mint-failed:ServiceTokenError"})
+    assert "claimed:mint-failed:ServiceTokenError" in caplog.text
+
+
+def test_the_diagnostic_header_can_never_authorize(monkeypatch):
+    """X-Auth-Status is CALLER-ASSERTED and therefore unverifiable — the exact property that
+    made the payload-written subject a spoofing surface. Legal to log, illegal to trust: a
+    caller claiming a successful mint must still be refused under REQUIRE."""
+    monkeypatch.setenv("REQUIRE_TRANSPORT_AUTH", "true")
+    r = _client_with_dependency().get("/ping", headers={"X-Auth-Status": "verified:svc:admin"})
+    assert r.status_code == 401, "a claimed status must never substitute for a token"
