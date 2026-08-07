@@ -3,47 +3,9 @@ import os
 
 import httpx
 
+from .service_identity import ServiceTokenError, mint_mesh_token  # noqa: F401
+
 logger = logging.getLogger("iagent_mesh.client")
-
-
-def _mint_service_token(timeout: float = 15.0) -> str:
-    """Mint a FRESH service token via Keycloak client-credentials.
-
-    ONE MINT IMPLEMENTATION, NOT TWO. This defers to the platform's
-    `agent_fleet.utils.service_identity.mint_service_token` whenever it is importable —
-    the same code path the extraction→review sensor and the supervisor use. Two minting
-    implementations is two places for the claim contract to drift, and the mint contract's
-    entire value is that there is ONE shape to verify. The inline fallback below exists
-    only for engines packaged without the platform on the path, and is deliberately a
-    transcription of the same request, not a variant of it.
-
-    MINT AT USE, never a stored token: there is no JWT to go stale and no lifetime knob to
-    tune. A static credential replayed later is the time-machine defect this replaces.
-    """
-    try:  # platform implementation — preferred, single source
-        from agent_fleet.utils.service_identity import mint_service_token  # type: ignore
-        return mint_service_token(timeout=timeout)
-    except ImportError:
-        pass
-
-    realm = os.environ["KEYCLOAK_REALM_URL"].rstrip("/")
-    client_id = os.environ["MESH_CLIENT_ID"]
-    client_secret = os.environ["MESH_CLIENT_SECRET"]
-    resp = httpx.post(
-        f"{realm}/protocol/openid-connect/token",
-        data={"grant_type": "client_credentials",
-              "client_id": client_id, "client_secret": client_secret},
-        timeout=timeout,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"mint failed HTTP {resp.status_code} for client {client_id!r} at {realm}: "
-            f"{resp.text[:200]}"
-        )
-    token = (resp.json() or {}).get("access_token")
-    if not token:
-        raise RuntimeError("token response carried no access_token")
-    return token
 
 
 class MeshClient:
@@ -74,7 +36,7 @@ class MeshClient:
             logger.warning("outbound identity: MESH_DEV_TOKEN (static, dev fallback) — "
                            "no service identity in use")
             return f"Bearer {self._static_token}"
-        token = _mint_service_token()
+        token = mint_mesh_token()
         logger.info("outbound identity: %s (minted)",
                     os.getenv("MESH_CLIENT_ID", "service-identity"))
         return f"Bearer {token}"
