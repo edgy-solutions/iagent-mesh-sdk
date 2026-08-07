@@ -158,10 +158,19 @@ class MeshTool:
         # identify mesh tool entries (vs. real ML models on the same dataPlatform).
         self.urn = f"urn:li:mlModel:(urn:li:dataPlatform:mesh,{name},PROD)"
 
+        # TRANSPORT AUTH — applied at the FACTORY so every engine inherits it with zero
+        # lines of engine code, the same way telemetry landed in the shim. Default posture
+        # is OBSERVE: validate what arrives, log it, refuse nothing. A refusing default
+        # here would deny every token-less caller fleet-wide on the next rebuild — the
+        # retroactive-inheritance property is the hazard as well as the point.
+        from fastapi import Depends
+        from .transport_auth import announce, make_transport_auth_dependency
+        announce(component=name)
         self.app = FastAPI(
             title=self.urn,
             description=description,
             lifespan=self._lifespan,
+            dependencies=[Depends(make_transport_auth_dependency(component=name))],
         )
 
     # ------------------------------------------------------------------
@@ -385,10 +394,12 @@ class MeshTool:
 
             @self.app.post("/execute")
             async def route_handler(request: Request):
-                # Platform: Topaz zero-trust check. Bypassed in LOCAL_DEV.
-                auth_header = request.headers.get("Authorization")
-                if not auth_header and not os.getenv("LOCAL_DEV"):
-                    raise HTTPException(status_code=403, detail="Missing Topaz Ticket")
+                # PRESENCE-ONLY CHECK RETIRED (2026-08-07). It refused an absent header
+                # and accepted ANY value present — `Bearer anything` passed — so it was a
+                # gate a manifest counts as present while it verifies nothing. Replaced by
+                # the factory-level transport_auth dependency, which VALIDATES the token
+                # and reports the caller's posture. LOCAL_DEV no longer bypasses anything,
+                # because OBSERVE mode already refuses nothing.
 
                 # Validate and coerce the incoming JSON into the model.
                 body = await request.json()

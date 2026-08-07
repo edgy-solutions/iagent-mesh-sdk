@@ -179,11 +179,21 @@ def test_optional_metadata_set():
 # ---------------------------------------------------------------------------
 # Execute decorator: auth + validation + sync/async + error paths
 # ---------------------------------------------------------------------------
-def test_topaz_zero_trust_failure(client, monkeypatch):
+def test_missing_token_is_OBSERVED_not_refused(client, monkeypatch):
+    """CONTRACT CHANGED, deliberately, and this is the safety-critical direction.
+
+    This asserted 403 "Missing Topaz Ticket" for an absent header — a PRESENCE-only check
+    that also accepted `Bearer anything`. It is replaced by real verification whose default
+    posture is OBSERVE: validate, record, refuse nothing. A refusing default would deny
+    every token-less caller across the whole fleet on the next SDK bump, because this
+    dependency is inherited by every engine at once.
+
+    The refusing behaviour still exists and is proven reachable — see
+    tests/test_transport_auth.py::test_REQUIRE_refuses_absent_with_401."""
     monkeypatch.delenv("LOCAL_DEV", raising=False)
+    monkeypatch.delenv("REQUIRE_TRANSPORT_AUTH", raising=False)
     response = client.post("/execute", json={"value": 5})
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Missing Topaz Ticket"
+    assert response.status_code == 200, "OBSERVE must serve; REQUIRE is where refusal lives"
 
 
 def test_local_dev_bypasses_auth(client, monkeypatch):

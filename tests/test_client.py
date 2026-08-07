@@ -6,16 +6,23 @@ from unittest.mock import patch, MagicMock
 from iagent_mesh.client import MeshClient
 
 
-def test_meshclient_requires_token(monkeypatch):
+def test_meshclient_no_longer_requires_a_static_token(monkeypatch):
+    """CONTRACT CHANGED, deliberately. This asserted that MeshClient RAISES without
+    MESH_DEV_TOKEN — "Ensure you are running within the secured JupyterHub environment."
+    That was the perimeter assumption written down as a runtime requirement: a long-lived
+    credential whose safety rested on WHERE THE PROCESS RUNS, which is security assumed at
+    a boundary the component does not control.
+
+    Constructing a client is now always legal; identity is resolved AT USE (mint-at-use),
+    so the absence of a static token is not an error — it is the normal path."""
     monkeypatch.delenv("MESH_DEV_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="MESH_DEV_TOKEN not found"):
-        MeshClient()
+    MeshClient()  # must not raise
 
 
 def test_meshclient_uses_default_gateway_url():
     client = MeshClient()
     assert client.gateway_url == "http://cortex-bff.local.svc:8000/orchestrate"
-    assert client.token == "mock_token"
+    assert client._static_token == "mock_token"   # dev fallback, announced when used
 
 
 def test_meshclient_accepts_custom_gateway_url():
