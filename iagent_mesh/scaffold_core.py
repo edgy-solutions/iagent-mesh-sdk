@@ -37,6 +37,12 @@ def generate_template_files(template_id: str, tool_name: str, tool_urn: str, des
             content = content.replace("REPLACE_ME_NAME", tool_name)
             content = content.replace("REPLACE_ME_URN", tool_urn)
             file_path.write_text(content, encoding="utf-8")
+
+    # 4. IDENTITY STANZAS - see iagent_mesh/identity_stanzas.py for the why. Makes the
+    # marginal cost of a new tool's service identity two reviewed YAML blocks instead of
+    # an undocumented Keycloak errand.
+    from iagent_mesh.identity_stanzas import render_identity_yaml
+    (dest_path / "IDENTITY.yaml").write_text(render_identity_yaml(tool_name), encoding="utf-8")
             
     # 4. Generate .s2i/bin/assemble
     s2i_bin = dest_path / ".s2i" / "bin"
