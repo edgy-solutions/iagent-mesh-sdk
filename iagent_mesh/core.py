@@ -164,13 +164,18 @@ class MeshTool:
         # here would deny every token-less caller fleet-wide on the next rebuild — the
         # retroactive-inheritance property is the hazard as well as the point.
         from fastapi import Depends
-        from .transport_auth import announce, make_transport_auth_dependency
+        from .transport_auth import announce, app_docs_kwargs, make_transport_auth_dependency
         announce(component=name)
         self.app = FastAPI(
             title=self.urn,
             description=description,
             lifespan=self._lifespan,
             dependencies=[Depends(make_transport_auth_dependency(component=name))],
+            # Docs OFF in deployment (see app_docs_kwargs): /openapi.json, /docs and /redoc are
+            # registered by FastAPI via Starlette's add_route, so app-level `dependencies=`
+            # NEVER applies to them — they answered 200 unauthenticated under REQUIRE on a live
+            # pod. Opt back in for dev with IAGENT_MESH_DOCS=1.
+            **app_docs_kwargs(),
         )
 
     # ------------------------------------------------------------------

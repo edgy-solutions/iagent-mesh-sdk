@@ -151,6 +151,48 @@ def ensure_gauge_visible() -> bool:
     return changed
 
 
+def docs_enabled() -> bool:
+    """API documentation routes are OFF unless explicitly opted in (`IAGENT_MESH_DOCS=1`)."""
+    return os.getenv("IAGENT_MESH_DOCS", "0").lower() in ("1", "true", "yes")
+
+
+def app_docs_kwargs() -> dict:
+    """FastAPI kwargs that disable `/docs`, `/redoc` and `/openapi.json` in deployment.
+
+    WHY DISABLE RATHER THAN GATE — three arguments, and the middle one is decisive.
+
+    * Deployed pods have no human readers. A route that serves nobody in production is
+      deny-by-default's easiest case.
+    * A gate here would admit NO LEGITIMATE TRAFFIC EVER: an authenticated *service* has no use
+      for `/redoc`. A gate whose correct steady state is 100% denial is a disable wearing a
+      dependency's cost.
+    * The disclosure is reconnaissance-grade. `/openapi.json` enumerates the full verb surface
+      of every engine, unauthenticated — knowing WHAT CAN BE DONE to a system is the map an
+      attacker draws first, and it is the operation-dimension disclosure the SPO authz work
+      already identified as its own risk axis.
+
+    WHY THIS IS A KWARGS HELPER AND NOT A FACTORY. The SDK owns ONE app factory, but the ten
+    platform engines construct `FastAPI(...)` themselves. A factory-only fix would protect the
+    scaffolded engines and leave the fleet exposed — coverage decided by which construction path
+    a service happened to use, which is the same shape as "fleet-wide meant ten because of a
+    glob". So the POLICY lives here (one place decides) and every construction site applies it;
+    a route-census assertion in the consumer's suite enforces that they all do.
+
+    MEASURED, not theorised: under REQUIRE on a live pod, `/openapi.json`, `/docs` and `/redoc`
+    all returned 200 UNAUTHENTICATED, because FastAPI registers them via Starlette's
+    `add_route` — so app-level `dependencies=` never applies to them. Docs are the KNOWN member
+    of that class; any future mount or `add_route` bypasses the dependency the same way.
+    """
+    if docs_enabled():
+        return {}
+    return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
+def docs_line() -> str:
+    src = "explicit config" if os.getenv("IAGENT_MESH_DOCS") is not None else "default"
+    return f"api docs: {'ENABLED' if docs_enabled() else 'DISABLED'} ({src})"
+
+
 def announce(component: str = "mesh-tool") -> str:
     # Before the announcement, so a service that announces OBSERVE is a service whose gauge
     # can actually be read. Announcing a posture whose evidence channel is dark is the exact
@@ -158,6 +200,9 @@ def announce(component: str = "mesh-tool") -> str:
     ensure_gauge_visible()
     line = posture_line(component)
     print(line, flush=True)
+    # Announced next to the posture, so a production pod with docs ON declares its own anomaly
+    # in the same breath as its enforcement stance — the pre-positioned-string pattern.
+    print(docs_line(), flush=True)
     return line
 
 
