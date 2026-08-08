@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import Any, Optional
 
 # MODULE-LEVEL on purpose. This file uses `from __future__ import annotations`, so every
@@ -73,7 +74,88 @@ def posture_line(component: str = "mesh-tool") -> str:
     return f"transport auth: {resolve_posture()} ({src}) [{component}]"
 
 
+_PKG_LOGGER = logging.getLogger("iagent_mesh")
+_AUTOCONFIG_MARK = "_iagent_mesh_gauge_handler"
+
+
+def _emits_info(lg: logging.Logger) -> bool:
+    """Would an INFO record on `lg` actually reach a handler?
+
+    Two independent ways to emit nothing, and both must be checked: the record can be
+    filtered by EFFECTIVE LEVEL before dispatch, or it can pass the level and find NO
+    HANDLER anywhere on the propagation chain (falling to `logging.lastResort`, which is
+    itself WARNING). Checking one and not the other is how this bug survived review.
+    """
+    if lg.getEffectiveLevel() > logging.INFO:
+        return False
+    cur: Optional[logging.Logger] = lg
+    while cur:
+        if cur.handlers:
+            return True
+        cur = cur.parent if cur.propagate else None
+    return False
+
+
+def ensure_gauge_visible() -> bool:
+    """Make this package's INFO records visible IF AND ONLY IF they would otherwise vanish.
+
+    WHY THIS EXISTS. `make_transport_auth_dependency` logs one line per request, and its own
+    docstring calls that "what turns the migration into a gauge instead of a claim". It was
+    still a claim: no mesh engine configures logging, so the record fell through to
+    `logging.lastResort` (WARNING) and was DISCARDED. Twelve services announced `OBSERVE` at
+    startup and then observed nothing — and the contract flip's precondition is "the
+    unverified-caller count reads zero", which a silent gauge satisfies perfectly and falsely.
+    ZERO-BECAUSE-SILENT AND ZERO-BECAUSE-CLEAN ARE THE TWO STATES THE INSTRUMENT EXISTS TO
+    SEPARATE. Python's logging defaults are the `uv sync --frozen` shape: a system instructed
+    by default to be silent about a disagreement it should be loud about.
+
+    ADDITIVE AND DEFERENTIAL, which is the whole contract of this function:
+
+    * If the records already emit, do NOTHING. An app that configured logging owns its
+      configuration, and a second handler here would DOUBLE-EMIT into every properly
+      configured deployment — trading a silent gauge for a duplicated one.
+    * If they are filtered only by LEVEL while handlers exist upstream, lower the level on
+      THIS PACKAGE'S logger and stop. No handler is added, so nothing duplicates.
+    * Only when no handler exists anywhere on the chain is one attached — and it attaches to
+      the `iagent_mesh` namespace, NEVER to root. The SDK earns the right to make ITS OWN
+      records visible; it does not get to reconfigure the host's logging. Same boundary as
+      everywhere else: the shim owns its obligation, never the app's.
+
+    Idempotent. Set ``IAGENT_MESH_LOG_AUTOCONFIG=0`` to disable — which exists so the gauge's
+    own witness can be BROKEN ON PURPOSE and shown to go dark, because a leg of a litany that
+    has never gone red is not yet a check.
+
+    Returns True if this call changed anything.
+    """
+    if os.getenv("IAGENT_MESH_LOG_AUTOCONFIG", "1").lower() in ("0", "false", "no"):
+        return False
+    if _emits_info(logger):
+        return False
+
+    changed = False
+    if _PKG_LOGGER.getEffectiveLevel() > logging.INFO:
+        _PKG_LOGGER.setLevel(logging.INFO)
+        changed = True
+
+    # Re-check: lowering the level may be sufficient when the host has handlers upstream.
+    if _emits_info(logger):
+        return changed
+
+    if not any(getattr(h, _AUTOCONFIG_MARK, False) for h in _PKG_LOGGER.handlers):
+        h = logging.StreamHandler(sys.stdout)
+        h.setLevel(logging.INFO)
+        h.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        setattr(h, _AUTOCONFIG_MARK, True)
+        _PKG_LOGGER.addHandler(h)
+        changed = True
+    return changed
+
+
 def announce(component: str = "mesh-tool") -> str:
+    # Before the announcement, so a service that announces OBSERVE is a service whose gauge
+    # can actually be read. Announcing a posture whose evidence channel is dark is the exact
+    # gate-with-paperwork shape this package exists to refuse.
+    ensure_gauge_visible()
     line = posture_line(component)
     print(line, flush=True)
     return line
