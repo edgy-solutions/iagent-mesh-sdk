@@ -1,6 +1,6 @@
 [project]
 name = "iagent_mesh"
-version = "0.2.1"
+version = "0.2.2"
 description = "Universal Contracts and Infrastructure Wrapper for the iagent Mesh"
 authors = [
     { name = "Platform Team" }

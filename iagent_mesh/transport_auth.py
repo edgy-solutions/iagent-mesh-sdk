@@ -233,16 +233,73 @@ def _bearer_from(header: Optional[str]) -> Optional[str]:
     return header.strip() or None
 
 
-def make_transport_auth_dependency(component: str = "mesh-tool"):
+# Paths the KUBELET reaches, never the mesh. Exempt from enforcement AND from the gauge.
+#
+# WHY THIS IS A SAFETY FEATURE, NOT A HOLE. `transport_auth` is applied as an app-level
+# dependency, so it covers `/health`. The kubelet sends no bearer token and never will. Under
+# REQUIRE every liveness probe would 401, every pod would be marked unhealthy, and the fleet
+# would restart itself into a cluster-wide outage — CAUSED BY THE SECURITY CONTROL, not by an
+# attacker. Measured at day zero: 549 gauge lines across ten services, essentially all probes.
+#
+# The second reason is the gauge's arithmetic. Probe traffic dominates by ~10:1, so an
+# unverified count that includes it CAN NEVER REACH ZERO — making the contract flip's own
+# precondition unsatisfiable, and an unsatisfiable precondition is one that eventually gets
+# waived by someone who decides the number "doesn't really count". Exempting probes is what
+# turns "reads zero" into a reachable target rather than a formality.
+#
+# Health endpoints are the KUBELET'S CONTRACT, not the mesh's: they expose liveness, not
+# gated content. Everything else stays gated.
+#
+# EXACT MATCH, never prefix. A prefix rule would exempt `/health-records` — the shape where an
+# operational convenience quietly becomes a data leak.
+#
+# `/ping` is deliberately NOT here. It is not a kubelet convention, and including it broke a
+# rule this set exists to uphold: the SDK's own suite serves `/ping` as its ordinary gated
+# route, so exempting it would have made
+# `test_OBSERVE_serves_a_request_with_no_token_at_all` pass TRIVIALLY — a false green in the
+# tests that prove the dependency enforces at all. An exemption list must be short enough that
+# every entry is a kubelet path and nothing else.
+DEFAULT_EXEMPT_PATHS = ("/health", "/healthz", "/livez", "/readyz")
+
+
+def _configured_exempt_paths() -> tuple:
+    """`TRANSPORT_AUTH_EXEMPT_PATHS` (comma-separated) REPLACES the default set.
+
+    Services differ (`mesh-registrar` probes `/v1/healthz`), and an operator must be able to
+    correct a probe path without a code change and a rebuild — the alternative is an outage
+    waiting on a release. Replaces rather than extends, so the effective set is always exactly
+    what is configured and never a union nobody can read off one value.
+    """
+    raw = os.getenv("TRANSPORT_AUTH_EXEMPT_PATHS")
+    if raw is None:
+        return DEFAULT_EXEMPT_PATHS
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def make_transport_auth_dependency(component: str = "mesh-tool", exempt_paths=None):
     """FastAPI dependency implementing the posture. Returns a `CallerIdentity`.
 
-    OBSERVE: never raises. Every request logs its posture, which is what turns the migration
-    into a gauge instead of a claim.
+    OBSERVE: never raises. Every non-exempt request logs its posture, which is what turns the
+    migration into a gauge instead of a claim.
     REQUIRE: 401 when absent, 403 when present-but-invalid — a deliberate distinction, because
     "you sent nothing" and "you sent something I could not trust" are different operator
     problems and collapsing them costs an incident's first hour.
+
+    `exempt_paths` overrides both the default set and the env var, for a service whose probe
+    path is a fixed fact of its own code rather than a deployment choice.
     """
     async def transport_auth(request: Request) -> CallerIdentity:
+        path = request.url.path
+        exempt = tuple(exempt_paths) if exempt_paths is not None else _configured_exempt_paths()
+        if path in exempt:
+            # DEBUG, not INFO: exempt traffic must not enter the gauge, or the count it feeds
+            # can never reach zero. Still logged, because a probe path silently swallowing
+            # requests is its own debugging problem — and because `exempt=` in the line is what
+            # lets an operator confirm the exemption is doing what they think.
+            logger.debug("caller: exempt (probe path) posture=%s path=%s exempt=true",
+                         resolve_posture(), path)
+            return CallerIdentity(None, False, "exempt-probe-path")
+
         caller = verify_bearer(_bearer_from(request.headers.get("Authorization")))
         posture = resolve_posture()
 
