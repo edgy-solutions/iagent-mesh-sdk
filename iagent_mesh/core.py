@@ -35,7 +35,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Callable, Optional
 
 import nest_asyncio
 from fastapi import FastAPI, HTTPException, Request
@@ -131,6 +131,7 @@ class MeshTool:
         cost_class: str = "fast",
         requires_human_approval: bool = False,
         version: str = "0.1.0",
+        mint: Optional[Callable[[], str]] = None,
     ):
         self._validate(name, verb, input_uri, output_uri, cost_class)
 
@@ -146,6 +147,12 @@ class MeshTool:
         self.cost_class = cost_class
         self.requires_human_approval = requires_human_approval
         self.version = version
+
+        # IDENTITY IS AN ARGUMENT — the SDK never resolves an engine's credentials from ambient
+        # env on the engine's behalf. `mint` is a callable returning a bearer for THIS engine;
+        # `None` means "register unauthenticated", which is the pre-0.3.1 behaviour and stops
+        # working when the mesh flips REQUIRE_TRANSPORT_AUTH.
+        self._mint = mint
 
         # Per ADR-0005, ``mesh:`` is the reserved platform namespace. All other
         # prefixes are domain namespaces governed by their owning ontology.
@@ -312,8 +319,18 @@ class MeshTool:
         ``http://iagent-mesh-registrar:8090``). When unset the SDK
         falls through to ``_emit_to_datahub`` — the legacy direct path
         — so engines migrate at their own pace.
+
+        THE REBIND (0.3.1). This method used to be a second registration implementation — a bare
+        ``httpx.post`` with no credential, no retry, and ``raise RuntimeError`` on any non-200 —
+        living beside ``registration_transport.register_with_mesh``, which 0.3.0 added expressly to
+        be THE one authenticated registration path. The platform bound the new transport; the SDK's
+        own consumer, this method, was never converted. So every externally-scaffolded engine — the
+        exact audience this package exists for — registered unminted and would stop under REQUIRE.
+
+        Building the seam is not the same as wiring the consumers to it. See
+        ``[[consolidation-completes-at-the-last-consumer]]``.
         """
-        import httpx
+        from .registration_transport import register_with_mesh
 
         endpoint_url = os.getenv(
             "MESH_TOOL_ENDPOINT", "http://localhost:8000/execute"
@@ -338,16 +355,19 @@ class MeshTool:
             "openapi_schema": json.dumps(openapi_spec),
         }
 
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(f"{registrar_url}/v1/register", json=manifest)
-            if resp.status_code == 200:
-                return
-            # 422 = Contract D rejection (specific URI missing); 502 =
-            # gateway couldn't reach DataHub. Surface both with enough
-            # detail that the operator can act.
-            raise RuntimeError(
-                f"mesh-registrar returned {resp.status_code}: {resp.text[:500]}"
-            )
+        # ONE registration transport: the mint, the ADR-0006 retry semantics (422 permanent,
+        # 5xx retry-safe, mint failure retried as transient infra) and a named failure all live
+        # there. `mint=None` reproduces today's unauthenticated POST exactly — but now with retry
+        # and a reason — so this rebind changes no behaviour for engines that pass no identity.
+        result = register_with_mesh(
+            registrar_url, manifest, component=self.name, mint=self._mint,
+        )
+        if result.registered:
+            return
+        # `register_with_mesh` NEVER raises; it returns a named reason. Re-raising here keeps the
+        # lifespan's existing handler — and its ADR-0006 "registration failure must not crash the
+        # tool" contract — unchanged.
+        raise RuntimeError(f"mesh-registrar registration failed: {result.reason}")
 
     def _registration_custom_properties(
         self, endpoint_url: str, openapi_spec: dict
