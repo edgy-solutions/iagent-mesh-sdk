@@ -1,0 +1,117 @@
+name: Build Python Package
+
+# Builds the iagent_mesh sdist+wheel on every push and PR so consumers can grab the latest from
+# a workflow artifact. On tag pushes (vX.Y.Z) the artifacts are attached to a GitHub Release AND
+# published to PyPI (trusted publishing). Mirrors dag-tools/.github/workflows/build-package.yml.
+#
+# Distribution name is `iagent_mesh` (PyPI normalises it to `iagent-mesh`); the import package is
+# also `iagent_mesh`. Unlike dag-tools — which had to become `edgy-dag-tools` because
+# `dag-tools` collapses to the taken name "dagtools" — no collision applies here.
+#
+#   pip install iagent-mesh
+#   # or pin a Release wheel by URL:
+#   uv add "iagent-mesh @ https://github.com/edgy-solutions/iagent-mesh-sdk/releases/download/v0.4.0/iagent_mesh-0.4.0-py3-none-any.whl"
+#   # or keep consuming it straight from git, as invincible-agent does:
+#   uv add "iagent-mesh @ git+https://github.com/edgy-solutions/iagent-mesh-sdk.git@v0.4.0"
+#
+# THE TAG TRIGGER IS THE POINT. The previous version of this workflow ran only on branch pushes
+# and PRs, so a `v*` tag built NOTHING: no Release, no PyPI, and the only artifact was a
+# workflow zip behind a login that expires. Tagging felt like releasing and released nothing.
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish the wheel as a release asset on tag pushes
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Run the suite
+        # The suite gates the release: `publish-pypi` needs this job, so a red test cannot
+        # become a PyPI version. PyPI does not allow re-uploading a version, so "publish first,
+        # notice later" is not recoverable — the only remedy is a yank and a version bump.
+        run: uv run --extra dev python -m pytest -q
+
+  build:
+    name: Build wheel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel + sdist
+        run: uv build          # both sdist + wheel (PyPI wants both)
+
+      - name: Verify the wheel carries the template catalogue
+        # A wheel without `iagent_mesh/templates/` installs and imports fine, then fails at the
+        # first scaffold with FileNotFoundError — the packaging bug this repo shipped until
+        # 0.4.0, invisible to a test suite that runs from a source checkout where the templates
+        # sit one directory up. Checked against the ARTIFACT, which is the thing users receive.
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          tpl = [n for n in names if n.startswith("iagent_mesh/templates/")]
+          if not tpl:
+              sys.exit(f"FAIL: {whl} carries no iagent_mesh/templates/ — scaffolding will "
+                       f"raise FileNotFoundError from an installed distribution")
+          print(f"OK: {whl} carries {len(tpl)} template files")
+          PY
+
+      - name: Check distribution metadata renders on PyPI
+        # `twine check` catches a README that PyPI will refuse to render — a rejection that
+        # otherwise surfaces only at upload, i.e. after the tag exists.
+        run: uvx twine check dist/*
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: iagent-mesh-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [test, build]
+    # Only publish on a version tag push (e.g. v0.4.0), never on branch/PR builds.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC token for PyPI Trusted Publishing — no API token/secret needed
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: iagent-mesh-dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

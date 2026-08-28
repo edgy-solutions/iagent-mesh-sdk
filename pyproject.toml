@@ -1,9 +1,32 @@
 [project]
+# Distribution name kept as-is DELIBERATELY. dag-tools had to become `edgy-dag-tools` because
+# `dag-tools`/`dag_tools` collapses to "dagtools", which is taken on PyPI; that collision does
+# not apply here — both `iagent-mesh` (PEP-503 normalisation of this name) and `iagentmesh` are
+# unregistered. Renaming would also break a real consumer: invincible-agent pins
+# `iagent-mesh @ git+...` in 13 pyproject files plus their uv.lock entries, and a distribution
+# rename turns every one of those into a metadata-name mismatch. Free name + zero downstream
+# churn, so the name stays.
 name = "iagent_mesh"
 version = "0.4.0"
-description = "Universal Contracts and Infrastructure Wrapper for the iagent Mesh"
+description = "Universal contracts and infrastructure wrapper for the iagent Mesh — typed predicate registration, transport auth, and per-caller identity for mesh tools"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    { name = "Platform Team" }
+    { name = "Chris Nogradi", email = "cnogradi@gmail.com" }
+]
+keywords = ["agents", "fastapi", "datahub", "knowledge-graph", "ai-mesh", "predicate-graph", "topaz"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
     "pydantic>=2.0.0",
@@ -35,9 +58,32 @@ requires-python = ">=3.10"
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "httpx", "pytest-mock"]
 
+[project.urls]
+Homepage = "https://github.com/edgy-solutions/iagent-mesh-sdk"
+Repository = "https://github.com/edgy-solutions/iagent-mesh-sdk"
+Issues = "https://github.com/edgy-solutions/iagent-mesh-sdk/issues"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.19.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["iagent_mesh"]
+
+# TEMPLATES SHIP INSIDE THE PACKAGE. `scaffold_core` resolves them relative to its own file, so
+# in a REPO CHECKOUT `../templates` exists and scaffolding works — but the wheel carried only
+# `iagent_mesh/`, so from an installed distribution the same call raised
+# `FileNotFoundError: .../site-packages/templates`. Every test passes from the repo, which is
+# exactly why this survived: the suite never ran against an installed wheel.
+#
+# Mapped INTO the package (`iagent_mesh/templates`) rather than shipped as a top-level
+# `templates/` directory — a top-level name that generic would collide with any other
+# distribution doing the same thing in site-packages.
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "iagent_mesh/templates"
+
+# The sdist keeps the repo layout (tests + templates at top level) so `uv build` from an sdist
+# reproduces the wheel and the suite is runnable from it.
+[tool.hatch.build.targets.sdist]
+include = ["iagent_mesh", "templates", "tests", "mcp_server", "app.py", "README.md", "LICENSE",
+           "pytest.ini", "docs"]

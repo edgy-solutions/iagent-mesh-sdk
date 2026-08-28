@@ -5,9 +5,12 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock
 import sys
-from iagent_mesh.scaffold_core import generate_template_files
+from iagent_mesh.scaffold_core import generate_template_files, template_root
 
-TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+# Resolved the SAME way production does, so the parametrised list and the scaffolder can never
+# disagree about where the catalogue is (they did: the scaffolder read a path that exists only
+# in a source checkout, which is how templates came to be missing from the wheel entirely).
+TEMPLATES_DIR = template_root()
 TEMPLATE_IDS = [d.name for d in TEMPLATES_DIR.iterdir() if d.is_dir()]
 
 # We mock heavy external dependencies to allow structural validation without 
@@ -17,11 +20,16 @@ from pydantic import BaseModel
 class MockType(BaseModel): pass
 
 MOCK_MODULES = [
-    "polars", "pandas", "instructor", "baml_py", 
-    "llama_index", "llama_index.core", "langchain", "langchain.agents", 
+    "polars", "pandas", "instructor", "baml_py",
+    "llama_index", "llama_index.core", "langchain", "langchain.agents",
     "langchain.chat_models", "smolagents", "nest_asyncio", "dag_tools",
     "dag_tools.cortex_data.client", "langchain_openai", "baml_client",
-    "baml_client.types"
+    "baml_client.types",
+    # `openai` was missing while `langchain_openai` was present, so
+    # 02_instructor_polars (`from openai import AsyncOpenAI`) failed to load and the
+    # parametrised case had been red on `No module named 'openai'` — one absent entry in a
+    # list whose whole job is to make these templates loadable without the data-science stack.
+    "openai",
 ]
 
 @pytest.mark.parametrize("template_id", TEMPLATE_IDS)

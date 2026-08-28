@@ -4,20 +4,45 @@ import subprocess
 from pathlib import Path
 from iagent_mesh.config import settings
 
+def template_root() -> Path:
+    """Where the template catalogue lives, in BOTH layouts it is ever read from.
+
+    An installed wheel and a repo checkout put it in different places, and reading only the
+    checkout's location is why `generate_template_files` raised
+
+        FileNotFoundError: .../site-packages/templates
+
+    from a `pip install`ed distribution while every test in this repo passed — the suite runs
+    from the source tree, where `../templates` happens to exist. Packaged first, since that is
+    the deployed case; the checkout path is the developer's.
+    """
+    packaged = Path(__file__).parent / "templates"      # wheel: iagent_mesh/templates
+    if packaged.is_dir():
+        return packaged
+    checkout = Path(__file__).parent.parent / "templates"   # repo: <root>/templates
+    if checkout.is_dir():
+        return checkout
+    raise FileNotFoundError(
+        "template catalogue not found in this installation — looked in "
+        f"{packaged} (packaged) and {checkout} (source checkout). A wheel built without the "
+        "force-include mapping in pyproject.toml will not carry templates."
+    )
+
+
 def generate_template_files(template_id: str, tool_name: str, tool_urn: str, dest_dir: str) -> None:
     """Scaffold a new tool from a template."""
     dest_path = Path(dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
-    
+
     # 1. Read requested template
     # Find the template directory. It could be prefixed with a number, e.g., 01_pure_math
-    base_dir = Path(__file__).parent.parent / "templates"
+    base_dir = template_root()
     template_dir = None
     for d in base_dir.iterdir():
         if d.is_dir() and d.name.endswith(template_id):
             template_dir = d
             break
-            
+
     if not template_dir:
         raise ValueError(f"Template {template_id} not found in {base_dir}")
         

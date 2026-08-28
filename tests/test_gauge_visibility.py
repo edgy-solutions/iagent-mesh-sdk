@@ -32,23 +32,34 @@ def _clean_logging(monkeypatch):
     that passes because a previous test configured logging is the same false green this file
     exists to catch.
 
-    NOTE ON `propagate = False`: pytest's own logging plugin installs a capture handler on the
-    ROOT logger for every test, and `ensure_gauge_visible` correctly DEFERS to any handler it
-    finds upstream. Clearing root is not reliable — the plugin owns it. So the package logger
-    is detached from the chain, which reproduces the deployed condition faithfully (a mesh
-    engine has no handler anywhere) and deterministically. Cases that model an
-    app-with-logging re-attach it explicitly.
+    ROOT MUST BE NEUTRALISED TOO, not just detached from. pytest's logging plugin installs
+    capture handlers on the ROOT logger and drives its level for every test — the exact global
+    state these cases assert about. Setting `propagate = False` on the package logger was not
+    enough on its own: three cases failed under the plugin and passed under `-p no:logging`,
+    which is the signature of the harness, not the code (`ensure_gauge_visible` was verified
+    correct by direct execution outside pytest, and the deployed pod does emit its gauge line).
+
+    A test whose result depends on which pytest plugins are loaded is not measuring the SDK. So
+    root's handlers and level are saved, cleared, and restored around each case, reproducing the
+    deployed condition — a mesh engine with NO handler anywhere — deterministically. Disabling
+    the plugin globally was rejected: four other modules use `caplog`, which the same plugin
+    provides.
+
+    Cases that model an app-with-logging re-attach a handler explicitly.
     """
     pkg = logging.getLogger("iagent_mesh")
     root = logging.getLogger()
-    saved = (list(pkg.handlers), pkg.level, pkg.propagate, root.level)
+    saved = (list(pkg.handlers), pkg.level, pkg.propagate,
+             list(root.handlers), root.level)
     pkg.handlers.clear()
     pkg.setLevel(logging.NOTSET)
     pkg.propagate = False
+    root.handlers.clear()
     root.setLevel(logging.WARNING)
     monkeypatch.delenv("IAGENT_MESH_LOG_AUTOCONFIG", raising=False)
     yield
-    pkg.handlers[:], pkg.level, pkg.propagate, root.level = saved
+    (pkg.handlers[:], pkg.level, pkg.propagate,
+     root.handlers[:], root.level) = saved
 
 
 def test_the_bug_reproduces_without_the_fix():
@@ -63,14 +74,65 @@ def test_the_bug_reproduces_without_the_fix():
     )
 
 
-def test_ensure_gauge_visible_makes_records_emit(capsys):
-    changed = ta.ensure_gauge_visible()
-    assert changed, "ensure_gauge_visible() reported no change on a silent configuration"
-    assert ta._emits_info(ta.logger)
+def _in_fresh_interpreter(body: str) -> str:
+    """Run `body` in a NEW python process and return its stdout.
 
-    ta.logger.info("caller: none (absent, no mint attempted) posture=OBSERVE path=/health")
-    out = capsys.readouterr().out + capsys.readouterr().err
+    WHY A SUBPROCESS, and why only for these three cases. They assert about PROCESS-WIDE LOGGING
+    DEFAULTS — "a mesh engine configures no logging, so the record goes nowhere" — and pytest's
+    logging plugin reinstalls its capture handlers on the root logger during the CALL phase,
+    i.e. after any fixture has tried to clear them. Detaching the package logger and clearing
+    root were both tried; the plugin re-attaches, so the test measured the harness instead of
+    the SDK (all three passed under `-p no:logging`, which is the tell). Disabling the plugin
+    globally is not available either — four other modules use `caplog`, which it provides.
+
+    A fresh interpreter has exactly the logging defaults a deployed pod has, so the question is
+    asked in the only environment where the answer means anything. The remaining cases in this
+    file assert on in-process return values and stay as ordinary tests.
+    """
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, "-c", body],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"probe process failed (rc={result.returncode})\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    return result.stdout
+
+
+def test_ensure_gauge_visible_makes_records_emit():
+    """The gauge line reaches stdout in a process that configured no logging."""
+    out = _in_fresh_interpreter(
+        "from iagent_mesh import transport_auth as ta\n"
+        "assert not ta._emits_info(ta.logger), 'premise: bare defaults must be silent'\n"
+        "changed = ta.ensure_gauge_visible()\n"
+        "assert changed, 'reported no change on a silent configuration'\n"
+        "assert ta._emits_info(ta.logger)\n"
+        "ta.logger.info('caller: none (absent, no mint attempted) posture=OBSERVE path=/health')\n"
+    )
     assert "posture=OBSERVE" in out, f"the gauge line did not reach stdout; got: {out!r}"
+
+
+def test_the_gauge_goes_dark_without_the_fix():
+    """POSITIVE CONTROL for the test above, in the same fresh-process conditions.
+
+    Proves the assertion can fail: with autoconfig disabled the identical INFO record produces
+    NO stdout. Without this, `test_ensure_gauge_visible_makes_records_emit` could be passing
+    because something else in the process happened to configure logging.
+    """
+    out = _in_fresh_interpreter(
+        "import os\n"
+        "os.environ['IAGENT_MESH_LOG_AUTOCONFIG'] = '0'\n"
+        "from iagent_mesh import transport_auth as ta\n"
+        "assert ta.ensure_gauge_visible() is False\n"
+        "ta.logger.info('caller: none posture=OBSERVE path=/health')\n"
+    )
+    assert "posture=OBSERVE" not in out, (
+        f"records emit even with autoconfig disabled — the gauge cannot be shown to go dark, "
+        f"so its witness is not yet a check; got: {out!r}"
+    )
 
 
 def test_it_attaches_to_the_package_logger_never_root():
@@ -95,18 +157,21 @@ def test_it_attaches_to_the_package_logger_never_root():
 
 
 def test_it_defers_when_the_app_already_configured_logging():
-    """DOUBLE-EMIT TRAP. An app with its own handler must be left completely alone."""
-    pkg = logging.getLogger("iagent_mesh")
-    pkg.propagate = True                      # rejoin the chain: this app HAS logging
-    root = logging.getLogger()
-    root.addHandler(logging.NullHandler())
-    root.setLevel(logging.INFO)
+    """DOUBLE-EMIT TRAP. An app with its own handler must be left completely alone.
 
-    changed = ta.ensure_gauge_visible()
-    assert not changed, "the SDK modified logging even though records already emitted"
-    assert not logging.getLogger("iagent_mesh").handlers, (
-        "the SDK added a handler on top of a configured app — every gauge line would appear "
-        "TWICE, trading a silent gauge for a duplicated one"
+    In a fresh interpreter for the same reason as above: the assertion is "given a root logger
+    in THIS state, do nothing", and pytest's plugin owns the root logger's state during a test.
+    """
+    _in_fresh_interpreter(
+        "import logging\n"
+        "from iagent_mesh import transport_auth as ta\n"
+        "logging.getLogger().addHandler(logging.StreamHandler())\n"
+        "logging.getLogger().setLevel(logging.INFO)\n"
+        "changed = ta.ensure_gauge_visible()\n"
+        "assert not changed, 'the SDK modified logging even though records already emitted'\n"
+        "assert not logging.getLogger('iagent_mesh').handlers, (\n"
+        "    'the SDK added a handler on top of a configured app — every gauge line would '\n"
+        "    'appear TWICE, trading a silent gauge for a duplicated one')\n"
     )
 
 
@@ -116,18 +181,17 @@ def test_level_only_repair_when_handlers_exist_upstream():
     This is the case a naive "if not handlers: add one" fix gets wrong in the other
     direction — it would see handlers, do nothing, and leave the gauge dark.
     """
-    pkg = logging.getLogger("iagent_mesh")
-    pkg.propagate = True                      # rejoin the chain: handlers exist upstream
-    root = logging.getLogger()
-    root.addHandler(logging.NullHandler())
-    root.setLevel(logging.WARNING)
-
-    assert not ta._emits_info(ta.logger), "premise: records must be level-filtered here"
-    changed = ta.ensure_gauge_visible()
-    assert changed and ta._emits_info(ta.logger), "the level-only repair did not take"
-    assert not logging.getLogger("iagent_mesh").handlers, (
-        "a handler was added when lowering the level alone was sufficient — this duplicates "
-        "every record into the app's existing handler"
+    _in_fresh_interpreter(
+        "import logging\n"
+        "from iagent_mesh import transport_auth as ta\n"
+        "logging.getLogger().addHandler(logging.StreamHandler())\n"
+        "logging.getLogger().setLevel(logging.WARNING)\n"
+        "assert not ta._emits_info(ta.logger), 'premise: records must be level-filtered here'\n"
+        "changed = ta.ensure_gauge_visible()\n"
+        "assert changed and ta._emits_info(ta.logger), 'the level-only repair did not take'\n"
+        "assert not logging.getLogger('iagent_mesh').handlers, (\n"
+        "    'a handler was added when lowering the level alone was sufficient — this '\n"
+        "    'duplicates every record into the app\\'s existing handler')\n"
     )
 
 
