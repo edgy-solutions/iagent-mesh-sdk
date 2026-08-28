@@ -8,13 +8,29 @@ WHAT THIS REPLACES, and why it is not "adding auth to a fleet that had none".
 
 That is PRESENCE-ONLY. It refuses an absent header and accepts ANY value present —
 `Authorization: Bearer anything` passes. A presence check is not authentication; it is a
-gate that a manifest counts as present while it verifies nothing. (Third instance of that
-class in this arc, after `core/authz.py` being importable-but-never-applied and the DA read
-path deferring to a gateway keyed on a payload field.)
+gate that a manifest counts as present while it verifies nothing. CLOSED IN 0.2.0 (68e28c0)
+by this module.
+
+It was the third instance of that class in this arc, and the other two are recorded here with
+their real status so this paragraph cannot read as a list of live holes:
+
+  * `core/authz.py` importable-but-never-applied — CLOSED. Retired rather than repaired
+    (invincible-agent 4500f2a, 2026-08-07): the module a manifest told everyone to adopt was
+    deleted, because a gate nobody applies is worse than an absent one.
+  * the DA read path deferring to a gateway keyed on a payload field — STILL OPEN, tracked as
+    ``[[da-sends-no-user-token]]``. Engine DA takes its read subject from an unauthenticated
+    request field rather than from a verified token, so the read is per-user in shape only.
+    Named here because this SDK now offers the alternative — `CallerIdentity` on the handler,
+    `require_authz_id()` at the read — which is what that item converges on.
 
 THE POSTURE IS DECLARED AND ANNOUNCED, NEVER IMPLIED
     OBSERVE  (default) — validate any token that arrives, record the outcome, REFUSE NOTHING.
     REQUIRE            — a valid token is mandatory; missing or invalid is 401/403.
+
+**The default is OBSERVE TODAY and the flip to REQUIRE is planned, tracked as
+``[[transport-flip]]``.** Its stated precondition is not a date but a reading: every caller
+enumerated and minting, corroborated by the gauge below. So the "refuses nothing" above is a
+declared, instrumented, time-boxed posture with a named owner — not an oversight.
 
 Default is OBSERVE **because this ships to every engine at once**. The retroactive-inheritance
 property that makes an SDK the right place for a cross-cutting obligation is exactly what makes
@@ -24,10 +40,14 @@ flips after.
 
 WHY ITS OWN FLAG, not `ENABLE_AGENTIC_AUTH`. That flag gates two Topaz ASKS (catalog can_view,
 per-chunk can_read). It was found on 2026-08-07 to gate no JWT verification at all — the
-verification function existed and was applied nowhere. Overloading it to also mean "require
-JWTs" would recreate the three-jobs hazard on a flag whose blast radius was just corrected
-downward. These are different enforcement layers with different caller-readiness gates, so they
-stay independently flippable.
+verification function existed and was applied nowhere. THAT GAP IS CLOSED: verification lives
+in this module (`verify_bearer`) and is applied at every engine as an app-level dependency
+(SDK 0.2.0 / invincible-agent fb82af6). What remains is the flag's own flip, tracked as
+``[[agentic-auth-flip]]`` and blocked on ``[[transport-flip]]``.
+
+Overloading `ENABLE_AGENTIC_AUTH` to also mean "require JWTs" would recreate the three-jobs
+hazard on a flag whose blast radius was just corrected downward. These are different
+enforcement layers with different caller-readiness gates, so they stay independently flippable.
 
 READING THE MIGRATION RATHER THAN ASSERTING IT. In OBSERVE mode every request logs its caller
 posture, so "all callers migrated" stops being an enumeration someone vouches for and becomes a
@@ -179,10 +199,17 @@ def app_docs_kwargs() -> dict:
     glob". So the POLICY lives here (one place decides) and every construction site applies it;
     a route-census assertion in the consumer's suite enforces that they all do.
 
-    MEASURED, not theorised: under REQUIRE on a live pod, `/openapi.json`, `/docs` and `/redoc`
-    all returned 200 UNAUTHENTICATED, because FastAPI registers them via Starlette's
-    `add_route` — so app-level `dependencies=` never applies to them. Docs are the KNOWN member
-    of that class; any future mount or `add_route` bypasses the dependency the same way.
+    MEASURED, not theorised — **FIXED IN 0.4.0; the exposure below is HISTORY, not current
+    behaviour.** Under REQUIRE on a live pod, `/openapi.json`, `/docs` and `/redoc` all returned
+    200 UNAUTHENTICATED, because FastAPI registers them via Starlette's `add_route` — so
+    app-level `dependencies=` never applies to them. Closed by this function (SDK 0.2.3,
+    f24fdfd): the routes are not registered at all unless `IAGENT_MESH_DOCS=1` is set
+    deliberately, and a route-census assertion in the consumer's suite holds every construction
+    site to it.
+
+    Docs were the KNOWN member of that class. Any FUTURE mount or `add_route` bypasses app-level
+    dependencies the same way, so the class is open even though this instance is closed — which
+    is why the census, not this function, is the durable control.
     """
     if docs_enabled():
         return {}
@@ -294,7 +321,24 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     SIGNATURE VERIFICATION IS THE POINT and it is NOT optional in REQUIRE mode: a decode
     without signature checking is the presence-check defect wearing a JWT's clothes. When no
     verification key is configured the token is reported UNVERIFIED with the reason named —
-    never silently trusted.
+    never silently trusted — and under REQUIRE it is refused. Admitting it is the OBSERVE
+    posture, tracked as ``[[transport-flip]]``, not a gap in this function.
+
+    WHAT AN UNVERIFIED CALLER MEANS TODAY, stated plainly rather than left to inference. Under
+    the default OBSERVE posture an unverified caller is ADMITTED — that is what OBSERVE means,
+    and it is the migration state tracked as ``[[transport-flip]]``. Under REQUIRE the same
+    caller is refused (401 absent / 403 unverifiable). The subject it reports is legal to LOG
+    and illegal to AUTHORIZE on, which is why the read path goes through
+    `CallerIdentity.require_authz_id()` rather than `.authz_id`.
+
+    WHICH GATEWAY IS WHICH — the distinction matters and is easy to get backwards. The USER-PLANE
+    gateway (cortex-bff, `src/iagent/gateway.py`) DOES verify: live JWKS, `algorithms=["RS256"]`
+    pinned, signature checking on, probed with a forged/legitimate pair. The still-open instance
+    is the dag-tools CENTRAL GATEWAY on the data plane, which decodes with signature checking
+    off, so the read subject it authorizes on is asserted rather than proven — tracked as
+    ``[[dag-tools-gateway-unverified-subject]]``, blocked on the OBSERVE reading and on
+    ``[[da-sends-no-user-token]]``. This module's verification does not fix that hop; it is what
+    makes fixing it possible.
     """
     if not token:
         return CallerIdentity(None, False, "absent")
@@ -307,7 +351,8 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     key = os.getenv("MESH_JWT_PUBLIC_KEY") or os.getenv("KEYCLOAK_PUBLIC_KEY")
     if not key:
         # Honest-unverified: we can read who it CLAIMS to be, and we say so. This value is
-        # legal to LOG and illegal to authorize on — REQUIRE mode refuses it below.
+        # legal to LOG and illegal to authorize on — REQUIRE mode refuses it below, and
+        # admitting it meanwhile is the OBSERVE posture tracked as [[transport-flip]].
         try:
             claims = jwt.decode(token, options={"verify_signature": False})
         except Exception as exc:  # noqa: BLE001

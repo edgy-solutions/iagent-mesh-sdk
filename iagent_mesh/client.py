@@ -55,8 +55,9 @@ class MeshClient:
     you are running within the secured JupyterHub environment."* That sentence is the
     architecture's old trust model preserved in prose: a long-lived credential whose safety
     rests on WHERE THE PROCESS HAPPENS TO RUN — security assumed at a boundary the component
-    does not control. Same shape as the DA read path deferring to a gateway it could not
-    verify.
+    does not control. CLOSED HERE in 0.2.0 by mint-at-use. The same shape is STILL OPEN one hop
+    away in the DA read path, which defers to a gateway it cannot verify — tracked as
+    ``[[da-sends-no-user-token]]``.
 
     Minting does not modernise the token; it REMOVES THE PERIMETER DEPENDENCY. Afterwards
     the SDK's outbound trust rests on an identity the platform declares and reconciles, and

@@ -230,8 +230,9 @@ class MeshTool:
             dependencies=[Depends(make_transport_auth_dependency(component=name))],
             # Docs OFF in deployment (see app_docs_kwargs): /openapi.json, /docs and /redoc are
             # registered by FastAPI via Starlette's add_route, so app-level `dependencies=`
-            # NEVER applies to them — they answered 200 unauthenticated under REQUIRE on a live
-            # pod. Opt back in for dev with IAGENT_MESH_DOCS=1.
+            # NEVER applies to them. They answered 200 unauthenticated under REQUIRE on a live
+            # pod — CLOSED in 0.2.3 by not registering the routes at all. Opt back in for dev
+            # with IAGENT_MESH_DOCS=1.
             **app_docs_kwargs(),
         )
 
@@ -370,12 +371,14 @@ class MeshTool:
         falls through to ``_emit_to_datahub`` — the legacy direct path
         — so engines migrate at their own pace.
 
-        THE REBIND (0.3.1). This method used to be a second registration implementation — a bare
-        ``httpx.post`` with no credential, no retry, and ``raise RuntimeError`` on any non-200 —
-        living beside ``registration_transport.register_with_mesh``, which 0.3.0 added expressly to
-        be THE one authenticated registration path. The platform bound the new transport; the SDK's
-        own consumer, this method, was never converted. So every externally-scaffolded engine — the
-        exact audience this package exists for — registered unminted and would stop under REQUIRE.
+        THE REBIND — CLOSED IN 0.3.1 (a934c61); the gap below no longer exists. This method used
+        to be a second registration implementation — a bare ``httpx.post`` with no credential, no
+        retry, and ``raise RuntimeError`` on any non-200 — living beside
+        ``registration_transport.register_with_mesh``, which 0.3.0 added expressly to be THE one
+        authenticated registration path. The platform bound the new transport; the SDK's own
+        consumer, this method, was never converted. So every externally-scaffolded engine — the
+        exact audience this package exists for — registered unminted and would have stopped under
+        REQUIRE. It now mints through the one transport like every other caller.
 
         Building the seam is not the same as wiring the consumers to it. See
         ``[[consolidation-completes-at-the-last-consumer]]``.
@@ -409,6 +412,9 @@ class MeshTool:
         # 5xx retry-safe, mint failure retried as transient infra) and a named failure all live
         # there. `mint=None` reproduces today's unauthenticated POST exactly — but now with retry
         # and a reason — so this rebind changes no behaviour for engines that pass no identity.
+        # Registering without an identity remains LEGAL only for as long as the fleet is in
+        # OBSERVE; it stops working at the flip, tracked as [[transport-flip]]. Pass `mint=` to
+        # be ready for it.
         result = register_with_mesh(
             registrar_url, manifest, component=self.name, mint=self._mint,
         )
@@ -532,12 +538,13 @@ class MeshTool:
 
             @self.app.post("/execute")
             async def route_handler(request: Request):
-                # PRESENCE-ONLY CHECK RETIRED (2026-08-07). It refused an absent header
-                # and accepted ANY value present — `Bearer anything` passed — so it was a
-                # gate a manifest counts as present while it verifies nothing. Replaced by
-                # the factory-level transport_auth dependency, which VALIDATES the token
-                # and reports the caller's posture. LOCAL_DEV no longer bypasses anything,
-                # because OBSERVE mode already refuses nothing.
+                # PRESENCE-ONLY CHECK RETIRED — CLOSED IN 0.2.0 (68e28c0), history below.
+                # It refused an absent header and accepted ANY value present — `Bearer
+                # anything` passed — so it was a gate a manifest counts as present while it
+                # verifies nothing. Replaced by the factory-level transport_auth dependency,
+                # which VALIDATES the token and reports the caller's posture. LOCAL_DEV no
+                # longer bypasses anything, because OBSERVE mode already refuses nothing —
+                # see transport_auth for the OBSERVE -> REQUIRE flip that ends that.
 
                 # Validate and coerce the incoming JSON into the model.
                 body = await request.json()
