@@ -77,8 +77,9 @@ def run_publish(data: PublishInput) -> PublishOutput:
     if not os.path.exists(target_path):
         raise ValueError(f"Workspace not found at {target_path}")
         
-    assert settings.PLATFORM_GIT_TOKEN is not None, "PLATFORM_GIT_TOKEN is required"
-    git_url = f"https://oauth2:{settings.PLATFORM_GIT_TOKEN}@{settings.GIT_SERVER_HOST}/{data.target_git_group}/{data.tool_name}.git"
+    git_token = settings.require("PLATFORM_GIT_TOKEN")
+    git_host = settings.require("GIT_SERVER_HOST")
+    git_url = f"https://oauth2:{git_token}@{git_host}/{data.target_git_group}/{data.tool_name}.git"
     
     # Use centralized utility
     try:

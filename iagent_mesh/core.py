@@ -30,10 +30,13 @@ SDK is usable for local development without DataHub credentials.
 
 from __future__ import annotations
 
+import contextvars
+import functools
 import inspect
 import json
 import logging
 import os
+import typing
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
@@ -44,9 +47,56 @@ from fastapi import FastAPI, HTTPException, Request
 nest_asyncio.apply()
 
 from iagent_mesh.config import settings
+from iagent_mesh.transport_auth import CallerIdentity, current_caller
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MeshTool")
+
+
+def _sdk_version() -> str:
+    """The INSTALLED version of this package, for registration provenance.
+
+    Falls back to "unknown" rather than to a literal: a wrong version is indistinguishable from a
+    right one downstream, whereas "unknown" is legible as missing metadata. Only reachable when
+    the package is imported from a source tree with no distribution installed.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        try:
+            return version("iagent_mesh")
+        except PackageNotFoundError:
+            return version("iagent-mesh")
+    except Exception:  # noqa: BLE001 — provenance must never break registration
+        return "unknown"
+
+
+async def _run_sync_in_threadpool(func, *args, **kwargs):
+    """Run a blocking handler off the event loop, WITH the request context copied.
+
+    THE DOC PROMISED THIS AND THE CODE DID NOT DO IT. `jupyter_guide.md` tells authors that a
+    standard `def` handler crunching Polars "will execute safely in a background thread" and
+    recommends it as the default for `df.collect()` — the heaviest workload. It ran inline on the
+    event loop, so a multi-second `collect()` stalled every other request to that tool, health
+    probes included. Authors who FOLLOWED the recommendation were worse off than authors who
+    ignored it.
+
+    THE CONTEXT COPY IS THE COUPLING. `contextvars.copy_context()` is taken on the event loop —
+    where the transport-auth dependency has already published the caller — and the handler runs
+    inside it via `ctx.run`, so `current_caller()` resolves in the worker thread. Done with a
+    mechanism that does NOT copy context (`loop.run_in_executor` takes a bare callable), the
+    caller would read `None` inside every sync handler and any code falling back to a process
+    identity would silently read as the service. The two defects are fixed here in one place
+    precisely because fixing them apart is what composes them into a cross-tenant read.
+
+    `anyio.to_thread.run_sync` is used directly rather than Starlette's `run_in_threadpool`:
+    both copy the context in current versions, but doing it explicitly makes the guarantee this
+    function's correctness rests on visible at the call site instead of inherited from a
+    dependency's implementation detail — and testable, which it is.
+    """
+    import anyio.to_thread
+
+    ctx = contextvars.copy_context()
+    return await anyio.to_thread.run_sync(functools.partial(ctx.run, functools.partial(func, *args, **kwargs)))
 
 #: Supervisor uses ``cost_class`` to prefer cheap paths in multi-hop routing.
 VALID_COST_CLASSES = frozenset({"fast", "medium", "slow"})
@@ -400,7 +450,13 @@ class MeshTool:
             "mesh_endpoint_url":            endpoint_url,
             "mesh_openapi_schema":          json.dumps(openapi_spec),
             # Versioning
-            "mesh_sdk_version":             "0.1.0",
+            # READ FROM THE INSTALLED DISTRIBUTION, never a literal. This was hardcoded "0.1.0"
+            # through releases 0.2.0 -> 0.3.1, so every registration in DataHub reported an SDK
+            # version that had not been accurate for three releases — and `mesh_sdk_version` is
+            # exactly the field an operator would consult to ask "which engines are still on a
+            # pre-mint SDK?". A provenance field that cannot change is worse than absent: it
+            # answers confidently and wrongly.
+            "mesh_sdk_version":             _sdk_version(),
             "mesh_tool_version":            self.version,
         }
 
@@ -408,14 +464,71 @@ class MeshTool:
     # Execution wiring
     # ------------------------------------------------------------------
     def execute(self):
-        """Decorator that wires a Python function as the tool's ``/execute``
-        handler. The function's first parameter's type annotation is used as
-        the request-body Pydantic model."""
+        """Decorator that wires a Python function as the tool's ``/execute`` handler.
+
+        The first parameter's type annotation is the request-body Pydantic model.
+
+        A parameter annotated :class:`~iagent_mesh.transport_auth.CallerIdentity` — by any name —
+        receives WHO INVOKED THIS TOOL::
+
+            @app.execute()
+            def detect(data: AnomalyInput, caller: CallerIdentity) -> AnomalyOutput:
+                client = CortexDataClient(originator_email=caller.require_authz_id())
+
+        WHY THE PARAMETER EXISTS. The transport-auth dependency computed a `CallerIdentity` and
+        FastAPI threw it away (app-level dependency return values are discarded), so a handler
+        had nothing to put in `originator_email=` and its only working option was a bare
+        constructor — which reads with the SERVICE's entitlements, for every user, with no
+        symptom. Engine DA had to route around the SDK entirely, pulling `user_email` off the
+        request payload, to do per-user reads correctly.
+
+        Prefer `require_authz_id()` over `.authz_id` at a read: it refuses an unresolved caller
+        instead of silently becoming the service. Handlers that do not read per-user data can
+        omit the parameter entirely — nothing about the existing single-parameter form changes.
+
+        SYNC HANDLERS RUN ON A THREAD, with the request context COPIED, so the contextvar-based
+        `current_caller()` is readable inside them too. That coupling is not incidental: threading
+        via a mechanism that does not copy context (`loop.run_in_executor`) would leave
+        `current_caller()` reading `None` inside exactly the handler style the quickstart
+        recommends — two correct-looking fixes composing into a cross-tenant read.
+        """
 
         def decorator(func):
             sig = inspect.signature(func)
-            input_param = list(sig.parameters.values())[0]
-            InputModel = input_param.annotation
+            params = list(sig.parameters.values())
+
+            # ANNOTATIONS MUST BE RESOLVED, NEVER READ RAW. Under `from __future__ import
+            # annotations` — PEP 563, the SDK's own house style and increasingly the default one
+            # — every annotation is a STRING. Reading `input_param.annotation` directly then
+            # yielded the *str* "MyInput", and `InputModel(**body)` became `"MyInput"(**body)`:
+            # every request to such a tool 422'd with `'str' object is not callable`, a message
+            # naming nothing the author wrote. The tool's own tests would pass while any module
+            # with that one import at the top failed on every call.
+            #
+            # Same failure family as the `Request` import in transport_auth, and resolved the
+            # same way: ask typing to resolve the strings against the function's real globals.
+            try:
+                hints = typing.get_type_hints(func)
+            except Exception:  # noqa: BLE001 — an unresolvable hint must not break registration
+                hints = {}
+
+            def _annotation(p):
+                return hints.get(p.name, p.annotation)
+
+            input_param = params[0]
+            InputModel = _annotation(input_param)
+            if isinstance(InputModel, str):
+                raise TypeError(
+                    f"{func.__name__}: could not resolve the type annotation "
+                    f"{InputModel!r} for parameter {input_param.name!r}. The request-body model "
+                    "must be importable at module level (a class defined inside a function "
+                    "cannot be resolved under `from __future__ import annotations`)."
+                )
+
+            # Which parameter (if any) wants the caller — matched by ANNOTATION, not by name, so
+            # a handler may call it `caller`, `invoker`, or `who`.
+            caller_params = [p.name for p in params[1:]
+                             if _annotation(p) is CallerIdentity]
 
             @self.app.post("/execute")
             async def route_handler(request: Request):
@@ -433,11 +546,29 @@ class MeshTool:
                 except Exception as e:
                     raise HTTPException(status_code=422, detail=str(e))
 
+                # The app-level dependency has already run and published the caller. Falling back
+                # to an unresolved identity (rather than raising here) keeps OBSERVE's promise to
+                # refuse nothing at the TRANSPORT layer; the refusal belongs at the read, where
+                # `require_authz_id()` makes it explicit and legible.
+                kwargs = {}
+                if caller_params:
+                    caller = current_caller() or CallerIdentity(
+                        None, False, "no transport-auth dependency on this app"
+                    )
+                    kwargs = {name: caller for name in caller_params}
+
                 # Execute. Both sync and async user functions are supported.
                 try:
                     if inspect.iscoroutinefunction(func):
-                        return await func(input_data)
-                    return func(input_data)
+                        return await func(input_data, **kwargs)
+                    return await _run_sync_in_threadpool(func, input_data, **kwargs)
+                except HTTPException:
+                    # A handler's own deliberate HTTP outcome — 403 from a refused read, 404 from
+                    # a missing asset — is an ANSWER, not a crash. Collapsing it into the generic
+                    # 500 below would tell the caller "internal error" for a decision the handler
+                    # made on purpose, and would hide an authorization denial behind a status that
+                    # invites a retry.
+                    raise
                 except Exception as e:  # noqa: BLE001
                     logger.error("Tool execution failed: %s", e)
                     raise HTTPException(status_code=500, detail="Internal Tool Error")

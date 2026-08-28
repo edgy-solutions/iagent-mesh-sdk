@@ -397,7 +397,17 @@ def test_lifespan_emits_to_datahub_when_enabled(fake_datahub, monkeypatch):
     # the constructor arg yields an empty list ("[]"), meaning domain-agnostic.
     assert json.loads(props["mesh_domains"]) == []
     assert json.loads(props["mesh_openapi_schema"])["info"]["title"].startswith("urn:li:mlModel")
-    assert props["mesh_sdk_version"] == "0.1.0"
+    # THE INSTALLED VERSION, not a literal. This asserted `== "0.1.0"` while the package shipped
+    # 0.2.0 -> 0.3.1, so the test was PINNING a provenance field that had been wrong for three
+    # releases — the assertion is what kept it wrong. `mesh_sdk_version` is exactly the field an
+    # operator consults to ask "which engines are still on a pre-mint SDK?", and a constant
+    # answers that confidently and falsely.
+    from importlib.metadata import version
+    assert props["mesh_sdk_version"] == version("iagent_mesh")
+    assert props["mesh_sdk_version"] != "0.1.0", (
+        "sdk version must track the distribution, not a hardcoded literal"
+    )
+    # The TOOL's own version still defaults to 0.1.0 — a different field with a different owner.
     assert props["mesh_tool_version"] == "0.1.0"
 
 

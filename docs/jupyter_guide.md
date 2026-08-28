@@ -10,16 +10,28 @@ The Control Plane allows you to chat with the central AI orchestrator (Engine A)
 ```python
 from iagent_mesh import MeshClient
 
+# Defaults to the in-cluster cortex-bff (http://iagent-cortex-bff:8090/orchestrate).
+# Pass gateway_url= if you are port-forwarding.
 client = MeshClient()
 
-# Command the orchestrator to act on your behalf
-response = client.ask("Find the latest 'Asset Reliability' dataset and scaffold a new BAML tool for it.")
-print(response)
+# Command the orchestrator to act on your behalf.
+# `ask` consumes the gateway's SSE stream and blocks until the run completes.
+response = client.ask("Find the latest 'Asset Reliability' dataset and summarize its schema.")
+
+print(response.text)            # the answer
+print(len(response.events))     # the routing/status trace, for debugging
 ```
+
+One `MeshClient` is one conversation: it reuses a `session_id` so follow-up questions land on the
+same thread. Pass `session_id=` (per client or per `ask`) to control that explicitly.
 
 ## 2. The Data Plane (Working with Big Data)
 
 Once you know where a dataset lives, load the heavy Parquet or CSV files directly into your notebook. We do not stream big data through the AI. Instead, `dag_tools` provides a unified, zero-trust data plane that handles credential minting invisibly.
+
+> **This client ships in `dag-tools`, not in this SDK.** Install it with
+> `uv pip install edgy-dag-tools` (distribution name differs from the import name:
+> `import dag_tools`). Installing `iagent-mesh` alone will not give you `CortexDataClient`.
 
 ### Scenario B: Loading raw data securely (Zero-Config)
 ```python
@@ -30,11 +42,41 @@ from dag_tools.cortex_data.client import CortexDataClient
 client = CortexDataClient()
 
 # Fetch the DataHub URN directly. Topaz handles RLS and Column Masking automatically.
-lf = client.get_dataframe("urn:li:dataset:(urn:li:dataPlatform:s3,reliability_metrics,PROD)")
+lf = client.get_dataframe("urn:li:dataset:(urn:li:dataPlatform:postgres,sales_customers,PROD)")
 
 df = lf.collect()
 print(df.head())
 ```
+
+**Use a URN the broker actually serves.** The gateway routes by an exact URN registered by a
+domain broker; anything else is a `404 No active domain broker found`. The sandbox broker
+currently serves exactly two:
+
+| URN | Source |
+| --- | --- |
+| `urn:li:dataset:(urn:li:dataPlatform:postgres,sales_customers,PROD)` | postgres |
+| `urn:li:dataset:(urn:li:dataPlatform:postgres,instance_state,PROD)` | postgres |
+
+*(An earlier version of this guide used an `s3,reliability_metrics` URN that no broker has ever
+registered — the example itself returned 404.)*
+
+#### Who the read is authorized as
+
+The broker decides which rows and columns you get from **one opaque subject**. Resolution order:
+
+1. `X-Originator-Email` if the client was given `originator_email=` — used **verbatim**.
+2. otherwise the claim named by `USER_ENTITLEMENT_CLAIM` (default `email`) on your token.
+
+Despite the name, the value is **never parsed as an email**. At work-deploy, where the
+entitlement key is an employee id, pass the employee id — every hop carries it opaque:
+
+```python
+client = CortexDataClient(originator_email="E123456")   # employee id — carried verbatim
+```
+
+Zero-config works only when your token itself carries the configured claim. A **service/M2M**
+token has no user subject, so a bare `CortexDataClient()` on an agent pod authorizes as the
+*service* — see §3 for how a tool gets its caller.
 
 ## 3. The Anatomy of a Domain Node (A Conceptual Look)
 
@@ -86,6 +128,46 @@ def detect_anomalies(data: AnomalyInput) -> AnomalyOutput:
 
     return AnomalyOutput(flagged_records=42, summary="Found severe outliers in Q3 data.")
 ```
+
+### Reading data *as the user who asked* (required for any per-user read)
+
+A tool invoked through the mesh is called by the **supervisor**, not by a person. If your handler
+builds a data client with no subject, the read authorizes as your tool's **service identity** —
+so every user of your tool sees the service's data. It returns rows and raises nothing, which is
+what makes it dangerous.
+
+Ask for the caller by annotating a parameter `CallerIdentity`:
+
+```python
+from iagent_mesh import CallerIdentity
+from dag_tools.cortex_data.client import CortexDataClient
+
+@app.execute()
+def detect_anomalies(data: AnomalyInput, caller: CallerIdentity) -> AnomalyOutput:
+    # require_authz_id() REFUSES an unresolved caller instead of silently
+    # falling back to the service identity.
+    client = CortexDataClient(originator_email=caller.require_authz_id())
+    lf = client.get_dataframe(data.dataset_name)
+    df = lf.collect()          # runs on a worker thread; safe to block
+    ...
+```
+
+`caller.authz_id` is the subject from your deployment's `USER_ENTITLEMENT_CLAIM` — an email in
+the sandbox, an employee id at work. Prefer `require_authz_id()` at a **read**; use the plain
+`.authz_id` (which may be `None`) only for logging.
+
+If the client is built several frames below your handler, `current_caller()` reads the same
+identity without threading a parameter through:
+
+```python
+from iagent_mesh import current_caller
+
+def _load(urn):                       # called from your handler, no parameter passed
+    return CortexDataClient(originator_email=current_caller().require_authz_id()).get_dataframe(urn)
+```
+
+> Handlers that read no per-user data need no `caller` parameter — the single-argument form is
+> unchanged.
 
 > **Note** — DataHub registration is opt-in. Set
 > `MESH_REGISTER_ON_STARTUP=true` (plus `DATAHUB_GMS_URL` and
@@ -140,8 +222,12 @@ Once you have filled in your business logic in the generated `app.py`, push the 
 
 > ### 💡 Platform Pro-Tip: `def` vs `async def`
 > The `MeshTool` templates support both asynchronous and synchronous Python.
-> * **Use standard `def` (Recommended):** If you are crunching Polars DataFrames (`df.collect()`), stick to standard `def`. We will execute it safely in a background thread.
+> * **Use standard `def` (Recommended):** If you are crunching Polars DataFrames (`df.collect()`), stick to standard `def`. We execute it in a background thread, so a long `collect()` does not stall other requests to your tool.
 > * **Use `async def`:** Only if your tool is a lightweight router making numerous downstream HTTP calls.
+>
+> *(This was a promise the SDK did not keep until 0.4.0 — sync handlers ran inline on the event
+> loop, so the recommended shape for the heaviest workload was the one that blocked every
+> concurrent request, health probes included.)*
 
 
 ---

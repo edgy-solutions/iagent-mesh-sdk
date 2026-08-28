@@ -43,14 +43,20 @@ def publish_local_to_mesh(local_directory: str, tool_name: str, target_git_group
     try:
         assert settings.MESH_DEV_TOKEN is not None, "MESH_DEV_TOKEN is required"
         
+        # Required AT USE, not at package import — publishing genuinely needs these; importing
+        # the SDK to serve a tool never did. `require` names the missing variable instead of
+        # POSTing to the string "None" or building a `https://None/...` remote.
+        provision_api = settings.require("GIT_PROVISION_API_URL")
+        git_host = settings.require("GIT_SERVER_HOST")
+
         # Call provision API
         response = httpx.post(
-            settings.GIT_PROVISION_API_URL,
+            provision_api,
             headers={"Authorization": f"Bearer {settings.MESH_DEV_TOKEN}"}
         )
         response.raise_for_status()
         # Assume provision API returns {"git_url": "..."}
-        git_url = response.json().get("git_url", f"https://{settings.GIT_SERVER_HOST}/{target_git_group}/{os.path.basename(local_directory)}.git")
+        git_url = response.json().get("git_url", f"https://{git_host}/{target_git_group}/{os.path.basename(local_directory)}.git")
         
         try:
             publish_workspace_to_git(local_directory, git_url)

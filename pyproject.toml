@@ -1,6 +1,6 @@
 [project]
 name = "iagent_mesh"
-version = "0.3.1"
+version = "0.4.0"
 description = "Universal Contracts and Infrastructure Wrapper for the iagent Mesh"
 authors = [
     { name = "Platform Team" }
@@ -10,15 +10,27 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "httpx>=0.24.0",
-    "mcp>=1.0.0",
+    # UPPER BOUND IS LOAD-BEARING. `mcp` 2.x renamed FastMCP -> MCPServer, so an unbounded
+    # `mcp>=1.0.0` resolved to 2.x and `mcp_server/server.py` failed at import — the SDK's own
+    # test suite could not even COLLECT. A floor with no ceiling on a pre-1.0-culture dependency
+    # is a build that breaks on someone else's release schedule.
+    "mcp>=1.0.0,<2",
     "pyyaml>=6.0",
     "pydantic-settings>=2.0.0",
     "nest-asyncio>=1.5.0",
+    # Bearer verification in transport_auth. Was imported defensively (`except ImportError ->
+    # "pyjwt-missing"`) but never declared, so the REQUIRE posture's verification silently
+    # degraded to unverified on any install that lacked it — a security control whose absence
+    # was reported as a caller-side reason string.
+    "pyjwt>=2.0.0",
     # DataHub emitter for predicate-graph registration (ADR-0004/0006).
     # Lazy-imported in core.py — only loaded when MESH_REGISTER_ON_STARTUP=true.
     "acryl-datahub>=0.13.0",
 ]
-requires-python = ">=3.9"
+# 3.10, not 3.9: `mcp` requires >=3.10, so the declared floor was one the dependency set could
+# never satisfy — uv reported the project's own requirements as unsatisfiable rather than
+# resolving. The code also uses PEP-604/585 forms (`list[str]`, `str | None`) throughout.
+requires-python = ">=3.10"
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "httpx", "pytest-mock"]

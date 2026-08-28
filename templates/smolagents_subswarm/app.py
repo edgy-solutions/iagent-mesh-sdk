@@ -1,5 +1,6 @@
 import os
 import nest_asyncio
+from iagent_mesh import CallerIdentity
 from iagent_mesh.core import MeshTool
 from iagent_mesh.models import ToolInput, ToolOutput
 from pydantic import Field
@@ -36,11 +37,18 @@ app = MeshTool(
 )
 
 @app.execute()
-def run_investigation(data: InvestigationInput) -> InvestigationOutput:
+def run_investigation(data: InvestigationInput, caller: CallerIdentity) -> InvestigationOutput:
     # 1. Access Data Plane securely (Optional: define tools for your agent)
-    # client = CortexDataClient()
-    # df = client.get_dataframe("urn:li:dataset:...").collect()
-    
+    #
+    #    ASK FOR `caller` AND PASS ITS SUBJECT. A bare `CortexDataClient()` here authorizes as
+    #    this tool's SERVICE identity, so every user of the agent would read the service's data
+    #    — it returns rows and raises nothing, which is what makes it easy to ship. Drop the
+    #    `caller` parameter only if your tool reads no per-user data.
+    #
+    # client = CortexDataClient(originator_email=caller.require_authz_id())
+    # df = client.get_dataframe("urn:li:dataset:...").collect()   # blocking is fine: sync
+    #                                                             # handlers run on a thread
+
     # 2. Spin up your local Sub-Swarm Agent
     # HfApiModel is used as a default; swap with your preferred enterprise LLM provider
     local_agent = CodeAgent(tools=[], model=HfApiModel())

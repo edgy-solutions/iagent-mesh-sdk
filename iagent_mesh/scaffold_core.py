@@ -59,6 +59,14 @@ uv pip install --system -r pyproject.toml
     os.chmod(assemble_script, 0o755)
     
     # 5. Generate Jenkinsfile
+    #
+    # Demanded HERE rather than at package import: scaffolding genuinely cannot proceed without
+    # the Artifactory base, but serving a MeshTool never needed it (see config.Settings). An
+    # f-string over an unset Optional would emit `curl -LO None/binaries-local/...` into a
+    # committed Jenkinsfile — a build that fails much later, in someone else's CI, with the
+    # cause four steps upstream. Fail at the write instead, naming the variable.
+    artifactory = settings.require("ARTIFACTORY_BASE_URL")
+
     jenkinsfile = dest_path / "Jenkinsfile"
     jenkins_content = f"""pipeline {{
     agent any
@@ -67,17 +75,17 @@ uv pip install --system -r pyproject.toml
             steps {{
                 echo 'Downloading S2I, UV, and Bandit from Artifactory...'
                 sh '''
-                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/s2i/s2i-linux-amd64.tar.gz
+                    curl -LO {artifactory}/binaries-local/s2i/s2i-linux-amd64.tar.gz
                     tar -xzf s2i-linux-amd64.tar.gz
                     chmod +x s2i
                     export PATH=$PATH:$(pwd)
                     
                     # Assuming uv and bandit are also available as binaries
-                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/uv/uv-linux-amd64.tar.gz
+                    curl -LO {artifactory}/binaries-local/uv/uv-linux-amd64.tar.gz
                     tar -xzf uv-linux-amd64.tar.gz
                     chmod +x uv
                     
-                    curl -LO {settings.ARTIFACTORY_BASE_URL}/binaries-local/bandit/bandit-linux.tar.gz
+                    curl -LO {artifactory}/binaries-local/bandit/bandit-linux.tar.gz
                     tar -xzf bandit-linux.tar.gz
                     chmod +x bandit
                 '''
@@ -92,9 +100,9 @@ uv pip install --system -r pyproject.toml
         stage('Build & Push') {{
             steps {{
                 echo 'Building {tool_name} with S2I...'
-                sh './s2i build . python-39-centos7 {settings.ARTIFACTORY_BASE_URL}/docker-local/{tool_name}:latest'
+                sh './s2i build . python-39-centos7 {artifactory}/docker-local/{tool_name}:latest'
                 echo 'Pushing {tool_name} to Artifactory...'
-                sh 'docker push {settings.ARTIFACTORY_BASE_URL}/docker-local/{tool_name}:latest'
+                sh 'docker push {artifactory}/docker-local/{tool_name}:latest'
             }}
         }}
     }}

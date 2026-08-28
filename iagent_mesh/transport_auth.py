@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextvars import ContextVar
 from typing import Any, Optional
 
 # MODULE-LEVEL on purpose. This file uses `from __future__ import annotations`, so every
@@ -226,6 +227,62 @@ class CallerIdentity:
         who = self.authz_id or "none"
         return f"<caller {who} verified={self.verified} ({self.reason})>"
 
+    def require_authz_id(self) -> str:
+        """The subject to authorize a DOWNSTREAM READ as — or a loud refusal.
+
+        THIS IS THE FAIL-CLOSED ACCESSOR, and the distinction from `.authz_id` is the whole
+        point. `.authz_id` is `Optional[str]` and legal to LOG; passing it straight into a data
+        read is how an unresolved caller becomes a SILENT SERVICE READ:
+
+            CortexDataClient(originator_email=caller.authz_id)   # None -> reads as the service
+
+        `None` there does not fail. It falls back to the process's own identity, rows come back,
+        nothing errors, and every user of the agent reads with the service's entitlements — the
+        confused deputy, arriving with no symptom. Under OBSERVE (the default posture) an
+        unauthenticated caller yields exactly that `None`, so this is the ORDINARY case, not an
+        exotic one.
+
+        So the read path gets an accessor that CANNOT return `None`:
+
+            CortexDataClient(originator_email=caller.require_authz_id())
+
+        Raises `PermissionError` naming the reason — "absent", "invalid: ...", "no 'email' claim"
+        — because which of those it was decides whether the fix is a caller that never minted, a
+        broken key, or a claim misconfigured for this deployment.
+        """
+        if not self.authz_id:
+            raise PermissionError(
+                f"caller identity unresolved ({self.reason}) — refusing to authorize a read. "
+                "Reading as the service identity here would grant this caller the SERVICE's "
+                "entitlements; if that is genuinely intended, say so explicitly rather than "
+                "letting an unresolved caller decide it."
+            )
+        return self.authz_id
+
+
+#: The request's caller, readable without threading a parameter through every frame.
+#:
+#: WHY A CONTEXTVAR AND NOT `request.state`. A helper three frames below the handler — the exact
+#: place a `CortexDataClient` actually gets built — has no `Request`. Passing one down purely to
+#: carry identity is the plumbing that does not get done, and the fallback when it is not done is
+#: the silent service read. `default=None` means "no request in scope" (notebook, pipeline, test),
+#: which is a DIFFERENT state from "in a request whose caller did not resolve" — the first may
+#: legitimately fall back to a process identity, the second must never.
+_CURRENT_CALLER: "ContextVar[Optional[CallerIdentity]]" = ContextVar(
+    "iagent_mesh_current_caller", default=None
+)
+
+
+def current_caller() -> Optional[CallerIdentity]:
+    """The caller of the request in scope, or `None` when not inside one.
+
+    `None` means NO REQUEST — never "a request by nobody". A request whose caller did not
+    resolve returns a `CallerIdentity` with `authz_id=None`, so a reader can tell the two apart
+    and fail closed on the second. Collapsing them is what lets an agent-pod read fall through
+    to a notebook-shaped env fallback.
+    """
+    return _CURRENT_CALLER.get()
+
 
 def _entitlement_claim() -> str:
     return os.getenv("USER_ENTITLEMENT_CLAIM", "email")
@@ -332,6 +389,12 @@ def make_transport_auth_dependency(component: str = "mesh-tool", exempt_paths=No
 
     `exempt_paths` overrides both the default set and the env var, for a service whose probe
     path is a fixed fact of its own code rather than a deployment choice.
+
+    ALSO PUBLISHES the caller to `_CURRENT_CALLER` so code below the handler can read it without
+    a `Request`. FastAPI DISCARDS an app-level dependency's return value — it is not injectable
+    into a route and never reaches `request.state` — so for the ten engines that mount this at
+    app level the contextvar is the ONLY way the computed identity survives at all. It was being
+    resolved, logged, and thrown away one frame before anyone could use it.
     """
     async def transport_auth(request: Request) -> CallerIdentity:
         path = request.url.path
@@ -343,10 +406,22 @@ def make_transport_auth_dependency(component: str = "mesh-tool", exempt_paths=No
             # lets an operator confirm the exemption is doing what they think.
             logger.debug("caller: exempt (probe path) posture=%s path=%s exempt=true",
                          resolve_posture(), path)
-            return CallerIdentity(None, False, "exempt-probe-path")
+            probe_caller = CallerIdentity(None, False, "exempt-probe-path")
+            _CURRENT_CALLER.set(probe_caller)
+            return probe_caller
 
         caller = verify_bearer(_bearer_from(request.headers.get("Authorization")))
         posture = resolve_posture()
+
+        # Published BEFORE the REQUIRE branch below can raise, so a handler that never runs is
+        # not the reason the var is unset — and so the value is in scope for anything the
+        # framework runs after the dependency (including the exception path's logging).
+        #
+        # No token is taken to reset. Starlette runs each request in its own copied context, so
+        # this write is request-scoped ALREADY and cannot leak into the next request; a manual
+        # reset here would only be theatre. The property is pinned by a test that runs two
+        # requests with different callers through one app.
+        _CURRENT_CALLER.set(caller)
 
         # GAUGE DISCRIMINANT. `caller: none` has two causes — a caller that never minted, and
         # one whose mint FAILED — and they mean opposite things for migration readiness. The
