@@ -30,7 +30,11 @@ app = MeshTool(
     cost_class="fast",
 )
 
-@app.execute()
+# `caller_scoped=False` DECLARES that this tool does not scope work to the invoking user.
+# That is correct here: it reads no data at all — Engine DA passes literal values — so there
+# is nothing to entitle. Declaring it records the decision and silences the registration
+# warning; omitting the declaration is what the warning is for.
+@app.execute(caller_scoped=False)
 def calculate_wear(data: MathInput) -> MathOutput:
     # Pure, synchronous Python math. No network calls. No LLMs.
     wear = (data.flight_hours / 10000.0) * data.environment_factor * 100 

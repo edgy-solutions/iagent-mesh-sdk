@@ -166,8 +166,29 @@ def _load(urn):                       # called from your handler, no parameter p
     return CortexDataClient(originator_email=current_caller().require_authz_id()).get_dataframe(urn)
 ```
 
-> Handlers that read no per-user data need no `caller` parameter — the single-argument form is
-> unchanged.
+**Declare it either way.** A handler that reads no per-user data needs no `caller` parameter —
+the single-argument form still works exactly as before — but say so, or the tool logs a warning
+at startup:
+
+```python
+# Reads nothing per-user (pure computation, or scoped by a token in the payload).
+@app.execute(caller_scoped=False)
+def calculate(data: MathInput) -> MathOutput:
+    ...
+```
+
+That warning exists because the ORIGINAL defect here was silent: `MeshTool` computed the
+caller's identity and threw it away, so no tool could scope work to its invoker — and nothing
+said so. Rows came back, nothing errored, and every caller was served with the service's reach.
+An unscoped tool is now legible instead of invisible; `caller_scoped=False` records that you
+meant it, and silences the warning.
+
+| Your handler | Declare | Startup line |
+|---|---|---|
+| takes `caller: CallerIdentity` | nothing — the parameter is the declaration | `identity: CALLER-SCOPED via parameter 'caller'` |
+| uses `current_caller()` instead | `@app.execute(caller_scoped=True)` | `identity: CALLER-SCOPED via current_caller()` |
+| genuinely needs no caller | `@app.execute(caller_scoped=False)` | `identity: NOT caller-scoped, DECLARED` |
+| *(undeclared)* | — | ⚠️ `identity: NOT caller-scoped, UNDECLARED` |
 
 > **Note** — DataHub registration is opt-in. Set
 > `MESH_REGISTER_ON_STARTUP=true` (plus `DATAHUB_GMS_URL` and

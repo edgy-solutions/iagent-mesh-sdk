@@ -26,7 +26,11 @@ app = MeshTool(
     cost_class="slow",  # BAML extraction over an LLM is not cheap
 )
 
-@app.execute()
+# `caller_scoped=False` DECLARES that this handler does not scope to the verified caller: the
+# read is scoped by the token inside `data.document_pointer`, supplied in the request body.
+# A tool that reaches the data plane itself should take `caller: CallerIdentity` and pass
+# `caller.require_authz_id()` instead — see templates/smolagents_subswarm.
+@app.execute(caller_scoped=False)
 async def run_legacy_analysis(data: LegacyModelInput) -> LegacyModelOutput:
     # A. Fetch highly optimized Polars dataframe from the Mesh
     storage_options = {"aws_session_token": data.document_pointer.temporary_access_token}

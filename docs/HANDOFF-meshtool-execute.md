@@ -1,3 +1,37 @@
+> ## ✅ RESOLVED in v0.4.0 — both findings, landed together
+>
+> **Disposition: BOTH, in one change to `route_handler`** — the option this packet argued for.
+> They were not landed separately, so the `run_in_executor` composition hazard described below
+> never had a window to occur.
+>
+> * **Finding A** — a parameter annotated `CallerIdentity` (any name) now receives the invoker;
+>   `current_caller()` reads the same identity from a request-scoped `ContextVar` where no
+>   parameter can be threaded; `require_authz_id()` is the fail-closed read accessor.
+> * **Finding B** — sync handlers run via `anyio.to_thread.run_sync` under an explicit
+>   `contextvars.copy_context()`, so the contextvar survives into the worker thread. The
+>   quickstart's promise is now true rather than corrected away.
+> * **The silence** — the packet asked that not consuming the identity be *visible*. An
+>   undeclared unscoped handler now WARNS at registration; `@app.execute(caller_scoped=False)`
+>   records deliberate intent and silences it. All five shipped templates declare a posture.
+>
+> **Both rulings were answered by enumeration, not preference.** The census the packet demanded
+> found ZERO `MeshTool.execute()` handlers in invincible-agent (zero `MeshTool` call sites at
+> all), so the population holding retroactively-broken sync handlers was empty — fix the code,
+> no migration debt.
+>
+> **Version:** ADDITIVE for tool authors — the single-parameter form is unchanged and untouched
+> handlers keep working. Execution *semantics* change for sync handlers (they now run off the
+> event loop), and undeclared handlers gain a startup warning. The `!` on v0.4.0 is for
+> `MeshClient.ask()` and the `requires-python` bump, not for `execute()`.
+>
+> Seals: `tests/test_caller_identity_reaches_handler.py` (incl. an executable root-cause seal
+> pinning that FastAPI discards app-level dependency return values),
+> `tests/test_per_user_read_end_to_end.py` (three-caller discrimination),
+> `tests/test_sync_handlers_do_not_block.py` (incl. `test_THE_COORDINATION_TEST...`),
+> `tests/test_scoping_posture_is_declared.py`. Each was broken on purpose and shown red first.
+>
+> Original packet preserved below.
+
 # Handoff — two defects in `MeshTool.execute()`, and why they are one job
 
 > ## ✅ RESOLVED in 0.4.0 (2026-08-27)

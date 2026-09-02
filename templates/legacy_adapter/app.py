@@ -50,7 +50,11 @@ app = MeshTool(
     cost_class="medium",
 )
 
-@app.execute()
+# `caller_scoped=False` DECLARES that this router does not scope to the verified caller — it
+# hands a cleaned query to an existing LangChain/LlamaIndex pipeline and reads no data plane
+# asset directly. If the wrapped pipeline DOES read per-user data, take `caller:
+# CallerIdentity` and thread `caller.require_authz_id()` into it.
+@app.execute(caller_scoped=False)
 def legacy_framework_router(data: EnterprisePolicyInput) -> PolicyOutput:
     # --- YOUR EXISTING LLAMA-INDEX / LANGCHAIN CODE LIVES HERE ---
     

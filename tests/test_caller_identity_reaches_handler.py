@@ -199,3 +199,41 @@ def test_current_caller_is_None_outside_a_request():
     notebook path.
     """
     assert current_caller() is None
+
+
+def test_ROOT_CAUSE_fastapi_discards_app_level_dependency_return_values():
+    """SEAL 3, as an executable fact rather than a remembered one.
+
+    The defect's root cause was not a missed line — it was a FastAPI property: an app-level
+    `dependencies=[...]` entry is run for its SIDE EFFECTS and its return value is DROPPED. It is
+    not injectable into a route, and it does not land on `request.state`. That is why
+    `make_transport_auth_dependency` could compute a correct `CallerIdentity`, log it, and still
+    leave every handler with nothing.
+
+    Pinned here because the whole design rests on it. A future author "simplifying" the
+    contextvar away — reasonably assuming the app-level dependency's return is reachable — would
+    reintroduce the exact silent unscoping, and would do it in a diff that reads like cleanup.
+    This test fails the moment that assumption is acted on.
+    """
+    from fastapi import Depends, FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    def app_level_dep() -> str:
+        return "computed-and-then-discarded"
+
+    app = FastAPI(dependencies=[Depends(app_level_dep)])
+    seen = {}
+
+    @app.get("/probe")
+    async def probe(request: Request):
+        seen["on_state"] = getattr(request.state, "app_level_dep", "ABSENT")
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        assert client.get("/probe").status_code == 200
+
+    assert seen["on_state"] == "ABSENT", (
+        "FastAPI now surfaces app-level dependency return values on request.state. If that is "
+        "genuinely true of this version, the SDK could read the caller from there — but the "
+        "change must be deliberate, and this seal is where it gets noticed."
+    )

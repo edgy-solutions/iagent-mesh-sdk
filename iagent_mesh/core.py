@@ -469,7 +469,7 @@ class MeshTool:
     # ------------------------------------------------------------------
     # Execution wiring
     # ------------------------------------------------------------------
-    def execute(self):
+    def execute(self, *, caller_scoped: Optional[bool] = None):
         """Decorator that wires a Python function as the tool's ``/execute`` handler.
 
         The first parameter's type annotation is the request-body Pydantic model.
@@ -535,6 +535,39 @@ class MeshTool:
             # a handler may call it `caller`, `invoker`, or `who`.
             caller_params = [p.name for p in params[1:]
                              if _annotation(p) is CallerIdentity]
+
+            # DECLARE THE SCOPING POSTURE, NEVER LEAVE IT IMPLIED.
+            #
+            # Making the caller REACHABLE was only half the fix. A handler that simply omits the
+            # parameter is back in the original silent state — it cannot scope work to the
+            # verified caller, and nothing says so. Silence is exactly what let the discarded
+            # identity sit unnoticed, so omission is now ANNOUNCED, and an UNDECLARED omission
+            # WARNS once at registration.
+            #
+            # The warning is escapable on purpose: `@app.execute(caller_scoped=False)` records
+            # that the author considered it and meant it. A warning that cannot be switched off
+            # by stating intent becomes noise, and noise is re-silencing by another route.
+            #
+            # WORDING IS DELIBERATELY NARROW. It does NOT claim such a tool "reads as the
+            # service" — a handler may legitimately be scoped by a credential it is handed (the
+            # `DataPointer.temporary_access_token` pattern) or read nothing at all. The precise,
+            # always-true statement is that it CANNOT SCOPE TO THE VERIFIED CALLER.
+            declared = caller_scoped
+            scoped = bool(caller_params) or declared is True
+            if scoped:
+                how = (f"parameter {caller_params[0]!r}" if caller_params
+                       else "current_caller() (declared)")
+                logger.info("identity: CALLER-SCOPED via %s [%s]", how, self.name)
+            elif declared is False:
+                logger.info("identity: NOT caller-scoped, DECLARED [%s]", self.name)
+            else:
+                logger.warning(
+                    "identity: NOT caller-scoped, UNDECLARED [%s] — %s() cannot scope its work "
+                    "to the verified caller. Add a `caller: CallerIdentity` parameter (then use "
+                    "caller.require_authz_id() at any read), or pass "
+                    "@app.execute(caller_scoped=False) to record that this is intended.",
+                    self.name, func.__name__,
+                )
 
             @self.app.post("/execute")
             async def route_handler(request: Request):
