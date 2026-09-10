@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "RendersAs": {
+      "additionalProperties": false,
+      "description": "The display half. Hints only \u2014 nothing here may change what a task can DO.",
+      "properties": {
+        "badge": {
+          "maxLength": 12,
+          "minLength": 1,
+          "title": "Badge",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "archetype": {
+          "enum": [
+            "GROUPED_REVIEW",
+            "APPROVAL_TASK",
+            "TRIAGE_TASK"
+          ],
+          "title": "Archetype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "badge",
+        "title",
+        "archetype"
+      ],
+      "title": "RendersAs",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One species: how it renders AND what it accepts. Both halves, or it is not a row.",
+  "properties": {
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "renders_as": {
+      "$ref": "#/$defs/RendersAs"
+    },
+    "accepts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Accepts",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "reason_required": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Required",
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "kind",
+    "renders_as",
+    "accepts"
+  ],
+  "title": "TaskKind",
+  "type": "object"
+}
