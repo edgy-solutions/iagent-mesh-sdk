@@ -108,11 +108,17 @@ def test_a_kind_may_not_contain_a_colon():
 # ── discipline 3: an undeclared kind gets the HONEST default ─────────────────────────────
 
 def test_the_undeclared_default_offers_no_verbs():
-    """THE DELIBERATE CORRECTION, not a port. The two tables being replaced DISAGREED: the
-    render table degraded an undeclared kind to read-only, while the verb table handed any
-    unknown kind approve/reject. The UI showed no buttons while the API would have accepted
-    the decision. Empty accepts makes the read-only card a CONSEQUENCE of the declaration
-    rather than a special case sitting beside it."""
+    """THIS CLOSES A LIVE HOLE — verified by tracing the render, not by reading a comment.
+
+    Both tables being replaced hand an undeclared kind approve/reject today. The render side
+    defaults to an approval archetype whose card renders both buttons unconditionally, and the
+    "is this declared" predicate that would have stopped it has no caller outside its own
+    tests. A note above that default claims a no-verb read-only mode; the mode does not exist.
+
+    Empty accepts makes read-only a CONSEQUENCE of the row rather than a mode a card has to
+    remember. The species this protects is the NEXT one added, which inherits approve/reject
+    on "this document could not be prepared for review" — a decision the data cannot represent,
+    archived immutably as promotion evidence."""
     assert UNDECLARED.accepts == frozenset()
     assert UNDECLARED.renders_as.badge == "TASK"
     # The archetype still renders a card — the default is honest, not absent.

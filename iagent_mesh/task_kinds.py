@@ -35,12 +35,23 @@ Rules in a comment do not survive a cutover, so each is a property here that som
 3. *An undeclared kind gets the honest default.* :data:`UNDECLARED` — and its ``accepts`` is
    EMPTY, so an undeclared species offers NO verbs at all.
 
-That third one is a deliberate correction, not a port. The two tables being replaced DISAGREE
-about the default: the render table degrades an undeclared kind to a read-only card, while the
-verb table hands any unknown kind ``approved``/``rejected``. So the UI showed no buttons while
-the API would still have accepted the decision. Unifying on empty makes the read-only card a
-CONSEQUENCE of the declaration rather than a special case beside it — a label that says nothing
-is harmless, but an affordance that says nothing still acts.
+That third one CLOSES A LIVE HOLE. It is not a port and not a unification of two safe defaults.
+Both tables being replaced hand an undeclared kind ``approved``/``rejected`` today: the verb
+table by returning its default set, and the render table by defaulting to an approval archetype
+whose card renders both buttons unconditionally. The helper that was supposed to prevent that —
+a "is this kind actually declared" predicate — is exported with a docstring telling consumers to
+degrade honestly, and has no caller anywhere outside its own tests.
+
+**Read the call path, not the comment.** The render table carries a note stating that its default
+"now renders the card in a NO-VERB read-only mode … so an unregistered kind degrades visibly".
+No such mode exists. The note describes a cause that was addressed while the effect never
+changed, so nothing ever prompted a re-check — and this module's first draft repeated the claim,
+having read the note rather than traced the render.
+
+Empty ``accepts`` makes read-only a CONSEQUENCE of the row rather than a mode some card has to
+remember to implement. A label that says nothing is harmless; an affordance that says nothing
+still acts, and today it acts on species nobody declared — including, by construction, the next
+one anyone adds.
 
 ``accepts`` IS REQUIRED ON EVERY ROW, including overlay rows, which is why it has no default. An
 overlay species that needed one extra verb and could not express it would get that verb as a
