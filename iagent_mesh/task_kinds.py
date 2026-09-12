@@ -36,11 +36,19 @@ Rules in a comment do not survive a cutover, so each is a property here that som
    EMPTY, so an undeclared species offers NO verbs at all.
 
 That third one CLOSES A LIVE HOLE. It is not a port and not a unification of two safe defaults.
-Both tables being replaced hand an undeclared kind ``approved``/``rejected`` today: the verb
-table by returning its default set, and the render table by defaulting to an approval archetype
-whose card renders both buttons unconditionally. The helper that was supposed to prevent that —
-a "is this kind actually declared" predicate — is exported with a docstring telling consumers to
-degrade honestly, and has no caller anywhere outside its own tests.
+Both tables being replaced handed an undeclared kind ``approved``/``rejected``: the verb table by
+returning its default set, and the render table by defaulting to an approval archetype whose card
+rendered both buttons unconditionally. The helper meant to prevent that — a "is this kind actually
+declared" predicate — was exported with a docstring telling consumers to degrade honestly, and had
+no caller anywhere outside its own tests.
+
+**⚠ CORRECTED 2026-09-12.** The RENDER half is now fixed at its own layer: the card default-denies
+on that predicate, which finally has a caller. **The verb half is still open** — the gateway
+returns its default set for any kind it does not know — so the hole is narrower, one-sided, and
+still real: a UI offering nothing over an API that would accept the answer. This module is what
+closes the remaining half, and the correction is recorded rather than edited away because a
+rationale that quietly dropped its defect once it was half-fixed would be the same failure as the
+comment below, inverted.
 
 **Read the call path, not the comment.** The render table carries a note stating that its default
 "now renders the card in a NO-VERB read-only mode … so an unregistered kind degrades visibly".
