@@ -134,7 +134,7 @@ class TaskKind(BaseModel):
     inheriting the platform's. May be EMPTY, which means a read-only species: rendered, not
     actionable.
 
-    ORDERED SINCE 0.7.0, AND THE TYPE IS THE FIX. This was a ``frozenset``, chosen for the
+    ORDERED SINCE 0.8.0, AND THE TYPE IS THE FIX. This was a ``frozenset``, chosen for the
     subset arithmetic below — and a set has no order, so a declaration could not say
     "accept before reject". A consumer renders buttons FROM this field, so the declaration was
     silently deciding presentation by hash order:
