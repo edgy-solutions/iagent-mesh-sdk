@@ -174,7 +174,19 @@ def test_accepts_preserves_DECLARED_ORDER_through_composition(tmp_path):
     """
     seed, overlay = tmp_path / "seed", tmp_path / "overlay"
     _write(seed, "grouped_review.yaml", VALID)
-    declared_order = ["accepted", "rejected", "returned_for_rework"]
+
+    # THE FIXTURE MUST DISCRIMINATE, AND MOST NATURAL VERB LISTS DO NOT. This arm's first
+    # version used [accepted, rejected, returned_for_rework] — ALREADY ALPHABETICAL, so a
+    # sorting implementation and an order-preserving one produce the identical tuple. It
+    # passed and measured nothing. Caught by the safety lane hitting the same vacuum in their
+    # own seal; verb lists tend to come out alphabetical by accident, which is exactly why it
+    # hides.
+    declared_order = ["returned_for_rework", "accepted", "rejected"]
+    assert declared_order != sorted(declared_order), (
+        "this fixture no longer discriminates — a sorted implementation would pass. Pick a "
+        "declared order that is not alphabetical, or this arm is decorative again."
+    )
+
     _write(overlay, "high_authority.yaml", {
         "kind": "high_authority_acceptance",
         "renders_as": {"badge": "ACCEPT", "title": "Acceptance", "archetype": "APPROVAL_TASK"},
