@@ -50,8 +50,7 @@
         "type": "string"
       },
       "title": "Accepts",
-      "type": "array",
-      "uniqueItems": true
+      "type": "array"
     },
     "reason_required": {
       "default": [],

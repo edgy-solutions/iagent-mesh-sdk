@@ -55,7 +55,7 @@ def test_a_valid_row_builds():
     tk = TaskKind(**VALID)
     assert tk.kind == "grouped_review"
     assert tk.renders_as.archetype == "GROUPED_REVIEW"
-    assert tk.accepts == frozenset({"approved", "rejected"})
+    assert tk.accepts == ("approved", "rejected")
 
 
 # ── discipline 1: a new kind is a ROW, never a branch ────────────────────────────────────
@@ -119,7 +119,7 @@ def test_the_undeclared_default_offers_no_verbs():
     remember. The species this protects is the NEXT one added, which inherits approve/reject
     on "this document could not be prepared for review" — a decision the data cannot represent,
     archived immutably as promotion evidence."""
-    assert UNDECLARED.accepts == frozenset()
+    assert UNDECLARED.accepts == ()
     assert UNDECLARED.renders_as.badge == "TASK"
     # The archetype still renders a card — the default is honest, not absent.
     assert UNDECLARED.renders_as.archetype in ARCHETYPES
@@ -151,13 +151,49 @@ def test_a_read_only_species_is_expressible():
     illegal, the only way to express a read-only species would be to omit its row — which
     resolves to UNDECLARED and loses the badge and title the species actually has."""
     ro = TaskKind(**{**VALID, "accepts": []})
-    assert ro.accepts == frozenset()
+    assert ro.accepts == ()
     assert ro.renders_as.badge == "REVIEW"
 
 
 def test_extra_fields_are_refused():
     with pytest.raises(Exception):
         TaskKind(**{**VALID, "colour": "red"})
+
+
+def test_accepts_preserves_DECLARED_ORDER_through_composition(tmp_path):
+    """A CONSUMER RENDERS BUTTONS FROM THIS FIELD, so a set was deciding presentation by hash.
+
+    Measured before the fix: `[accepted, rejected, returned_for_rework]` came back as
+    `['returned_for_rework', 'accepted', 'rejected']` — the rework verb first. Composition is
+    the arm that matters, not construction, because that is the path a deployment's own species
+    travels and the path the reordering was observed on.
+
+    Asserted for a species whose verbs are NOT interchangeable, because that is where the cost
+    lands: the order a card offers an acceptance, a rejection and a return in is a nudge on an
+    irreversible act.
+    """
+    seed, overlay = tmp_path / "seed", tmp_path / "overlay"
+    _write(seed, "grouped_review.yaml", VALID)
+    declared_order = ["accepted", "rejected", "returned_for_rework"]
+    _write(overlay, "high_authority.yaml", {
+        "kind": "high_authority_acceptance",
+        "renders_as": {"badge": "ACCEPT", "title": "Acceptance", "archetype": "APPROVAL_TASK"},
+        "accepts": declared_order,
+        "reason_required": ["accepted"],
+    })
+    row = next(t for t in compose(seed, [overlay]) if t.kind == "high_authority_acceptance")
+    assert list(row.accepts) == declared_order, (
+        f"declared {declared_order}, composed to {list(row.accepts)} — a surface rendering "
+        f"buttons from this field would present them in an order nobody chose"
+    )
+
+
+def test_a_repeated_verb_is_refused_rather_than_silently_collapsed():
+    """While this was a set, `[approved, approved]` deduped invisibly. As a sequence it would
+    render twice, so the dedup that used to be implicit becomes a refusal — a repeated verb is
+    a declaration error, not a preference."""
+    with pytest.raises(Exception, match="repeats|accepts"):
+        TaskKind(**{**VALID, "accepts": ["approved", "approved"]})
 
 
 # ── loading and ADR-0036 composition ─────────────────────────────────────────────────────

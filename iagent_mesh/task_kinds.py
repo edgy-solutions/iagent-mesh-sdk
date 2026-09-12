@@ -127,10 +127,42 @@ class TaskKind(BaseModel):
     kind: str
     renders_as: RendersAs
 
-    accepts: frozenset[str]
-    """The verbs this species accepts. REQUIRED — no default, deliberately, so an overlay row
-    states its own verbs rather than inheriting the platform's. May be EMPTY, which means a
-    read-only species: rendered, not actionable."""
+    accepts: tuple[str, ...]
+    """The verbs this species accepts, **IN THE ORDER A SURFACE SHOULD OFFER THEM**.
+
+    REQUIRED — no default, deliberately, so an overlay row states its own verbs rather than
+    inheriting the platform's. May be EMPTY, which means a read-only species: rendered, not
+    actionable.
+
+    ORDERED SINCE 0.7.0, AND THE TYPE IS THE FIX. This was a ``frozenset``, chosen for the
+    subset arithmetic below — and a set has no order, so a declaration could not say
+    "accept before reject". A consumer renders buttons FROM this field, so the declaration was
+    silently deciding presentation by hash order:
+    ``[accepted, rejected, returned_for_rework]`` composed to
+    ``['returned_for_rework', 'accepted', 'rejected']``, putting a rework verb first.
+
+    **It matters most exactly where it is least recoverable.** For `approved`/`rejected` the
+    stakes are low, which is why it went unnoticed. For a species whose verbs are not
+    interchangeable — an acceptance, a rejection and a return — the order a card presents them
+    in is a nudge on an irreversible act, and the person who notices is the engineer looking at
+    a card where the destructive verb sits first.
+
+    ``reason_required`` below stays a set ON PURPOSE: order is meaningless for a membership
+    test, and the asymmetry says which of the two fields a surface may read as a sequence."""
+
+    @field_validator("accepts")
+    @classmethod
+    def _accepts_is_unique(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        # A set silently swallowed duplicates. A tuple would carry them into a rendered surface
+        # as two identical buttons, so the dedup that used to be implicit becomes a refusal —
+        # a repeated verb is a declaration error, not a preference.
+        seen = [x for i, x in enumerate(v) if x in v[:i]]
+        if seen:
+            raise ValueError(
+                f"accepts repeats {sorted(set(seen))} — a duplicated verb was silently "
+                f"collapsed while this field was a set, and would now render twice"
+            )
+        return v
 
     reason_required: frozenset[str] = frozenset()
     """Verbs whose meaning is empty without a stated reason. Validated as a subset of ``accepts``
@@ -163,7 +195,7 @@ class TaskKind(BaseModel):
 
     @model_validator(mode="after")
     def _reason_required_is_reachable(self) -> "TaskKind":
-        stray = sorted(self.reason_required - self.accepts)
+        stray = sorted(self.reason_required - set(self.accepts))
         if stray:
             raise ValueError(
                 f"kind {self.kind!r} requires a reason for {stray}, which it does not accept — "
@@ -178,7 +210,7 @@ class TaskKind(BaseModel):
 UNDECLARED = TaskKind(
     kind="undeclared",
     renders_as=RendersAs(badge="TASK", title="Task", archetype="APPROVAL_TASK"),
-    accepts=frozenset(),
+    accepts=(),
 )
 
 
