@@ -125,8 +125,22 @@ class TaskKind(BaseModel):
     read-only species: rendered, not actionable."""
 
     reason_required: frozenset[str] = frozenset()
-    """Verbs whose meaning is empty without a stated reason. A subset of ``accepts``, enforced
-    below — requiring a reason for a verb nobody can choose is a rule with no reachable input."""
+    """Verbs whose meaning is empty without a stated reason. Validated as a subset of ``accepts``
+    below — requiring a reason for a verb nobody can choose is a rule with no reachable input.
+
+    WHAT THIS FIELD DOES NOT DO, stated because it reads as though it does. This model VALIDATES
+    the property; it does not ENFORCE it. Enforcement lives in whichever consumer resolves the
+    row, and the platform gateway does not read declarations yet — it checks a module-level set
+    of verb strings instead. So a row carrying ``reason_required`` today is DECLARATIVE ONLY,
+    which is precisely the advertised-unconsumed shape this module's own docstring warns about.
+    Do not let a seal pass on the declaration alone.
+
+    AND THE SEMANTICS CHANGE AT THAT CUTOVER, which is the part worth planning around. The
+    gateway's current rule is a property OF A VERB, global wherever it appears: one set, checked
+    without reference to kind. This field makes it a property OF A ROW. Per-species is the more
+    expressive shape and the intended endstate — a verb that needs a reason for one species and
+    not another is expressible only afterwards — but it is a CHANGE, not a restatement, and a
+    row written in anticipation of it does nothing until the consumer moves."""
 
     @field_validator("kind")
     @classmethod
