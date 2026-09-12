@@ -49,6 +49,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 __all__ = [
     "SLOT_KINDS",
+    "REF_COSMETIC",
+    "RefusalViolation",
+    "enforce_refusal",
+    "ref_basis",
     "REFUSAL_DISPOSITIONS",
     "SlotDecl",
     "GraphManifest",
@@ -200,7 +204,47 @@ def manifest_ref(m: GraphManifest) -> str:
     does. Inherited cost, stated: the ref says "THIS contract" and nothing about the graph's
     code, so a module rewritten behind an unchanged contract keeps its ref.
     """
-    semantic = {
+    blob = json.dumps(ref_basis(m), sort_keys=True, separators=(",", ":"))
+    return f"{m.graph_id}@{hashlib.sha256(blob.encode()).hexdigest()[:12]}"
+
+
+#: Fields of GraphManifest deliberately OUTSIDE the ref, each with the reason. A field added to
+#: the model must be placed in the basis or in here, and `test_every_model_field_is_classified`
+#: fails until it is — because the alternative is what happened: the ref quietly not covering
+#: `referent` while a test varying two fields read as asserting the whole contract.
+REF_COSMETIC: dict[str, str] = {
+    "module": "where the code lives. A module rewritten behind an unchanged contract keeps its "
+              "ref, by design — the ref says THIS CONTRACT and nothing about the implementation.",
+    "builder": "same reason as module: the entry point is implementation, not contract.",
+    "name": "the registration name. Derived from the row for the registrar's idempotency key; "
+            "renaming it does not change what the verb accepts or produces.",
+    "description": "prose. Retrieval input, not contract — and a reflowed sentence minting a new "
+                   "ref is the churn `ruleset_ref`'s content-only property exists to avoid.",
+    "synonyms": "routing hints. They change which questions REACH the verb, not what it is.",
+    "anti_synonyms": "as synonyms.",
+    "owner_persona": "who owns it operationally.",
+    "domains": "entitlement scope, enforced at the gate rather than by the contract's identity.",
+    "cost_class": "an operational hint to the dispatcher.",
+    "requires_human_approval": "a dispatch-time policy, not part of the verb's shape.",
+    "timeout_s": "an operational bound.",
+    "checkpointer": "a HOSTING decision. Two hosts may run the same contract with and without "
+                    "durable memory; the answer's shape is identical either way.",
+}
+
+
+def ref_basis(m: GraphManifest) -> dict:
+    """The exact structure `manifest_ref` hashes. PUBLIC so it can be asserted against.
+
+    Named and exported deliberately: the ref's coverage was previously implicit in a dict
+    literal inside `manifest_ref`, and the seal for it varied `required` and `arity` and never
+    `referent` — so it asserted the property for two fields and was read as asserting it for
+    the contract. **A list grows when someone remembers; a derivation grows when the basis
+    does.** Tests derive the covered fields from here.
+
+    Slots go through `model_dump(exclude_none=True)`, so EVERY declared SlotDecl field is
+    covered without being named here — including `referent`, whose omission was the gap.
+    """
+    return {
         "graph_id": m.graph_id,
         "verb": m.verb,
         "input_uri": m.input_uri,
@@ -209,8 +253,6 @@ def manifest_ref(m: GraphManifest) -> str:
         "refusal": m.refusal,
         "slots": [s.model_dump(exclude_none=True) for s in m.slots],
     }
-    blob = json.dumps(semantic, sort_keys=True, separators=(",", ":"))
-    return f"{m.graph_id}@{hashlib.sha256(blob.encode()).hexdigest()[:12]}"
 
 
 def _read_rows(directory: Path) -> dict[str, tuple[Path, dict]]:
@@ -345,6 +387,51 @@ def registration_payload(m: GraphManifest, *, endpoint_url: str, version: str = 
         "required_args": [s.name for s in m.slots if s.required],
         "mesh_graph_ref": manifest_ref(m),
     }
+
+
+class RefusalViolation(ValueError):
+    """A graph's output contradicts the refusal disposition its ratified row declares."""
+
+
+def enforce_refusal(m: GraphManifest, out: Any) -> Any:
+    """Check a graph's output against its row's `refusal`. Returns `out`, or RAISES.
+
+    ── WHY THIS IS IN THE SDK AND NOT IN ONE HOST ──────────────────────────────────────────
+    It was implemented in the platform's own host first, on the ruling that the host holds both
+    the row and the output. That is right and it is not sufficient: **a convention only one host
+    implements is one route C will not inherit.** A team running their own host imports the same
+    loader and the same schema; it must be able to import the same enforcement, or its rows
+    declare a clause nothing checks — which is exactly the defect this closes.
+
+    ── `holes` IS PART OF THE OUTPUT CONTRACT, STATED ──────────────────────────────────────
+    A host cannot know how many findings a given graph SHOULD produce — that is domain
+    knowledge it does not have. But a graph that reports a HOLE has told the host it narrowed
+    its answer, and that is generic. So the one enforceable rule:
+
+        refusal: named-hole   holes are the declared disposition — returned unchanged
+        refusal: fail         a hole is a CONTRACT VIOLATION — raises
+
+    A compliant `fail` graph raises at the refusal and never reaches here. A non-compliant one
+    returns partials, and before this existed nothing anywhere went red: the row described
+    behaviour it did not constrain.
+
+    The error names the row's clause AND which holes caused it, and says it is a DISAGREEMENT
+    between a row and its module rather than a runtime fault — because the fix is to change one
+    of the two, and the reader needs to know which.
+    """
+    if m.refusal != "fail":
+        return out
+    holes = out.get("holes") if isinstance(out, dict) else None
+    if holes:
+        sources = [h.get("source", "?") for h in holes if isinstance(h, dict)]
+        raise RefusalViolation(
+            f"{m.graph_id} declares refusal=fail and returned {len(holes)} hole(s) "
+            f"({', '.join(sources)}). Its row says a partial answer is not an answer for this "
+            f"verb, so the output must NOT reach a caller who would read it as whole. Either "
+            f"the module should have failed at the refusal, or the row should declare "
+            f"named-hole — this is a contract disagreement between them, not a runtime error."
+        )
+    return out
 
 
 def register_graph(
