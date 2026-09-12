@@ -117,3 +117,30 @@ def test_the_wheel_does_not_leak_a_toplevel_templates_directory():
     assert not [n for n in names if n.startswith("templates/")], (
         "wheel installs a top-level `templates/` into site-packages"
     )
+
+
+def test_every_graph_manifest_export_is_reachable_from_the_PACKAGE():
+    """A name in `graph_manifest.__all__` must import from `iagent_mesh` too. DERIVED.
+
+    v0.7.0 shipped `enforce_refusal`, `ref_basis`, `RefusalViolation` and `REF_COSMETIC` in the
+    submodule's `__all__` and NOT in the package's re-exports, while all six names that predate
+    them ARE top-level. So a consumer following the established idiom — `from iagent_mesh import
+    compose, GraphManifest` — would not find the new ones.
+
+    **That is the very problem 0.7.0 existed to fix, in 0.7.0 itself:** the release moved
+    `enforce_refusal` here so a route-C host could inherit it, and then did not put it where
+    that host would look. Half-wired exports are invisible to the module's own tests, which
+    import from the submodule.
+
+    Derived from `__all__` rather than listed, so the next export is covered by writing nothing.
+    """
+    from iagent_mesh import graph_manifest
+
+    import iagent_mesh
+
+    missing = [n for n in graph_manifest.__all__ if not hasattr(iagent_mesh, n)]
+    assert not missing, (
+        "these are exported by iagent_mesh.graph_manifest but NOT re-exported by the package, "
+        "so a consumer using the documented import idiom cannot reach them:\n  "
+        + "\n  ".join(missing)
+    )
