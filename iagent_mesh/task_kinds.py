@@ -75,6 +75,8 @@ from typing import Iterable, Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .declarations import DeclarationError, compose_rows, load_rows
+
 __all__ = [
     "ARCHETYPES",
     "KIND_PATTERN",
@@ -101,9 +103,12 @@ ARCHETYPES = ("GROUPED_REVIEW", "APPROVAL_TASK", "TRIAGE_TASK")
 KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-class TaskKindError(ValueError):
+class TaskKindError(DeclarationError):
     """A declared row is invalid. Always names the file, because "a declaration is invalid" is
     not actionable at merge time and naming the file is what makes it fixable without a bisect.
+
+    A FAMILY SUBCLASS of the shared base since 0.8.1, so a caller composing several declaration
+    families can catch the base while one composing only task kinds still catches this.
     """
 
 
@@ -243,86 +248,32 @@ def resolve(kind: str, declarations: Iterable[TaskKind]) -> Resolution:
     return Resolution(UNDECLARED, False)
 
 
-def _read_rows(directory: Path) -> dict[str, tuple[Path, dict]]:
-    """Raw YAML by kind, before validation, so a tombstone can be seen for what it is."""
-    import yaml
-
-    rows: dict[str, tuple[Path, dict]] = {}
-    for f in sorted(Path(directory).glob("*.yaml")):
-        raw = yaml.safe_load(f.read_text(encoding="utf-8"))
-        if raw is None:
-            raise TaskKindError(f"{f.name} is empty — an empty declared row is not a row")
-        kind = raw.get("kind")
-        if not kind:
-            raise TaskKindError(f"{f.name} has no kind")
-        if kind in rows:
-            raise TaskKindError(
-                f"{f.name} and {rows[kind][0].name} both declare kind {kind!r}"
-            )
-        rows[kind] = (f, raw)
-    return rows
-
-
-def _build(fname: str, raw: dict) -> TaskKind:
-    try:
-        return TaskKind(**raw)
-    except TaskKindError:
-        raise
-    except Exception as exc:
-        raise TaskKindError(f"{fname} is not a valid task kind declaration: {exc}") from exc
-
-
 def load_task_kinds(directory: Path | str) -> list[TaskKind]:
     """Every declared row in one directory, validated, sorted by kind.
 
-    RAISES on an invalid row rather than skipping it. A consumer that skipped one would come up
-    healthy and render exactly one species as UNDECLARED — a task that silently loses its verbs
-    and looks like a design decision.
+    DELEGATES to the shared composer since 0.8.1 — same walk, same errors, same tombstone rule
+    as every other declaration family. The signature is unchanged, so v0.8.0 callers are
+    untouched; only the implementation moved out from under them.
     """
-    rows = _read_rows(Path(directory))
-    out = []
-    for kind in sorted(rows):
-        f, raw = rows[kind]
-        if raw.get("deleted"):
-            raise TaskKindError(
-                f"{f.name} is a tombstone (deleted: true) but this is not an overlay — "
-                f"a tombstone only means something composed against a seed. Delete the file."
-            )
-        out.append(_build(f.name, raw))
-    return out
+    return load_rows(directory, key_field="kind", builder=lambda raw: TaskKind(**raw),
+                     label="task kind declaration", error=TaskKindError)
 
 
 def compose(seed_dir: Path | str, overlay_dirs: Iterable[Path | str] = ()) -> list[TaskKind]:
-    """ADR-0036 composition: overlay entries REPLACE or DELETE by kind; seed applies where the
-    overlay is silent. Per-entry granularity, which is what makes deletion natural.
+    """ADR-0036 composition for task kinds. THIS IS WHERE DOMAIN SPECIES LIVE.
 
-    THIS IS WHERE DOMAIN SPECIES LIVE. The seed ships structural kinds only; a deployment with
-    domain species adds them here, and because an overlay row is a FULL replacement carrying its
-    own ``accepts``, a domain species that needs a domain verb declares it in its own row rather
-    than growing a branch in code.
+    The seed ships structural kinds; a deployment with domain species adds them in an overlay,
+    and because an overlay row is a FULL replacement carrying its own ``accepts``, a domain
+    species that needs a domain verb declares it in its own row rather than growing a branch in
+    code.
 
-    An overlay row is a full replacement, not a field-level merge — matching the graph manifest
-    algebra rather than inventing a second one. A field-level merge would let an overlay row
-    silently inherit a seed's ``accepts``, which is the one inheritance this module refuses.
-
-    A TOMBSTONE FOR A KIND THAT IS NOT IN THE SEED IS AN ERROR, not a no-op — a stale tombstone
-    is how an overlay rots, deleting a key nobody ships while the species it meant to remove
-    comes back under a new name with nothing to say so.
+    DELEGATES to the shared composer since 0.8.1 — see :mod:`iagent_mesh.declarations` for why
+    the mechanism does not live in this module: a family that imported ``compose`` from here
+    would read as though its rows were a kind of task.
     """
-    rows = _read_rows(Path(seed_dir))
-    for od in overlay_dirs:
-        for kind, (f, raw) in _read_rows(Path(od)).items():
-            if raw.get("deleted"):
-                if kind not in rows:
-                    raise TaskKindError(
-                        f"{f.name} deletes kind {kind!r}, which the seed does not ship. "
-                        f"A tombstone for a kind that is not there silently stops deleting "
-                        f"anything the day the seed renames it."
-                    )
-                rows.pop(kind)
-            else:
-                rows[kind] = (f, raw)
-    return [_build(rows[k][0].name, rows[k][1]) for k in sorted(rows)]
+    return compose_rows(seed_dir, overlay_dirs, key_field="kind",
+                        builder=lambda raw: TaskKind(**raw),
+                        label="task kind declaration", error=TaskKindError)
 
 
 def validate_dir(directory: Path | str) -> list[TaskKind]:
