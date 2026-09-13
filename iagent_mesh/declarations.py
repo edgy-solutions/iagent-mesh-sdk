@@ -6,6 +6,11 @@ duplicate-declaration error and one tombstone rule, and a new declaration family
 passing its key field and its builder rather than by copying forty lines.
 
 ── WHY IT IS ITS OWN MODULE AND NOT A PARAMETER ON THE TASK-KIND ONE ───────────────────────
+RULED 2026-09-12 — see invincible-agent `docs/rulings/README.md` #r-038, *"a shared mechanism is
+not named after its first caller"*. It is a LAW beside the domain-name-in-a-platform-seed rule,
+not a preference: in both, a comment insisting the thing is generic is a LEXICAL boundary, and
+having nothing domain-shaped to import is a STRUCTURAL one.
+
 The composer began inside ``task_kinds`` because task kinds were the first family to need it.
 Parameterising it there would have worked and would have been wrong: the next family would
 ``from iagent_mesh.task_kinds import compose``, which reads as though decisions are a kind of
@@ -15,6 +20,20 @@ module") rather than structural (nothing domain-shaped to import).
 
 ``task_kinds.compose`` keeps its exact signature and delegates here, so v0.8.0 callers are
 untouched. That is what makes this a PATCH-COMPATIBLE addition rather than another break.
+
+── THE EXPORTS, SPELLED OUT, BECAUSE THE NAME MOVED ────────────────────────────────────────
+The dispatch that commissioned this asked for ``compose(seed, overlays, *, key_field, builder)``.
+The shipped name is ``compose_rows`` — ``compose`` would shadow ``task_kinds.compose`` for anyone
+importing both. **The argument was right and the name was wrong, and the handoff announcing this
+module named the module without naming its functions**, so the first consumer had to import it to
+find out. Written here so the next one does not:
+
+    read_rows(directory, *, key_field, error=DeclarationError)
+    load_rows(directory, *, key_field, builder, label=..., error=DeclarationError)
+    compose_rows(seed_dir, overlay_dirs=(), *, key_field, builder, label=..., error=...)
+
+``read_rows`` is exported deliberately: a family wanting the raw rows without a builder should not
+have to construct one to get them.
 
 ── WHAT IS DELIBERATELY NOT PARAMETERISED ──────────────────────────────────────────────────
 The FILE LAYOUT: one document per file, ``*.yaml``, keyed by a top-level field. A family that
