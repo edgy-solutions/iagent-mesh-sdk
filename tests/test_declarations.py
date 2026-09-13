@@ -12,6 +12,7 @@ against the delegating implementation, so the extraction moved no behaviour.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,71 @@ def _write(d: Path, name: str, row: dict) -> None:
 
 
 SEED_ROW = {"decision_id": "d_seed", "outcome": "ratified"}
+
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def _imported_modules(path: Path) -> set[str]:
+    """Every module named by an import in a file, read from the SYNTAX TREE.
+
+    Not a substring scan: `task_kinds` appears in this file's own prose, and a grep-shaped
+    check would fail on a docstring that merely mentions it — a seal that cannot be written
+    about is one people route around.
+
+    MUST INCLUDE THE IMPORTED NAMES, NOT JUST THE MODULE. ``from iagent_mesh import task_kinds``
+    puts ``iagent_mesh`` in ``node.module`` and ``task_kinds`` in ``node.names`` — so a check
+    reading only the module misses the most natural way to write the very import it forbids.
+    Found by running that exact mutation against the first version of this helper, which PASSED.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                out.add(node.module)
+            # `from <pkg> import <name>` — the NAME is the module for a submodule import, and
+            # is the only place it appears.
+            out.update(a.name for a in node.names)
+    return out
+
+
+# ── the extraction is real, not renamed ──────────────────────────────────────────────────
+
+def test_the_shared_composer_does_not_import_its_FIRST_CALLER():
+    """THE BOUNDARY, ASSERTED. A mechanism that imports the family it was extracted from was
+    renamed, not extracted — and the dependency would be real however the module is named.
+
+    HOW IT ACTUALLY FAILS, measured: a MODULE-LEVEL import here is circular (task_kinds already
+    imports this module), so pytest reports a COLLECTION ERROR before this arm runs. Still red,
+    still loud, but the diagnostic is "circular import" rather than this assertion's message —
+    worth knowing so nobody chases the wrong thing. The arm earns its keep on the case that is
+    NOT circular: a lazy import inside a function body, which `ast.walk` reaches and which would
+    otherwise import cleanly and silently reinstate the dependency.
+    """
+    imported = _imported_modules(_REPO / "iagent_mesh" / "declarations.py")
+    offenders = {m for m in imported if "task_kind" in m}
+    assert not offenders, (
+        f"iagent_mesh/declarations.py imports {sorted(offenders)} — the shared composer must "
+        f"not depend on the first family that needed it"
+    )
+
+
+def test_THIS_SUITE_IMPORTS_TASK_KINDS_NOWHERE():
+    """The cheapest seal standing between a real extraction and a convincing one.
+
+    If exercising the composer ever requires `task_kinds`, the mechanism is BORROWED rather
+    than shared, and every arm in this file is really another task-kind test wearing a
+    different name. Asserted rather than merely true, because the day someone reaches for a
+    TaskKind here as a convenient builder is the day it stops being true silently.
+    """
+    imported = _imported_modules(Path(__file__))
+    offenders = {m for m in imported if "task_kind" in m}
+    assert not offenders, (
+        f"this suite imports {sorted(offenders)} — exercise the composer with a family of its "
+        f"own, or the extraction was a rename"
+    )
 
 
 # ── the positive control ─────────────────────────────────────────────────────────────────
