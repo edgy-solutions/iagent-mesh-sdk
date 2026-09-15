@@ -73,6 +73,14 @@ class Initiator(BaseModel):
 
     So the classification comes from the token's claims at the edge that minted it, and travels
     here as a declared field. ``subject`` is an opaque string this SDK never interprets.
+
+    **NOT A CONTRADICTION WITH THE GRANT RAIL, and this is where the next person will look.**
+    The policy validator DOES refuse a ``svc:`` prefix in a disclosure grant, and that is a
+    different thing: there the spelling is OURS — a declaration's format on the git rail, written
+    by us, reviewed by us, and therefore ours to constrain. Here the subject arrives from a token
+    minted elsewhere, and constraining ITS format is asserting a fact about someone else's issuer.
+    **Same-looking rule, opposite direction of authority.** Conflating them is how the prefix
+    check gets re-implemented on the wrong side.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -241,10 +249,27 @@ class MeshVectors(Protocol):
         *,
         collection: str,
         text: str,
-        domain: Optional[str] = None,
+        domains: Sequence[str] = (),
         limit: int = 10,
     ) -> MeshResult:
-        """Candidate rows for a phrase, within one declared collection and domain.
+        """Candidate rows for a phrase, within one collection and across the given domains.
+
+        ``domains`` IS A SEQUENCE AND THE SINGULAR FORM WOULD BE A REGRESSION. Both live call
+        sites scope by a LIST, and the single-string parameter is the one that was SUPERSEDED
+        (2026-06-28) and kept only for backward compatibility. The filter is an OR across the
+        listed domains: **the candidate pool spans every domain the caller is entitled to, and
+        the ranking picks the best across the union.** An empty sequence means no domain filter,
+        which is also where ADR-0009's ``domains == []`` clause lives for the predicate
+        collection — expressible here, and not expressible with a singular.
+
+        **THE LOOP-AND-MERGE WORKAROUND IS A RANKING CHANGE, NOT AN ERGONOMIC ONE**, which is why
+        this is a Protocol-level decision rather than a caller's convenience. One hybrid search
+        over three domains returns ONE list scored against one query. Three searches merged
+        client-side return three separately-ranked lists whose scores **are not comparable across
+        calls**, and the caller has no basis on which to interleave them — the same
+        scores-mean-different-things-at-different-doors defect this fleet has already paid for,
+        built into the interface instead of stumbled into. It is also N× the embedding cost for
+        one phrase.
 
         **THE RETURN CARRIES ``mode``, AND THAT IS THE WHOLE POINT OF THIS OPERATION'S SHAPE.**
         Both call sites today wrap the embed in ``try/except`` and fall back to BM25, printing to

@@ -211,3 +211,23 @@ def test_the_sdk_imports_no_driver_and_no_implementation():
         banned = {"neo4j", "weaviate", "rdflib", "SPARQLWrapper", "langfuse", "httpx", "urllib"}
         hits = {m for m in imported for b in banned if m == b or m.startswith(b + ".")}
         assert not hits, f"{mod} imports {sorted(hits)} — the SDK owns interfaces only"
+
+
+def test_nominate_scopes_by_a_SEQUENCE_of_domains_not_a_single_one():
+    """A REGRESSION GUARD, because the singular reads as the simpler design and is the form that
+    was superseded (2026-06-28).
+
+    Both live call sites scope by a list. Reverting to a single string would force loop-and-merge
+    at the caller, and that is a RANKING change rather than an ergonomic one: three searches
+    return three separately-ranked lists whose scores are not comparable across calls, so the
+    caller has no basis on which to interleave them. It is also N× the embedding cost for one
+    phrase, and it makes ADR-0009's `domains == []` clause inexpressible.
+    """
+    import inspect
+
+    sig = inspect.signature(MeshVectors.nominate)
+    assert "domains" in sig.parameters, "nominate must scope by a sequence of domains"
+    assert "domain" not in sig.parameters, (
+        "the singular `domain` was superseded; keeping it invites the loop-and-merge workaround"
+    )
+    assert sig.parameters["domains"].default == (), "an empty sequence means no domain filter"
