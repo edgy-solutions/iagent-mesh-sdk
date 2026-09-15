@@ -241,7 +241,35 @@ class MeshVectors(Protocol):
 
     @property
     def embedding_model(self) -> str:
-        """The model this implementation embeds with. Asserted against the collection's."""
+        """The model this implementation embeds with. **Declared here; only PARTLY checkable.**
+
+        ⚠ WHAT THE STORE RECORDS, measured against live Weaviate rather than assumed: both
+        collections report ``vectorizer: None``, ``moduleConfig: {}`` and **no property recording
+        a model**. The stored vector DIMENSION (768) is the only thing derivable. That follows
+        from Weaviate being dumb storage here, but the consequence for this contract is the part
+        worth stating: **there is nothing on the collection to compare a model name against.**
+
+        So a conformance arm phrased *"verifies its model against the collection's"* would have
+        exactly one way to be satisfied — **the implementation comparing its own constant to its
+        own constant, and passing.** Green, vacuous, and indistinguishable from a real check: a
+        legal input that makes two behaviours identical, arriving on the arm meant to prevent
+        exactly that.
+
+        **WHAT CONFORMANCE ASSERTS TODAY** is therefore the dimension, before searching, plus
+        this declaration — see :func:`iagent_mesh.conformance.check_embedding_contract`. It
+        catches a model swap **only when the dimensions differ**, and the weak half is named
+        rather than implied: the fleet's own constant carries the warning that vectors stored
+        under an old model *"are not numerically compatible with vectors from a new model, even
+        if the dimensions match"*. The silent case is the one that matters and this does not
+        reach it.
+
+        **THE UPGRADE PATH IS A WRITER-SIDE CHANGE AND IT IS NOT THIS SDK'S TO MAKE.** The
+        collections are written by the doc-tools sync; readers only read. For this property to be
+        genuinely assertable the WRITER must record the model it embedded with — a property per
+        object, or one marker object per collection. **Named here, with its owner, so it is a
+        known gap rather than a vacuous green** — no implementation on the reading side can
+        create what it needs to check against.
+        """
 
     def nominate(
         self,

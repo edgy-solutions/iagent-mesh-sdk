@@ -27,6 +27,7 @@ from .interfaces import Initiator, ServiceIdentityRefused
 from .results import MeshResult
 
 __all__ = [
+    "check_embedding_contract",
     "ConformanceFailure",
     "assert_fixture_discriminates",
     "check_offline",
@@ -160,3 +161,45 @@ def check_live(
         _fail(operation, "recorded no provenance for a completed read. The abstraction records "
                          "it, not the engine remembering to — an implementation that leaves it "
                          "to the caller has moved the property back to where it was lost")
+
+
+def check_embedding_contract(
+    *,
+    operation: str,
+    declared_model: str,
+    expected_dimension: int,
+    read_stored_dimension: Callable[[], Optional[int]],
+) -> None:
+    """The embedding half of :class:`~iagent_mesh.interfaces.MeshVectors`, asserted HONESTLY.
+
+    **THIS ARM DELIBERATELY DOES NOT CLAIM TO CHECK THE MODEL.** Nothing on the collection records
+    which model produced the stored vectors — measured, not assumed: ``vectorizer: None``,
+    ``moduleConfig: {}``, no model property. An arm phrased "verify the model against the
+    collection" would be satisfied by an implementation comparing its own constant to its own
+    constant, which is a vacuous green wearing a real check's name.
+
+    So it asserts the two things that exist:
+
+    * the implementation DECLARES a model (so the value is at least present and nameable), and
+    * the stored DIMENSION matches what the implementation expects, checked BEFORE searching.
+
+    **THE LIMIT IS PART OF THE CONTRACT, not a caveat on it.** A dimension check catches a model
+    swap only when the dimensions differ. The fleet's own constant warns that vectors stored under
+    one model *"are not numerically compatible with vectors from a new model, even if the
+    dimensions match"* — so the silent case is the one that matters and this does not reach it.
+    Upgrading this into a real check needs the WRITER to record its model per collection, which is
+    the doc-tools sync's change and is named in the Protocol with its owner.
+    """
+    if not (declared_model or "").strip():
+        _fail(operation, "declared no embedding model — the value is the only handle a future "
+                         "writer-side check will have, so an unnamed model cannot be upgraded")
+
+    stored = read_stored_dimension()
+    if stored is None:
+        _fail(operation, "could not read the stored vector dimension. That is not 'the collection "
+                         "is empty' — it is the one check available today failing to run, and a "
+                         "skipped check reads exactly like a passed one")
+    if stored != expected_dimension:
+        _fail(operation, f"stored vectors are {stored}-dimensional and this implementation embeds "
+                         f"at {expected_dimension}. Searching would compare vectors from two "
+                         f"different models against one index")
