@@ -56,18 +56,41 @@ def test_the_parameter_the_sdk_targets_still_EXISTS():
     )
 
 
-def test_the_client_still_takes_no_caller_object():
-    """Records that the SDK must pass a STRING subject, not a `CallerIdentity`.
+def test_dag_tools_NOW_OFFERS_the_caller_object_and_the_bridge_is_owed_a_simplification():
+    """THIS TRIPWIRE HAS FIRED. It replaces `test_the_client_still_takes_no_caller_object`.
 
-    The handoff sketched `CortexDataClient(caller=caller)` as a nicer target. It does not exist
-    yet, so the SDK bridges with the string the current client accepts. When dag-tools grows a
-    `caller=`/`authz_id=` parameter this test goes red — which is the signal to simplify the
-    documented bridge, not a defect.
+    That test asserted `caller`/`authz_id` were ABSENT and said so on purpose: "when dag-tools
+    grows a `caller=`/`authz_id=` parameter this test goes red — which is the signal to simplify
+    the documented bridge, NOT a defect." dag-tools has grown `caller=` (alongside
+    `service_identity=`), so the red was the notification working. It was twice misread as a
+    local-environment failure, which is exactly what a tripwire whose red looks like every other
+    red will get.
+
+    Flipped to the POSITIVE assertion, so the seal keeps working in the new direction: if
+    dag-tools reverts `caller=`, this reds and the bridge migration below must not proceed.
+
+    ── WHY THE SIMPLIFICATION IS WORTH DOING, and why it is not done here ──────────────────
+    The current bridge is `originator_email=caller.require_authz_id()`. It is SAFE, but the
+    safety lives in the author remembering `require_`: the obvious-looking
+    `originator_email=caller.authz_id` passes None, and None does not raise — it falls through
+    dag-tools' rungs to the service identity (see transport_auth.py:284, which documents exactly
+    this). Passing `caller=` moves that refusal into dag-tools, which raises `CallerUnresolved`
+    rather than reading as the service. The footgun stops depending on a naming convention.
+
+    NOT DONE HERE because it is a fleet-facing guidance change across ~8 documented sites
+    (docs/jupyter_guide.md, docs/HANDOFF-meshtool-execute.md, core.py, transport_auth.py, two
+    templates) AND it introduces a dag-tools version floor that this SDK currently has no way to
+    state — it does not depend on dag-tools at all; the bridge is documentation. Handler authors
+    on an older dag-tools would get a TypeError. That needs the architect, not a test author.
     """
     kwargs = _init_kwargs()
-    assert "caller" not in kwargs and "authz_id" not in kwargs, (
-        f"CortexDataClient grew a caller-shaped parameter ({kwargs}) — revisit the bridge "
-        "documented in docs/jupyter_guide.md and MeshTool.execute's docstring"
+    assert "caller" in kwargs, (
+        f"dag-tools no longer offers `caller=` ({kwargs}) — it did when this was written. If it "
+        f"was reverted, the documented bridge must STAY on originator_email=require_authz_id()"
+    )
+    assert "originator_email" in kwargs, (
+        "the string bridge must remain until the documented migration lands, or every handler "
+        "still following docs/jupyter_guide.md breaks"
     )
 
 
