@@ -1,6 +1,6 @@
 """The result type's job is to make two values that were identical distinguishable.
 
-Across five call sites today a substrate FAILURE and a legitimate EMPTY are the same value —
+Across THREE basis sites a substrate FAILURE and a legitimate EMPTY are the same value —
 `[]`. Every consequence downstream (a confident zero on a dashboard, a refusal read as an
 abstention, sixty-seven days of silent BM25) is that one collapse wearing a different cost.
 
@@ -153,4 +153,42 @@ def test_a_DEGRADED_mode_is_expressible_on_a_successful_read():
 
 
 def test_mode_is_absent_where_there_is_no_mode():
+    assert MeshResult.answered([1]).mode is None
+
+
+# ── the mode's spelling ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("bad", ["BM25", " bm25", "bm25 ", "Hybrid", "BM25 "])
+def test_a_non_normalised_mode_is_REFUSED_not_corrected(bad):
+    """A consumer writes `result.mode == "bm25"`. An implementation writing "BM25" produces a
+    mode NOBODY CAN MATCH — the same invisibility the field exists to end, one level up.
+
+    Refused rather than normalised on purpose: `strip().lower()` would silently rewrite the
+    caller's value, which is a silent correction inside a type built to end silent corrections.
+    """
+    with pytest.raises(Exception, match="not normalised|mode="):
+        MeshResult.answered([1], mode=bad)
+
+
+def test_an_empty_mode_is_refused_because_it_is_not_NO_mode():
+    with pytest.raises(Exception, match="empty mode|Omit"):
+        MeshResult.answered([1], mode="   ")
+
+
+def test_the_refusal_NAMES_the_spelling_it_wanted():
+    """A refusal that does not say what to write instead is a puzzle, not a diagnostic."""
+    with pytest.raises(Exception, match="'bm25'"):
+        MeshResult.answered([1], mode="BM25")
+
+
+def test_THE_VOCABULARY_IS_NOT_CLOSED():
+    """POSITIVE CONTROL, and the point of validating spelling rather than membership. A mode
+    this SDK has never heard of must pass — the vocabulary is per-interface, and a central enum
+    would make every new mode an SDK release."""
+    r = MeshResult.answered([1], mode="a_mode_invented_next_year")
+    assert r.mode == "a_mode_invented_next_year"
+
+
+def test_a_normalised_mode_and_an_absent_mode_both_pass():
+    assert MeshResult.answered([1], mode="bm25").mode == "bm25"
     assert MeshResult.answered([1]).mode is None

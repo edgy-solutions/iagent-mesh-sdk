@@ -68,7 +68,7 @@ from __future__ import annotations
 
 from typing import Generic, Literal, Optional, Sequence, TypeVar
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 __all__ = [
     "OUTCOMES",
@@ -109,11 +109,45 @@ class MeshResult(BaseModel, Generic[T]):
     """HOW it was answered, where a mode exists — ``hybrid``/``bm25`` for a vector search, absent
     for a read with only one way to answer. **A degraded mode must be NAMED here rather than
     served silently**: sixty-seven days of BM25-only with nothing in any result saying so is what
-    this field exists to make impossible."""
+    this field exists to make impossible.
+
+    THE VOCABULARY IS NOT CLOSED HERE, AND DELIBERATELY SO. It is per-interface — ``hybrid``/
+    ``bm25`` for vectors, none at all for a read with one way to answer, something else later —
+    so a central enum would make every new mode an SDK release and put the vocabulary somewhere
+    other than the interface that owns it. Each Protocol declares its own, and the conformance
+    suite asserts an implementation emits only declared values.
+
+    WHAT *IS* ENFORCED IS THE SPELLING, because a consumer writes ``result.mode == "bm25"`` and
+    an implementation writing ``"BM25"``, ``" bm25"`` or ``"bm25 "`` produces **a mode nobody can
+    match** — the same invisibility this field exists to end, one level up. This fleet has paid
+    for that shape twice with IRI prefixes, where an unknown prefix passes through verbatim,
+    registers cleanly and matches nothing.
+
+    IT REFUSES RATHER THAN NORMALISING, and that is the choice worth defending. ``strip().lower()``
+    would silently rewrite a caller's ``"BM25"`` into ``"bm25"`` — **a silent correction, inside a
+    type built to end silent corrections.** A typo is the implementer's to fix, and a refusal is
+    how they find out they made one."""
 
     detail: Optional[str] = None
     """Why, for a failure. Required on ``failed`` and ``unreachable`` — a failure with no reason
     reaches an operator as "something went wrong" and is the reason these went unnoticed."""
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_is_already_normalised(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError(
+                "mode='' — an empty mode is not 'no mode'. Omit the field, or name the mode"
+            )
+        if v != v.strip().lower():
+            raise ValueError(
+                f"mode={v!r} is not normalised — write {v.strip().lower()!r}. Refused rather "
+                f"than corrected: a consumer matches on this string, so a silently rewritten "
+                f"spelling is a mode nobody can read, which is the defect this field prevents"
+            )
+        return v
 
     @model_validator(mode="after")
     def _states_are_coherent(self) -> "MeshResult[T]":
