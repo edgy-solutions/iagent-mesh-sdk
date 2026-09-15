@@ -24,10 +24,12 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence
 
 from .interfaces import (
-    EMBEDDING_METADATA_KEY,
+    EMBEDDING_STAMP_SENTINEL,
+    CorruptEmbeddingStamp,
     Initiator,
     ServiceIdentityRefused,
     read_embedding_stamp,
+    stamp_description,
 )
 from .results import MeshResult
 
@@ -176,7 +178,7 @@ def check_embedding_contract(
     expected_dimension: int,
     read_stored_dimension: Callable[[], Optional[int]],
     declared_version: str = "",
-    read_collection_metadata: Callable[[], Optional[dict]] = lambda: None,
+    read_collection_description: Callable[[], Optional[str]] = lambda: None,
     report_gap: Optional[Callable[[str], None]] = None,
 ) -> None:
     """The embedding contract, AT OPEN, in three states — and the third is the one that bites.
@@ -213,20 +215,26 @@ def check_embedding_contract(
                          f"at {expected_dimension}. Searching would compare vectors from two "
                          f"different models against one index")
 
-    stamp = read_embedding_stamp(read_collection_metadata())
+    try:
+        stamp = read_embedding_stamp(read_collection_description())
+    except CorruptEmbeddingStamp as exc:
+        # OUR SENTINEL, DAMAGED. Distinct from absent on purpose: nobody wrote one is a gap,
+        # something wrote over ours is a failure, and they want opposite behaviours.
+        _fail(operation, str(exc))
+
     if stamp is None:
-        # ABSENT *AND* MALFORMED LAND HERE, deliberately. A half-written stamp is no more
-        # evidence of agreement than no stamp, and a reader that told them apart would be
-        # tempted to treat one as a partial match.
+        # ABSENT — and that includes a human's prose, which MUST NOT read as a mismatch. A
+        # reader that refused on unparseable prose would take routing down the first time
+        # someone documented a collection, which is worse than the defect being fixed.
         if report_gap is None:
-            _fail(operation, "collection metadata carries no readable embedding stamp and no gap "
-                             "reporter was supplied. ABSENT IS NOT MATCHING — an implementation "
-                             "that opens silently here has restored the self-comparison this arm "
-                             "exists to prevent")
+            _fail(operation, "the collection carries no embedding stamp and no gap reporter was "
+                             "supplied. ABSENT IS NOT MATCHING — an implementation that opens "
+                             "silently here has restored the self-comparison this arm exists to "
+                             "prevent")
         report_gap(
-            f"{operation}: the collection carries no readable {EMBEDDING_METADATA_KEY!r} stamp, "
-            f"so {declared_model!r}@{declared_version!r} could not be verified against it. "
-            f"Opened anyway; the writer records this at create-or-first-write."
+            f"{operation}: the collection carries no {EMBEDDING_STAMP_SENTINEL} stamp, so "
+            f"{declared_model!r}@{declared_version!r} could not be verified against it. Opened "
+            f"anyway; the writer records this at create-or-first-write."
         )
         return
 
@@ -236,18 +244,28 @@ def check_embedding_contract(
                          f"Refusing at OPEN, before a vector is read or written")
 
 
-def check_writer_stamp(recorded: dict) -> None:
-    """A WRITER is admitted only if what it records is readable under the declared key.
+def check_writer_stamp(*, existing_description: Optional[str], model: str, version: str) -> None:
+    """A WRITER is admitted only if what it records is readable AND preserves what was there.
 
-    The ruling's teeth: a writer recording under a key of its own choosing fails admission, and
-    so does a reader looking under one. Both sides conform to the Protocol's declaration rather
-    than to each other — a key two lanes agree on is an agreement enforced by remembering, which
-    is the defect this stamp closes.
+    Two properties, and the second is the one an implementer would skip. ``description`` is a
+    human-facing prose field; a writer that overwrites it destroys documentation silently, on
+    every run, and nothing fails. The contract COEXISTS with prose rather than owning the field,
+    so admission checks that the prose survived.
     """
-    if EMBEDDING_METADATA_KEY not in (recorded or {}):
-        _fail("writer stamp", f"recorded no {EMBEDDING_METADATA_KEY!r} entry. The key is declared "
-                              f"by the contract, not chosen by the writer")
-    if read_embedding_stamp(recorded) is None:
-        _fail("writer stamp", f"recorded {EMBEDDING_METADATA_KEY!r} in a shape the contract's own "
-                              f"reader cannot parse — a stamp only the writer understands is a "
-                              f"stamp nobody can check")
+    written = stamp_description(existing_description, model, version)
+
+    try:
+        stamp = read_embedding_stamp(written)
+    except CorruptEmbeddingStamp as exc:
+        _fail("writer stamp", f"wrote something its own reader rejects: {exc}")
+    if stamp is None:
+        _fail("writer stamp", f"wrote no readable {EMBEDDING_STAMP_SENTINEL} stamp")
+    if (stamp.model, stamp.version) != (model, version):
+        _fail("writer stamp", f"wrote {stamp.model!r}@{stamp.version!r} for "
+                              f"{model!r}@{version!r} — the round trip does not hold")
+
+    for line in (existing_description or "").splitlines():
+        if line.strip() and not line.strip().startswith(EMBEDDING_STAMP_SENTINEL):
+            if line not in written:
+                _fail("writer stamp", f"destroyed existing prose {line!r}. description is a "
+                                      f"human-facing field and the stamp coexists with it")

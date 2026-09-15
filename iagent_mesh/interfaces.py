@@ -219,11 +219,24 @@ class MeshOntology(Protocol):
         """
 
 
-#: THE COLLECTION METADATA KEY — declared HERE, by the contract, not agreed between lanes.
-#: A key two implementations agree on is an agreement enforced by remembering, which is the exact
-#: defect this stamp exists to close; a key the Protocol declares is a contract both conform to,
-#: and conformance asserts it. Namespaced so it cannot collide with a store's own keys.
-EMBEDDING_METADATA_KEY = "iagent_mesh.embedding"
+#: THE STAMP'S SENTINEL. Declared here because there is NOWHERE ELSE TO PUT A KEY: two
+#: independent checks — the client's own API surface and the live server schema — agree that a
+#: collection exposes no free-form key/value field. ``description``, a single human-facing
+#: string, is the only carrier. So the contract declares an ENCODING, not a key name; a key name
+#: in the abstract would leave each implementation inventing a placement, which is this defect a
+#: third time inside the fix for the fix.
+#:
+#: The version in the sentinel is the STAMP FORMAT's, not the model's. It is what lets a future
+#: encoding change be detected rather than misparsed.
+EMBEDDING_STAMP_SENTINEL = "[iagent-mesh:embedding v1]"
+
+
+class CorruptEmbeddingStamp(ValueError):
+    """OUR sentinel is present and what follows it is not readable.
+
+    Deliberately NOT the same outcome as an absent stamp. Absent means nobody wrote one; this
+    means WE wrote one and it is damaged, which is a failure rather than a gap.
+    """
 
 
 class EmbeddingStamp(BaseModel):
@@ -247,34 +260,89 @@ class EmbeddingStamp(BaseModel):
         return v
 
 
-def embedding_stamp(model: str, version: str) -> dict:
-    """What a WRITER records at create-or-first-write. One implementation, both sides.
+def stamp_description(description: Optional[str], model: str, version: str) -> str:
+    """Write the stamp INTO a description, PRESERVING any prose already there.
 
-    A declared SHAPE would still leave two lanes writing two serialisers that agree by
-    convention — the packet's defect reproduced inside its fix. This function and
-    :func:`read_embedding_stamp` are that shape's only implementation, so the sides cannot
-    diverge without one of them failing conformance.
+    **THE CONTRACT COEXISTS WITH PROSE RATHER THAN OWNING THE FIELD — ruled, not defaulted.**
+    Owning ``description`` outright is simpler and would let a writer silently destroy a human's
+    documentation on its next run. ``description`` is a human-facing field by design; taking it
+    over is claiming someone else's surface to avoid writing one regex. Coexistence costs a line
+    and destroys nothing.
+
+    An existing stamp line is REPLACED rather than appended, so repeated writes do not accumulate
+    and the last writer's claim is the only one present.
+
+    ── THE WRITER'S BEHAVIOUR ON A FOREIGN DESCRIPTION IS DECLARED HERE: **MERGE.** ───────────
+    Never overwrite, never refuse. Both alternatives were considered and both are worse:
+
+    **REFUSE** turns a human's sentence into an ingest failure — and doc-tools' ingest is what
+    fills the substrate. That is *a check whose only remedy is prohibited*: it gets disabled, and
+    the rule goes with it. The blast radius makes it worse than the usual version of that trap.
+
+    **OVERWRITE** destroys documentation silently, on every run, with nothing red anywhere. The
+    reader cannot compensate — it sees our marker in a description and has no way to know prose
+    was there before — which is not a gap in the reader's half but proof the decision belongs on
+    this side.
+
+    **AND MERGE IS ENFORCED, NOT REQUESTED.** This is the only implementation of the encoding, so
+    a writer that merges is a writer that called it; and
+    :func:`iagent_mesh.conformance.check_writer_stamp` fails admission for any writer whose
+    output loses a line that was there before. Measured: a writer stubbed to overwrite is refused
+    with *"destroyed existing prose"*. So a tolerant reader cannot hide a prose-destroying writer,
+    because a prose-destroying writer cannot be admitted.
+
+    ── WHY THIS FIELD AND NOT A SEPARATE `CollectionMetadata` COLLECTION ──────────────────────
+    A marker object in its own collection avoids prose entirely and was the strongest
+    alternative. It is rejected on LIFETIME: a description **dies with the collection it
+    describes**, while a separate marker outlives a recreated collection and becomes a confident
+    statement about vectors that no longer exist — a stale record that reads exactly like a
+    current one, which is the failure mode this entire stamp exists to end. (A marker object
+    *inside* `OntologyClass` or `Predicate` is worse still: it would be a candidate in hybrid
+    search.)
     """
     stamp = EmbeddingStamp(model=model, version=version)
-    return {EMBEDDING_METADATA_KEY: {"model": stamp.model, "version": stamp.version}}
+    line = f'{EMBEDDING_STAMP_SENTINEL} {{"model": "{stamp.model}", "version": "{stamp.version}"}}'
+    kept = [ln for ln in (description or "").splitlines()
+            if not ln.strip().startswith(EMBEDDING_STAMP_SENTINEL)]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    return chr(10).join([*kept, line]) if kept else line
 
 
-def read_embedding_stamp(metadata: Optional[dict]) -> Optional[EmbeddingStamp]:
-    """What a READER parses. ``None`` means ABSENT — never "matches".
+def read_embedding_stamp(description: Optional[str]) -> Optional[EmbeddingStamp]:
+    """Read the stamp out of a description. ``None`` means ABSENT — never "matches".
 
-    Absent and malformed are deliberately the SAME answer here (``None``) and the caller reports
-    the gap either way: a half-written stamp is no more evidence of agreement than no stamp, and
-    a reader that distinguished them would be tempted to treat one as a partial match.
+    **FOUR STATES, AND THE FOURTH IS WHY THE ENCODING IS SELF-IDENTIFYING.** ``description`` is
+    prose that a person may edit at any time, so the reader must decide *ours* or *not ours*
+    without guessing:
+
+        no sentinel      -> ABSENT. Covers an empty field AND a human's prose. Open, report once.
+        sentinel, valid  -> compare model and version.
+        sentinel, broken -> :class:`CorruptEmbeddingStamp`. OUR record, damaged.
+
+    **"NOT OURS" MUST COLLAPSE TO ABSENT, NEVER TO MISMATCH.** If a person writes "The ontology
+    class collection" and a reader treats unparseable prose as a wrong model, it refuses — and
+    **someone documenting a collection takes routing down.** That is a worse defect than the one
+    being fixed and it is reachable the first time anyone writes a description.
     """
-    if not metadata:
+    if not description:
         return None
-    raw = metadata.get(EMBEDDING_METADATA_KEY)
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return EmbeddingStamp(**raw)
-    except Exception:  # noqa: BLE001 — a malformed stamp is an ABSENT stamp, not a crash
-        return None
+    for line in description.splitlines():
+        text = line.strip()
+        if not text.startswith(EMBEDDING_STAMP_SENTINEL):
+            continue
+        payload = text[len(EMBEDDING_STAMP_SENTINEL):].strip()
+        try:
+            import json
+
+            return EmbeddingStamp(**json.loads(payload))
+        except Exception as exc:  # noqa: BLE001
+            raise CorruptEmbeddingStamp(
+                f"the collection carries our sentinel {EMBEDDING_STAMP_SENTINEL!r} followed by "
+                f"{payload!r}, which is not a readable stamp. This is OUR record damaged, not an "
+                f"absent one — refusing rather than opening, because something wrote over it"
+            ) from exc
+    return None
 
 
 @runtime_checkable

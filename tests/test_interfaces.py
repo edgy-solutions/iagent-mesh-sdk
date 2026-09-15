@@ -233,101 +233,108 @@ def test_nominate_scopes_by_a_SEQUENCE_of_domains_not_a_single_one():
     assert sig.parameters["domains"].default == (), "an empty sequence means no domain filter"
 
 
-# ── the embedding contract: AT OPEN, three states, one declared key ──────────────────────
+# ── the embedding stamp: an ENCODING, because there is nowhere to put a key ──────────────
 
 from iagent_mesh.conformance import check_embedding_contract, check_writer_stamp  # noqa: E402
 from iagent_mesh.interfaces import (  # noqa: E402
-    EMBEDDING_METADATA_KEY,
-    embedding_stamp,
+    EMBEDDING_STAMP_SENTINEL,
+    CorruptEmbeddingStamp,
     read_embedding_stamp,
+    stamp_description,
 )
 
 _OK = dict(operation="nominate", declared_model="nomic-embed-text", declared_version="1.5",
            expected_dimension=768, read_stored_dimension=lambda: 768)
-_MATCHING = embedding_stamp("nomic-embed-text", "1.5")
+_MATCHING = stamp_description(None, "nomic-embed-text", "1.5")
+_PROSE = "The ontology class collection, maintained by the docs sync."
 
 
 def test_MATCHING_stamp_opens():
-    """POSITIVE CONTROL for the refusals below."""
-    check_embedding_contract(**_OK, read_collection_metadata=lambda: _MATCHING)
+    """POSITIVE CONTROL for every refusal below."""
+    check_embedding_contract(**_OK, read_collection_description=lambda: _MATCHING)
 
 
 def test_a_different_MODEL_refuses_at_open_naming_both():
     with pytest.raises(ConformanceFailure) as exc:
         check_embedding_contract(**_OK,
-                                 read_collection_metadata=lambda: embedding_stamp("other", "1.5"))
+                                 read_collection_description=lambda: stamp_description(None, "other", "1.5"))
     assert "other" in str(exc.value) and "nomic-embed-text" in str(exc.value)
-    assert "OPEN" in str(exc.value)
 
 
 def test_a_different_VERSION_refuses_too():
-    """VERSION IS NOT DECORATION. A re-trained model spells the same and produces vectors that
-    are not numerically compatible with the stored ones."""
-    with pytest.raises(ConformanceFailure, match="2.0|1.5"):
+    """A re-trained model spells the same and produces incompatible vectors."""
+    with pytest.raises(ConformanceFailure, match="2.0"):
         check_embedding_contract(**_OK,
-                                 read_collection_metadata=lambda: embedding_stamp("nomic-embed-text", "2.0"))
+                                 read_collection_description=lambda: stamp_description(None, "nomic-embed-text", "2.0"))
 
 
-def test_ABSENT_stamp_opens_but_REPORTS_THE_GAP():
+def test_HUMAN_PROSE_reads_as_ABSENT_and_never_as_a_mismatch():
+    """THE FOURTH STATE, AND THE REASON THE ENCODING IS SELF-IDENTIFYING.
+
+    `description` is a prose field a person may edit at any time. A reader that treated
+    unparseable prose as a wrong model would REFUSE — and someone documenting a collection would
+    take routing down. That is worse than the defect being fixed and reachable the first time
+    anyone writes a description.
+    """
     reported = []
-    check_embedding_contract(**_OK, read_collection_metadata=lambda: None,
-                             report_gap=reported.append)
-    assert len(reported) == 1 and EMBEDDING_METADATA_KEY in reported[0]
-
-
-def test_a_MALFORMED_stamp_is_treated_as_ABSENT_not_as_a_partial_match():
-    """A half-written stamp is no more evidence of agreement than no stamp."""
-    reported = []
-    check_embedding_contract(**_OK,
-                             read_collection_metadata=lambda: {EMBEDDING_METADATA_KEY: {"model": "x"}},
+    check_embedding_contract(**_OK, read_collection_description=lambda: _PROSE,
                              report_gap=reported.append)
     assert len(reported) == 1
 
 
+def test_OUR_SENTINEL_DAMAGED_is_a_REFUSAL_not_an_absence():
+    """Distinct from prose on purpose: nobody wrote one is a gap; something wrote over OURS is a
+    failure, and the two want opposite behaviours."""
+    corrupt = f"{EMBEDDING_STAMP_SENTINEL} not-json-at-all"
+    with pytest.raises(ConformanceFailure, match="damaged|not a readable stamp"):
+        check_embedding_contract(**_OK, read_collection_description=lambda: corrupt,
+                                 report_gap=lambda _m: None)
+
+
 def test_ABSENT_with_NO_reporter_is_a_FAILURE():
-    """Absent is not matching — opening silently restores the self-comparison."""
     with pytest.raises(ConformanceFailure, match="ABSENT IS NOT MATCHING"):
-        check_embedding_contract(**_OK, read_collection_metadata=lambda: None)
+        check_embedding_contract(**_OK, read_collection_description=lambda: None)
 
 
 def test_the_embedding_arm_catches_a_dimension_mismatch():
     with pytest.raises(ConformanceFailure, match="two different models"):
         check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
                                  expected_dimension=768, read_stored_dimension=lambda: 1536,
-                                 read_collection_metadata=lambda: _MATCHING)
+                                 read_collection_description=lambda: _MATCHING)
 
 
 def test_an_UNREADABLE_dimension_is_a_failure_not_an_empty_collection():
     with pytest.raises(ConformanceFailure, match="failing to run"):
         check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
                                  expected_dimension=768, read_stored_dimension=lambda: None,
-                                 read_collection_metadata=lambda: _MATCHING)
+                                 read_collection_description=lambda: _MATCHING)
 
 
-# ── the key is a CONTRACT, not an agreement between two lanes ────────────────────────────
+# ── the writer COEXISTS with prose rather than owning the field ──────────────────────────
 
-def test_a_writer_recording_under_ITS_OWN_KEY_fails_admission():
-    """THE RULING'S TEETH. Two lanes agreeing on a key is an agreement enforced by remembering —
-    the defect this stamp closes, reproduced inside its own fix."""
-    with pytest.raises(ConformanceFailure, match="declared by the contract"):
-        check_writer_stamp({"embedding_info": {"model": "nomic-embed-text", "version": "1.5"}})
-
-
-def test_a_writer_recording_an_UNPARSEABLE_shape_fails_admission():
-    """A stamp only the writer understands is a stamp nobody can check."""
-    with pytest.raises(ConformanceFailure, match="cannot parse"):
-        check_writer_stamp({EMBEDDING_METADATA_KEY: "nomic-embed-text@1.5"})
+def test_a_conforming_writer_is_admitted_and_the_round_trip_holds():
+    """POSITIVE CONTROL. One implementation of the shape: what the writer produces is what the
+    reader parses, so the two sides cannot diverge by agreeing on a spec separately."""
+    check_writer_stamp(existing_description=None, model="nomic-embed-text", version="1.5")
+    check_writer_stamp(existing_description=_PROSE, model="nomic-embed-text", version="1.5")
 
 
-def test_a_conforming_writer_is_admitted():
-    """POSITIVE CONTROL, and the round trip: what the writer helper produces is what the reader
-    helper parses. ONE implementation of the shape, so the sides cannot diverge."""
-    check_writer_stamp(embedding_stamp("nomic-embed-text", "1.5"))
-    stamp = read_embedding_stamp(embedding_stamp("nomic-embed-text", "1.5"))
-    assert (stamp.model, stamp.version) == ("nomic-embed-text", "1.5")
+def test_the_writer_PRESERVES_a_humans_prose():
+    """RULED, not defaulted. Owning `description` outright is simpler and destroys documentation
+    silently on every run, with nothing failing."""
+    written = stamp_description(_PROSE, "nomic-embed-text", "1.5")
+    assert _PROSE in written
+    assert read_embedding_stamp(written).model == "nomic-embed-text"
+
+
+def test_RE_STAMPING_replaces_rather_than_accumulates():
+    once = stamp_description(_PROSE, "nomic-embed-text", "1.5")
+    twice = stamp_description(once, "nomic-embed-text", "2.0")
+    assert twice.count(EMBEDDING_STAMP_SENTINEL) == 1, "stamps must not pile up"
+    assert read_embedding_stamp(twice).version == "2.0"
+    assert _PROSE in twice
 
 
 def test_a_stamp_with_an_EMPTY_half_is_refused_at_construction():
-    """A name with no version cannot discriminate a re-trained model from the stored one."""
     with pytest.raises(Exception, match="model and a version"):
-        embedding_stamp("nomic-embed-text", "")
+        stamp_description(None, "nomic-embed-text", "")
