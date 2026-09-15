@@ -69,8 +69,19 @@
 >
 > Bridge to the data plane is `originator_email=caller.require_authz_id()` — dag-tools'
 > `CortexDataClient` takes a string subject, carried opaque, so employee-id deployments work
-> unchanged. `caller=` was not adopted because that parameter does not exist in dag-tools yet;
-> `test_cortex_data_client_contract.py` watches its real source and goes red when it appears.
+> unchanged.
+>
+> **UPDATED 2026-09-15 — the sentence here previously read "`caller=` was not adopted because
+> that parameter does not exist in dag-tools yet". IT NOW EXISTS.**
+> `test_cortex_data_client_contract.py` was watching dag-tools' real source for exactly that
+> and went red when it appeared — the tripwire worked; it was twice misread as an
+> environment failure before anyone read what it asserted.
+>
+> The bridge STAYS on the string form, for a different reason than the original one: this SDK
+> does not depend on dag-tools, so it cannot state a dag-tools version floor, and telling
+> authors to write `caller=` would hand a `TypeError` to everyone on an older version. The
+> migration is pulled by the consumer's pin, not pushed from here. Full reasoning — single
+> home — in `docs/jupyter_guide.md` § "Why not `CortexDataClient(caller=caller)`?".
 
 **To:** whoever owns `iagent-mesh-sdk`
 **From:** the ADR-0044 / mesh-read session, 2026-08-27

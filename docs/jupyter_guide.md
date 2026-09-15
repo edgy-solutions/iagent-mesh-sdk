@@ -156,6 +156,30 @@ def detect_anomalies(data: AnomalyInput, caller: CallerIdentity) -> AnomalyOutpu
 the sandbox, an employee id at work. Prefer `require_authz_id()` at a **read**; use the plain
 `.authz_id` (which may be `None`) only for logging.
 
+### Why not `CortexDataClient(caller=caller)`?
+
+Because it would be **simpler and it is not yet ours to do.** Recent dag-tools accepts a
+`caller=` parameter that is genuinely better than the string bridge above: passing the object
+moves the refusal into dag-tools, which raises `CallerUnresolved` on an unresolved caller. The
+string form is safe only while the author remembers `require_`, because the obvious-looking
+`originator_email=caller.authz_id` passes `None`, and `None` does not raise — it falls through
+dag-tools' identity rungs and reads as the **service**. Moving the refusal out of the naming
+convention is worth doing.
+
+**What stops it is the direction of the dependency, not indecision.** This SDK does not depend
+on dag-tools — the bridge is documentation, not an import — so it has **no way to state a
+dag-tools version floor**. If this guide told you to write `caller=`, every handler author on an
+older dag-tools would get a `TypeError` from a change made for their safety: a guard that gets
+uninstalled.
+
+**So the migration is pulled, not pushed.** dag-tools declares its SDK floor; the consumer pins
+the provider; and the bridge simplifies when that pin moves. It is waiting on the consumer's
+pin — the only place the precondition can actually be expressed — rather than on anyone
+deciding. Until then the string form above is correct, not legacy.
+
+Pinned by `tests/test_cortex_data_client_contract.py`, which reds if dag-tools ever **removes**
+`caller=` (that would invalidate the migration) and which caught its arrival in the first place.
+
 If the client is built several frames below your handler, `current_caller()` reads the same
 identity without threading a parameter through:
 
