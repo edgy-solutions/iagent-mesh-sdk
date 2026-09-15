@@ -1,14 +1,30 @@
-"""`import iagent_mesh` must not require a web framework.
+"""The SDK's CLIENT surface must import AND RUN without a web framework.
 
-Before 2026-09-15 it did: `__init__.py` eagerly imported `transport_auth`, which imports
-`fastapi` unguarded. Every consumer paid for the server stack — including the ones that never
+Before 2026-09-15 it could not: `__init__.py` eagerly imported `transport_auth`, which imports
+`fastapi` unguarded, so every consumer paid for the server stack — including the ones that never
 serve anything, which are exactly the consumers a lightweight install exists for.
 
-AND IT IS WHY AN `extra` ALONE WOULD HAVE BEEN WORSE THAN NOTHING. Moving the server stack behind
-an optional extra with the eager import still in place does not make anyone lighter; it makes
-`import iagent_mesh` FAIL for precisely the non-web consumers the extra was written to serve.
-Every engine in the fleet already depends on fastapi and would not have noticed. The obvious half
-is a footgun without the half underneath it.
+── THE FIRST FIX WAS WRONG, AND THIS FILE IS SHAPED BY WHY ─────────────────────────────────
+It made `__init__` lazy (PEP 562) so the eager import went away. But `current_caller` is
+EXPORTED FROM the fastapi-importing module. Deferring the import does not remove the dependency,
+it moves the failure from `import iagent_mesh` to the FIRST CALL of the function a non-web
+consumer installed the SDK for. Same outcome, later, harder to diagnose.
+
+So the arm that decides this file is not `test_importing...` — an import-only seal passes under
+BOTH the broken lazy shape and the correct one. It is `test_current_caller_is_CALLABLE...`
+below, which the lazy shape fails. An import seal over a lazy module measures deferral, not
+independence.
+
+The real split is inside `transport_auth`: `CallerIdentity` and `current_caller` touch no
+fastapi symbol; only the server dependency factory does. Guarding the import THERE is the fix.
+
+── WHY AN `extra` ALONE WOULD HAVE BEEN WORSE THAN NOTHING ─────────────────────────────────
+Moving fastapi behind an optional extra with the import unguarded does not make anyone lighter;
+it makes the SDK fail for precisely the non-web consumers the extra was written to serve. Every
+engine in the fleet already depends on fastapi and would not have noticed. And the failure is
+not always loud: dag-tools soft-imports `current_caller` inside a bare `except`, where a missing
+transitive is indistinguishable from an absent SDK — see the commit message. The obvious half is
+a footgun without the half underneath it.
 """
 from __future__ import annotations
 
@@ -16,11 +32,9 @@ import subprocess
 import sys
 import textwrap
 
-import pytest
-
 
 def _run(snippet: str) -> subprocess.CompletedProcess:
-    """A SUBPROCESS, NOT `sys.modules` SURGERY IN-PROCESS. Poisoning `sys.modules` in the test
+    """A SUBPROCESS, NOT `sys.modules` surgery in-process. Poisoning `sys.modules` in the test
     process leaks into every later test in the session and the failure surfaces somewhere else
     entirely — a fixture whose blast radius is the rest of the suite."""
     return subprocess.run([sys.executable, "-c", textwrap.dedent(snippet)],
@@ -43,56 +57,107 @@ _BLOCK_FASTAPI = """
 """
 
 
+def test_THE_CONTROL_the_blocker_actually_blocks():
+    """A blocker that silently failed to block would make every arm below pass for the wrong
+    reason — green because fastapi was importable all along. The fixture must be shown to bite
+    before anything it fixtures is trusted, so it is stated FIRST."""
+    r = _run(_BLOCK_FASTAPI + """
+    import fastapi
+    """)
+    assert r.returncode != 0, "the blocker did not block — every arm below proves nothing"
+
+
 def test_importing_the_sdk_does_not_require_fastapi():
     r = _run(_BLOCK_FASTAPI + """
     import iagent_mesh
     print("OK", iagent_mesh.MeshClient.__name__)
     """)
     assert r.returncode == 0, (
-        f"`import iagent_mesh` still requires a web framework:\n{r.stderr[-600:]}"
+        f"`import iagent_mesh` still requires a web framework:\n{r.stderr[-800:]}"
     )
-    assert "OK MeshClient" in r.stdout, "the client surface must survive the lazy split"
+    assert "OK MeshClient" in r.stdout
 
 
-def test_THE_CONTROL_the_blocker_actually_blocks():
-    """A blocker that silently failed to block would make the arm above pass for the wrong
-    reason — green because fastapi was importable all along, not because the SDK stopped
-    needing it. The fixture must be shown to bite before it is trusted."""
+def test_current_caller_is_CALLABLE_without_fastapi_not_merely_IMPORTABLE():
+    """THE ARM THIS FILE EXISTS FOR.
+
+    A lazy `__init__` over an unguarded `transport_auth` passes the import arm above and FAILS
+    here — the dependency was deferred, not removed, and the failure lands on the first call
+    rather than at import. Nothing else in this file discriminates those two shapes.
+    """
     r = _run(_BLOCK_FASTAPI + """
-    import fastapi
+    from iagent_mesh import CallerIdentity, current_caller
+    assert current_caller() is None, "no request in scope reads as None, it does not raise"
+    ident = CallerIdentity("u@example.test", True, "ok")
+    assert ident.authz_id == "u@example.test"
+    print("CLIENT SURFACE RUNS")
     """)
-    assert r.returncode != 0, "the blocker did not block — the arm above proves nothing"
+    assert "CLIENT SURFACE RUNS" in r.stdout, (
+        f"the client surface imports but does not RUN without fastapi:\n{r.stderr[-800:]}"
+    )
 
 
-def test_the_server_surface_still_resolves_when_the_stack_is_present():
-    """POSITIVE CONTROL for the lazy split: the names stay importable for anyone who has the
-    server stack, and stay in `__all__`. Only the COST moved."""
-    import iagent_mesh
-
-    assert iagent_mesh.CallerIdentity is not None
-    assert iagent_mesh.current_caller is not None
-    assert "CallerIdentity" in iagent_mesh.__all__
-
-
-def test_the_server_surface_REFUSES_WITH_A_REASON_when_the_stack_is_absent():
-    """A bare ModuleNotFoundError names `fastapi` and leaves the reader to guess whether that is
-    a bug or a choice. The refusal says it is a choice and what to do about it."""
+def test_the_SERVER_factory_refuses_with_a_reason_when_the_stack_is_absent():
+    """A bare NameError on `Request` names nothing an operator can act on. The refusal must say
+    which half needs the framework, and that the other half deliberately does not."""
     r = _run(_BLOCK_FASTAPI + """
-    import iagent_mesh
+    from iagent_mesh.transport_auth import make_transport_auth_dependency
     try:
-        iagent_mesh.CallerIdentity
+        make_transport_auth_dependency("some-engine")
     except ModuleNotFoundError as exc:
-        assert "server surface" in str(exc), str(exc)
-        assert "on purpose" in str(exc), "the refusal must say the omission was deliberate"
+        msg = str(exc)
+        assert "SERVER half" in msg, msg
+        assert "CLIENT half" in msg, "the refusal must say the other half still works"
         print("REFUSED WELL")
     """)
-    assert "REFUSED WELL" in r.stdout, r.stderr[-600:]
+    assert "REFUSED WELL" in r.stdout, r.stderr[-800:]
 
 
-def test_an_unknown_attribute_is_still_an_AttributeError():
-    """PEP 562 `__getattr__` catches EVERY missed lookup, so a typo could have become a
-    confusing import error about a web framework."""
-    import iagent_mesh
+def test_the_REFUSAL_IS_AT_SETUP_not_per_request():
+    """An app that assembles successfully and then 500s on every request has moved a packaging
+    error into the traffic path. The factory must refuse while the app is being built."""
+    import inspect
 
-    with pytest.raises(AttributeError):
-        iagent_mesh.no_such_name
+    from iagent_mesh import transport_auth as ta
+
+    src = inspect.getsource(ta.make_transport_auth_dependency)
+    guard = src.index("_FASTAPI_MISSING is not None")
+    inner = src.index("async def transport_auth")
+    assert guard < inner, "the guard must fire before the per-request closure is even defined"
+
+
+# ── the regression this fix must not reintroduce ─────────────────────────────────────────
+
+def test_Request_STAYS_A_MODULE_GLOBAL():
+    """THE 422 OUTAGE GUARD, and the reason the fix REBINDS rather than RELOCATES.
+
+    `transport_auth` uses `from __future__ import annotations`, so `request: Request` is a STRING
+    that FastAPI resolves with typing.get_type_hints() against MODULE GLOBALS. A previous attempt
+    moved this import inside the factory; the name became a local, the string did not resolve,
+    FastAPI treated the parameter as a QUERY param, and every request 422'd — a fleet-wide outage
+    shipped as a library bump.
+
+    Guarding the import is safe precisely because it keeps the name a module global on BOTH
+    branches. If someone "simplifies" it back into the factory, this reds.
+    """
+    from iagent_mesh import transport_auth as ta
+
+    assert hasattr(ta, "Request"), (
+        "`Request` is no longer a module global — if it was moved into the factory, every "
+        "request will 422 with loc=['query','request']"
+    )
+    assert hasattr(ta, "HTTPException")
+
+
+def test_the_client_surface_names_no_fastapi_symbol():
+    """The claim underneath the whole split, asserted rather than assumed: if `current_caller`
+    ever grows a fastapi reference, the guarded import will hand it None at runtime."""
+    import inspect
+
+    from iagent_mesh import transport_auth as ta
+
+    src = inspect.getsource(ta.current_caller)
+    for symbol in ("HTTPException", "Request"):
+        assert symbol not in src, (
+            f"current_caller references {symbol} — it is no longer framework-free"
+        )

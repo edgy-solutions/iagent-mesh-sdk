@@ -63,13 +63,33 @@ import sys
 from contextvars import ContextVar
 from typing import Any, Optional
 
-# MODULE-LEVEL on purpose. This file uses `from __future__ import annotations`, so every
-# annotation is a STRING that FastAPI resolves via typing.get_type_hints() against MODULE
-# GLOBALS. Importing Request inside the factory made it a local, the string "Request" did
-# not resolve, and FastAPI fell back to treating the parameter as a QUERY param — every
-# request 422'd with {'loc': ['query','request']}. A dependency that 422s on every call is
-# a fleet-wide outage shipped as a library bump; the OBSERVE-serves tests caught it.
-from fastapi import HTTPException, Request
+# MODULE-LEVEL on purpose, and GUARDED — these are not in tension, they are the same
+# requirement stated twice.
+#
+# MODULE-LEVEL: this file uses `from __future__ import annotations`, so every annotation is a
+# STRING that FastAPI resolves via typing.get_type_hints() against MODULE GLOBALS. Importing
+# Request inside the factory made it a local, the string "Request" did not resolve, and FastAPI
+# fell back to treating the parameter as a QUERY param — every request 422'd with
+# {'loc': ['query','request']}. A dependency that 422s on every call is a fleet-wide outage
+# shipped as a library bump; the OBSERVE-serves tests caught it.
+#
+# GUARDED: `CallerIdentity` and `current_caller()` — the entire CLIENT surface of this module —
+# touch no fastapi symbol. Only the server-side dependency factory does. Leaving this import
+# unguarded made `import iagent_mesh` require a web framework, so a consumer that installed the
+# SDK for the client surface alone could not import it at all.
+#
+# THE INVARIANT THAT MAKES BOTH TRUE AT ONCE: `Request` stays a MODULE GLOBAL on both branches.
+# The guard REBINDS the name, it does not MOVE it. Do not "simplify" this into a function-local
+# import inside the factory — that is exactly the change that caused the 422 outage above, and
+# `from __future__ import annotations` is what makes that fail rather than what makes it safe.
+try:
+    from fastapi import HTTPException, Request
+except ImportError as _exc:  # the client surface below needs neither
+    HTTPException = None
+    Request = None
+    _FASTAPI_MISSING = getattr(_exc, "name", None) or "fastapi"
+else:
+    _FASTAPI_MISSING = None
 
 logger = logging.getLogger("iagent_mesh.transport_auth")
 
@@ -441,6 +461,20 @@ def make_transport_auth_dependency(component: str = "mesh-tool", exempt_paths=No
     app level the contextvar is the ONLY way the computed identity survives at all. It was being
     resolved, logged, and thrown away one frame before anyone could use it.
     """
+    if _FASTAPI_MISSING is not None:
+        raise ModuleNotFoundError(
+            f"make_transport_auth_dependency() builds a FastAPI dependency, which needs "
+            f"{_FASTAPI_MISSING!r} — and it is not installed. This is the SERVER half of "
+            f"iagent_mesh.transport_auth. The CLIENT half (CallerIdentity, current_caller) "
+            f"imports and works WITHOUT a web framework, on purpose, so that a consumer using "
+            f"the SDK to read a request-scoped caller is not made to install a web server to do "
+            f"it. Install the server stack to build dependencies: pip install fastapi. "
+            f"(NOTE: fastapi is still a HARD dependency of iagent-mesh as of this version, so "
+            f"reaching this error means an install is BROKEN rather than deliberately slim. The "
+            f"guard is here so that moving fastapi behind a `[server]` extra later is a safe "
+            f"packaging change instead of a silent one.)"
+        )
+
     async def transport_auth(request: Request) -> CallerIdentity:
         path = request.url.path
         exempt = tuple(exempt_paths) if exempt_paths is not None else _configured_exempt_paths()

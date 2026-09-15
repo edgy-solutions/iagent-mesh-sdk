@@ -13,53 +13,24 @@ from .shapes import (
 # Importing those from a module named `transport_auth` misfiles them as a transport concern —
 # they are the answer to "who is asking", which is the whole per-user read path.
 #
-# ── LAZY, BECAUSE THIS IMPORT MADE THE WHOLE SDK REQUIRE A WEB FRAMEWORK ────────────────────
-# `transport_auth` imports `fastapi` unguarded, and this line ran on `import iagent_mesh`. So
-# every consumer paid for the server stack, including the ones that never serve anything —
-# doc-tools, dag-tools and scripts that import the SDK for `mint_token` alone. Measured before
-# fixing: with `fastapi` absent, `import iagent_mesh` raised ModuleNotFoundError outright.
+# ── EAGER, AND THAT IS NOW CORRECT — THE FIX LIVES IN `transport_auth`, NOT HERE ─────────
+# This line once made `import iagent_mesh` require a web framework, because `transport_auth`
+# imported fastapi unguarded. It was briefly made lazy (PEP 562 `__getattr__`) to dodge that.
+# THAT FIX WAS WRONG, and the reason is worth keeping so nobody re-applies it:
 #
-# **THAT IS ALSO WHY AN `extra` ALONE WOULD HAVE BEEN A FOOTGUN RATHER THAN A NO-OP.** Moving
-# the server stack behind an optional extra, with this line still eager, does not make a
-# consumer lighter — it makes `import iagent_mesh` FAIL for exactly the consumers the extra
-# exists to serve. Every engine in the fleet already depends on fastapi and would not have
-# noticed; the breakage lands entirely on the non-web consumers. The two halves land together
-# or the obvious one is worse than nothing.
+# `current_caller` is EXPORTED FROM the fastapi-importing module. Deferring the import does not
+# remove the dependency — it moves the failure from `import iagent_mesh` to the first CALL of
+# the very function a non-web consumer installed the SDK for. Same outcome, later, and harder
+# to diagnose. dag-tools soft-imports this name inside a bare `except`, so under the lazy shape
+# the import SUCCEEDS and the call fails somewhere with no handler expecting it.
 #
-# PEP 562: the names stay importable and stay in `__all__`, so `from iagent_mesh import
-# CallerIdentity` is unchanged for anyone who has the server stack. Only the COST moved.
-_LAZY_SERVER_SURFACE = {
-    "CallerIdentity": "transport_auth",
-    "current_caller": "transport_auth",
-}
+# The real split is inside `transport_auth`: `CallerIdentity` and `current_caller` touch no
+# fastapi symbol at all — only the server dependency factory does. Guarding the import THERE
+# gives the client surface a framework-free path, so this import is once again free, and the
+# `[server]` extra means what an extra should mean: you lose the SERVER helpers, not the
+# ability to import.
+from .transport_auth import CallerIdentity, current_caller
 
-
-def __getattr__(name: str):
-    """Resolve the server-dependent surface on first use rather than at import."""
-    module = _LAZY_SERVER_SURFACE.get(name)
-    if module is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    try:
-        import importlib
-
-        return getattr(importlib.import_module(f".{module}", __name__), name)
-    except ImportError as exc:
-        # `ImportError`, NOT `ModuleNotFoundError`. The narrower catch misses a plain
-        # ImportError — which is what an import hook or a partially-installed distribution
-        # raises — so the helpful refusal would silently not fire in exactly the environments
-        # it was written for, and the caller would get a bare traceback instead. Caught by the
-        # seal's own refusal arm rather than by reading.
-        missing = getattr(exc, "name", None) or "the server stack"
-        raise ModuleNotFoundError(
-            f"iagent_mesh.{name} needs the SDK's server surface, which requires {missing!r}. "
-            f"It is not imported by `import iagent_mesh` on purpose: a consumer that only mints "
-            f"tokens should not carry a web framework. Install the server extra, or import only "
-            f"the client surface."
-        ) from exc
-
-
-def __dir__():
-    return sorted(set(globals()) | set(_LAZY_SERVER_SURFACE))
 
 # A graph's CONTRACT and the helper that makes it a verb. Public surface, not an internal of a
 # host engine: a team running their own host (ADR-0046 §8.5 route C) imports exactly these, so
