@@ -233,108 +233,109 @@ def test_nominate_scopes_by_a_SEQUENCE_of_domains_not_a_single_one():
     assert sig.parameters["domains"].default == (), "an empty sequence means no domain filter"
 
 
-# ── the embedding stamp: an ENCODING, because there is nowhere to put a key ──────────────
+# ── the marker collection: a carrier that is OURS BY CONSTRUCTION ────────────────────────
 
-from iagent_mesh.conformance import check_embedding_contract, check_writer_stamp  # noqa: E402
+from iagent_mesh.conformance import check_embedding_contract, check_writer_marker  # noqa: E402
 from iagent_mesh.interfaces import (  # noqa: E402
-    EMBEDDING_STAMP_SENTINEL,
-    CorruptEmbeddingStamp,
-    read_embedding_stamp,
-    stamp_description,
+    MESH_COLLECTION_META,
+    CorruptCollectionMarker,
+    collection_marker,
+    marker_is_stale,
+    read_collection_marker,
 )
 
+_WRITTEN = dict(collection="OntologyClass", model="nomic-embed-text", version="1.5",
+                dimension=768, written_by="doc-tools-sync",
+                collection_created_unix_ms=1_780_980_389_974)
+_MARKER = collection_marker(**_WRITTEN)
+_FRESH = lambda: 1_780_980_389_974          # noqa: E731 — oldest object, same age as the marker
 _OK = dict(operation="nominate", declared_model="nomic-embed-text", declared_version="1.5",
-           expected_dimension=768, read_stored_dimension=lambda: 768)
-_MATCHING = stamp_description(None, "nomic-embed-text", "1.5")
-_PROSE = "The ontology class collection, maintained by the docs sync."
+           expected_dimension=768, read_stored_dimension=lambda: 768,
+           read_oldest_object_unix_ms=_FRESH)
 
 
-def test_MATCHING_stamp_opens():
+def test_A_MATCHING_MARKER_OPENS():
     """POSITIVE CONTROL for every refusal below."""
-    check_embedding_contract(**_OK, read_collection_description=lambda: _MATCHING)
+    check_embedding_contract(**_OK, read_marker=lambda: _MARKER)
 
 
 def test_a_different_MODEL_refuses_at_open_naming_both():
+    other = collection_marker(**{**_WRITTEN, "model": "other-model"})
     with pytest.raises(ConformanceFailure) as exc:
-        check_embedding_contract(**_OK,
-                                 read_collection_description=lambda: stamp_description(None, "other", "1.5"))
-    assert "other" in str(exc.value) and "nomic-embed-text" in str(exc.value)
+        check_embedding_contract(**_OK, read_marker=lambda: other)
+    assert "other-model" in str(exc.value) and "nomic-embed-text" in str(exc.value)
 
 
 def test_a_different_VERSION_refuses_too():
     """A re-trained model spells the same and produces incompatible vectors."""
     with pytest.raises(ConformanceFailure, match="2.0"):
         check_embedding_contract(**_OK,
-                                 read_collection_description=lambda: stamp_description(None, "nomic-embed-text", "2.0"))
+                                 read_marker=lambda: collection_marker(**{**_WRITTEN, "version": "2.0"}))
 
 
-def test_HUMAN_PROSE_reads_as_ABSENT_and_never_as_a_mismatch():
-    """THE FOURTH STATE, AND THE REASON THE ENCODING IS SELF-IDENTIFYING.
-
-    `description` is a prose field a person may edit at any time. A reader that treated
-    unparseable prose as a wrong model would REFUSE — and someone documenting a collection would
-    take routing down. That is worse than the defect being fixed and reachable the first time
-    anyone writes a description.
-    """
+def test_ABSENT_opens_and_reports_the_gap():
     reported = []
-    check_embedding_contract(**_OK, read_collection_description=lambda: _PROSE,
-                             report_gap=reported.append)
-    assert len(reported) == 1
+    check_embedding_contract(**_OK, read_marker=lambda: None, report_gap=reported.append)
+    assert len(reported) == 1 and MESH_COLLECTION_META in reported[0]
 
 
-def test_OUR_SENTINEL_DAMAGED_is_a_REFUSAL_not_an_absence():
-    """Distinct from prose on purpose: nobody wrote one is a gap; something wrote over OURS is a
-    failure, and the two want opposite behaviours."""
-    corrupt = f"{EMBEDDING_STAMP_SENTINEL} not-json-at-all"
-    with pytest.raises(ConformanceFailure, match="damaged|not a readable stamp"):
-        check_embedding_contract(**_OK, read_collection_description=lambda: corrupt,
+def test_ABSENT_with_no_reporter_is_a_FAILURE():
+    with pytest.raises(ConformanceFailure, match="ABSENT IS NOT MATCHING"):
+        check_embedding_contract(**_OK, read_marker=lambda: None)
+
+
+def test_a_MALFORMED_marker_REFUSES_rather_than_reading_as_absent():
+    """Nobody-wrote-one is a gap; something-wrote-OURS-badly is a failure."""
+    with pytest.raises(ConformanceFailure, match="not readable|damaged"):
+        check_embedding_contract(**_OK, read_marker=lambda: {"collection": "OntologyClass"},
                                  report_gap=lambda _m: None)
 
 
-def test_ABSENT_with_NO_reporter_is_a_FAILURE():
-    with pytest.raises(ConformanceFailure, match="ABSENT IS NOT MATCHING"):
-        check_embedding_contract(**_OK, read_collection_description=lambda: None)
+# ── staleness: the objection that rejected this carrier, and the seal that answers it ─────
+
+def test_A_MARKER_THAT_OUTLIVED_ITS_COLLECTION_READS_AS_ABSENT():
+    """THE ARM THIS CARRIER EXISTS TO SURVIVE. A description died with what it described; a
+    marker in its own collection does not, so a recreated-and-re-ingested collection would
+    otherwise carry a confident statement about vectors that no longer exist.
+
+    It reads as ABSENT rather than MISMATCH: refusing on a stale marker would take a healthy
+    collection down, and trusting it is the confident-stale reading itself.
+    """
+    reported = []
+    check_embedding_contract(**{**_OK, "read_oldest_object_unix_ms": lambda: 1_790_000_000_000},
+                             read_marker=lambda: _MARKER, report_gap=reported.append)
+    assert len(reported) == 1 and "predates" in reported[0]
 
 
-def test_the_embedding_arm_catches_a_dimension_mismatch():
-    with pytest.raises(ConformanceFailure, match="two different models"):
-        check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
-                                 expected_dimension=768, read_stored_dimension=lambda: 1536,
-                                 read_collection_description=lambda: _MATCHING)
+def test_AN_EMPTY_COLLECTION_CANNOT_BE_DATED_and_that_is_ABSENT_not_valid():
+    """No object means no proxy for the collection's age. Treating an undatable marker as
+    current is exactly the reading the staleness field exists to prevent."""
+    reported = []
+    check_embedding_contract(**{**_OK, "read_oldest_object_unix_ms": lambda: None},
+                             read_marker=lambda: _MARKER, report_gap=reported.append)
+    assert len(reported) == 1
 
 
-def test_an_UNREADABLE_dimension_is_a_failure_not_an_empty_collection():
-    with pytest.raises(ConformanceFailure, match="failing to run"):
-        check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
-                                 expected_dimension=768, read_stored_dimension=lambda: None,
-                                 read_collection_description=lambda: _MATCHING)
+def test_marker_is_stale_DISCRIMINATES_rather_than_always_answering_one_way():
+    """FIXTURE DISCRIMINATION, on the staleness helper itself: a check that answered the same
+    for a fresh and a recreated collection would pass both arms above for the wrong reason."""
+    m = read_collection_marker(_MARKER)
+    assert marker_is_stale(m, 1_790_000_000_000) is not marker_is_stale(m, _FRESH())
 
 
-# ── the writer COEXISTS with prose rather than owning the field ──────────────────────────
+# ── the writer: one implementation, admission checks its output ──────────────────────────
 
 def test_a_conforming_writer_is_admitted_and_the_round_trip_holds():
-    """POSITIVE CONTROL. One implementation of the shape: what the writer produces is what the
-    reader parses, so the two sides cannot diverge by agreeing on a spec separately."""
-    check_writer_stamp(existing_description=None, model="nomic-embed-text", version="1.5")
-    check_writer_stamp(existing_description=_PROSE, model="nomic-embed-text", version="1.5")
+    """The property kept from the previous carrier because it is what made that one safe and it
+    is carrier-independent: ONE implementation of the write, admission checking the output."""
+    check_writer_marker(**_WRITTEN)
 
 
-def test_the_writer_PRESERVES_a_humans_prose():
-    """RULED, not defaulted. Owning `description` outright is simpler and destroys documentation
-    silently on every run, with nothing failing."""
-    written = stamp_description(_PROSE, "nomic-embed-text", "1.5")
-    assert _PROSE in written
-    assert read_embedding_stamp(written).model == "nomic-embed-text"
+def test_a_writer_that_loses_a_field_fails_admission():
+    with pytest.raises(Exception):
+        check_writer_marker(**{**_WRITTEN, "written_by": "  "})
 
 
-def test_RE_STAMPING_replaces_rather_than_accumulates():
-    once = stamp_description(_PROSE, "nomic-embed-text", "1.5")
-    twice = stamp_description(once, "nomic-embed-text", "2.0")
-    assert twice.count(EMBEDDING_STAMP_SENTINEL) == 1, "stamps must not pile up"
-    assert read_embedding_stamp(twice).version == "2.0"
-    assert _PROSE in twice
-
-
-def test_a_stamp_with_an_EMPTY_half_is_refused_at_construction():
-    with pytest.raises(Exception, match="model and a version"):
-        stamp_description(None, "nomic-embed-text", "")
+def test_every_field_is_required_because_a_partial_marker_cannot_discriminate():
+    with pytest.raises(Exception, match="needs every field|discriminate"):
+        collection_marker(**{**_WRITTEN, "model": ""})

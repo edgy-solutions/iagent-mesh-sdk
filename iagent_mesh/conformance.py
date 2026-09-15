@@ -24,18 +24,19 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence
 
 from .interfaces import (
-    EMBEDDING_STAMP_SENTINEL,
-    CorruptEmbeddingStamp,
+    MESH_COLLECTION_META,
+    CorruptCollectionMarker,
     Initiator,
     ServiceIdentityRefused,
-    read_embedding_stamp,
-    stamp_description,
+    collection_marker,
+    marker_is_stale,
+    read_collection_marker,
 )
 from .results import MeshResult
 
 __all__ = [
     "check_embedding_contract",
-    "check_writer_stamp",
+    "check_writer_marker",
     "ConformanceFailure",
     "assert_fixture_discriminates",
     "check_offline",
@@ -178,7 +179,8 @@ def check_embedding_contract(
     expected_dimension: int,
     read_stored_dimension: Callable[[], Optional[int]],
     declared_version: str = "",
-    read_collection_description: Callable[[], Optional[str]] = lambda: None,
+    read_marker: Callable[[], Optional[dict]] = lambda: None,
+    read_oldest_object_unix_ms: Callable[[], Optional[int]] = lambda: None,
     report_gap: Optional[Callable[[str], None]] = None,
 ) -> None:
     """The embedding contract, AT OPEN, in three states — and the third is the one that bites.
@@ -216,56 +218,59 @@ def check_embedding_contract(
                          f"different models against one index")
 
     try:
-        stamp = read_embedding_stamp(read_collection_description())
-    except CorruptEmbeddingStamp as exc:
-        # OUR SENTINEL, DAMAGED. Distinct from absent on purpose: nobody wrote one is a gap,
-        # something wrote over ours is a failure, and they want opposite behaviours.
+        marker = read_collection_marker(read_marker())
+    except CorruptCollectionMarker as exc:
         _fail(operation, str(exc))
 
-    if stamp is None:
-        # ABSENT — and that includes a human's prose, which MUST NOT read as a mismatch. A
-        # reader that refused on unparseable prose would take routing down the first time
-        # someone documented a collection, which is worse than the defect being fixed.
+    if marker is None:
         if report_gap is None:
-            _fail(operation, "the collection carries no embedding stamp and no gap reporter was "
-                             "supplied. ABSENT IS NOT MATCHING — an implementation that opens "
-                             "silently here has restored the self-comparison this arm exists to "
-                             "prevent")
-        report_gap(
-            f"{operation}: the collection carries no {EMBEDDING_STAMP_SENTINEL} stamp, so "
-            f"{declared_model!r}@{declared_version!r} could not be verified against it. Opened "
-            f"anyway; the writer records this at create-or-first-write."
-        )
+            _fail(operation, f"no {MESH_COLLECTION_META} marker and no gap reporter was supplied. "
+                             f"ABSENT IS NOT MATCHING — an implementation that opens silently "
+                             f"here has restored the self-comparison this arm exists to prevent")
+        report_gap(f"{operation}: no {MESH_COLLECTION_META} marker, so "
+                   f"{declared_model!r}@{declared_version!r} could not be verified. Opened "
+                   f"anyway; the writer records this in the act that creates the collection.")
         return
 
-    if (stamp.model, stamp.version) != (declared_model, declared_version):
-        _fail(operation, f"the collection was written with {stamp.model!r}@{stamp.version!r} and "
-                         f"this implementation embeds with {declared_model!r}@{declared_version!r}. "
-                         f"Refusing at OPEN, before a vector is read or written")
+    if marker_is_stale(marker, read_oldest_object_unix_ms()):
+        # STALE READS AS ABSENT, NOT AS A MISMATCH. A marker left behind by a recreated
+        # collection describes vectors that no longer exist; refusing on it would take a healthy
+        # collection down, and trusting it is the confident-stale reading the field exists to
+        # prevent. An UNDATABLE (empty) collection lands here too.
+        if report_gap is None:
+            _fail(operation, f"the {MESH_COLLECTION_META} marker predates the collection it "
+                             f"describes (or the collection is empty and cannot be dated) and no "
+                             f"gap reporter was supplied")
+        report_gap(f"{operation}: the {MESH_COLLECTION_META} marker predates its collection, or "
+                   f"the collection is empty and cannot be dated. Treated as ABSENT — a marker "
+                   f"that outlived what it described is not evidence about what is there now.")
+        return
+
+    if (marker.model, marker.version) != (declared_model, declared_version):
+        _fail(operation, f"the collection was written with {marker.model!r}@{marker.version!r} "
+                         f"and this implementation embeds with "
+                         f"{declared_model!r}@{declared_version!r}. Refusing at OPEN, before a "
+                         f"vector is read or written")
+    if marker.dimension != expected_dimension:
+        _fail(operation, f"the marker records {marker.dimension}-dimensional vectors and this "
+                         f"implementation embeds at {expected_dimension}")
 
 
-def check_writer_stamp(*, existing_description: Optional[str], model: str, version: str) -> None:
-    """A WRITER is admitted only if what it records is readable AND preserves what was there.
+def check_writer_marker(**kw) -> None:
+    """A WRITER is admitted only if what it records is readable by the contract's own reader.
 
-    Two properties, and the second is the one an implementer would skip. ``description`` is a
-    human-facing prose field; a writer that overwrites it destroys documentation silently, on
-    every run, and nothing fails. The contract COEXISTS with prose rather than owning the field,
-    so admission checks that the prose survived.
+    The property kept unchanged from the description encoding, because it is what made that
+    carrier safe and it is carrier-independent: ONE implementation of the write, and admission
+    checking its output. Neither side writes a parser, so neither side can drift.
     """
-    written = stamp_description(existing_description, model, version)
-
+    written = collection_marker(**kw)
     try:
-        stamp = read_embedding_stamp(written)
-    except CorruptEmbeddingStamp as exc:
-        _fail("writer stamp", f"wrote something its own reader rejects: {exc}")
-    if stamp is None:
-        _fail("writer stamp", f"wrote no readable {EMBEDDING_STAMP_SENTINEL} stamp")
-    if (stamp.model, stamp.version) != (model, version):
-        _fail("writer stamp", f"wrote {stamp.model!r}@{stamp.version!r} for "
-                              f"{model!r}@{version!r} — the round trip does not hold")
-
-    for line in (existing_description or "").splitlines():
-        if line.strip() and not line.strip().startswith(EMBEDDING_STAMP_SENTINEL):
-            if line not in written:
-                _fail("writer stamp", f"destroyed existing prose {line!r}. description is a "
-                                      f"human-facing field and the stamp coexists with it")
+        back = read_collection_marker(written)
+    except CorruptCollectionMarker as exc:
+        _fail("writer marker", f"wrote something its own reader rejects: {exc}")
+    if back is None:
+        _fail("writer marker", "wrote no readable marker")
+    for field, expected in kw.items():
+        if getattr(back, field) != expected:
+            _fail("writer marker", f"round trip lost {field}: wrote {expected!r}, read "
+                                   f"{getattr(back, field)!r}")

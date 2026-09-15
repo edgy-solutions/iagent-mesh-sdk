@@ -49,6 +49,12 @@ __all__ = [
     "MeshGraph",
     "MeshOntology",
     "MeshVectors",
+    "MESH_COLLECTION_META",
+    "CollectionMarker",
+    "CorruptCollectionMarker",
+    "collection_marker",
+    "read_collection_marker",
+    "marker_is_stale",
 ]
 
 
@@ -219,130 +225,102 @@ class MeshOntology(Protocol):
         """
 
 
-#: THE STAMP'S SENTINEL. Declared here because there is NOWHERE ELSE TO PUT A KEY: two
-#: independent checks — the client's own API surface and the live server schema — agree that a
-#: collection exposes no free-form key/value field. ``description``, a single human-facing
-#: string, is the only carrier. So the contract declares an ENCODING, not a key name; a key name
-#: in the abstract would leave each implementation inventing a placement, which is this defect a
-#: third time inside the fix for the fix.
-#:
-#: The version in the sentinel is the STAMP FORMAT's, not the model's. It is what lets a future
-#: encoding change be detected rather than misparsed.
-EMBEDDING_STAMP_SENTINEL = "[iagent-mesh:embedding v1]"
+#: THE MARKER COLLECTION. A carrier that is OURS BY CONSTRUCTION, ruled 2026-09-14 over an
+#: encoding in ``description``. Every encoding into a human prose field creates the same three
+#: choices and all three are traps: overwrite loses a sentence with nothing red, refuse turns a
+#: check into the thing that gets muted, and splice is **a parser over a field that was never a
+#: format**. A collection of our own has none of them.
+MESH_COLLECTION_META = "MeshCollectionMeta"
 
 
-class CorruptEmbeddingStamp(ValueError):
-    """OUR sentinel is present and what follows it is not readable.
-
-    Deliberately NOT the same outcome as an absent stamp. Absent means nobody wrote one; this
-    means WE wrote one and it is damaged, which is a failure rather than a gap.
-    """
+class CorruptCollectionMarker(ValueError):
+    """OUR marker exists and is not readable. NOT the same as absent: nobody-wrote-one is a gap,
+    something-wrote-ours-badly is a failure, and they want opposite behaviours."""
 
 
-class EmbeddingStamp(BaseModel):
-    """What the writer records and the reader checks: model NAME and VERSION.
-
-    VERSION IS NOT OPTIONAL. A name alone cannot distinguish a re-trained model from the one that
-    produced the stored vectors, and those are numerically incompatible while spelling the same.
-    """
+class CollectionMarker(BaseModel):
+    """What the writer records about a vector collection, and the reader checks at open."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    collection: str
     model: str
     version: str
+    dimension: int
+    written_by: str
+    """Which writer stamped it. A marker nobody can attribute is a marker nobody can question."""
 
-    @field_validator("model", "version")
+    collection_created_unix_ms: int
+    """The collection's creation stamp AS THE WRITER OBSERVED IT — the anti-staleness handle.
+
+    A marker in its own collection OUTLIVES the collection it describes, where a description died
+    with it. Recreate `OntologyClass`, re-ingest, and a marker from the old one is a confident
+    statement about vectors that no longer exist — a stale record reading exactly like a current
+    one, which is the failure this whole mechanism exists to end. This field is what lets a
+    reader detect that.
+    """
+
+    @field_validator("collection", "model", "version", "written_by")
     @classmethod
     def _present(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError("an embedding stamp needs both a model and a version; "
-                             "an empty half is a stamp that cannot discriminate")
+            raise ValueError("a collection marker needs every field; an empty one cannot "
+                             "discriminate and a marker that cannot discriminate is not a marker")
         return v
 
 
-def stamp_description(description: Optional[str], model: str, version: str) -> str:
-    """Write the stamp INTO a description, PRESERVING any prose already there.
+def collection_marker(*, collection: str, model: str, version: str, dimension: int,
+                      written_by: str, collection_created_unix_ms: int) -> dict:
+    """What a WRITER stores, in the SAME ACT that creates the collection.
 
-    **THE CONTRACT COEXISTS WITH PROSE RATHER THAN OWNING THE FIELD — ruled, not defaulted.**
-    Owning ``description`` outright is simpler and would let a writer silently destroy a human's
-    documentation on its next run. ``description`` is a human-facing field by design; taking it
-    over is claiming someone else's surface to avoid writing one regex. Coexistence costs a line
-    and destroys nothing.
+    **FOLD, NOT HAND-RUN** — the way the prime writes its own run row. A marker written by a
+    separate step is a marker that can be forgotten, and a forgotten marker reads as ABSENT while
+    the collection is perfectly real.
 
-    An existing stamp line is REPLACED rather than appended, so repeated writes do not accumulate
-    and the last writer's claim is the only one present.
+    ⚠ **A WRITER-SIDE REQUIREMENT THAT MUST BE DECLARED RATHER THAN DISCOVERED: on re-ingest the
+    objects' creation times MUST move forward.** The staleness check below has no collection-level
+    timestamp to use and proxies it with the oldest object's. If a writer ever PRESERVES the
+    original object timestamps through a re-ingest, the proxy stops advancing while the vectors
+    change underneath, and **the staleness check is silently defeated** — it keeps passing and
+    means nothing.
 
-    ── THE WRITER'S BEHAVIOUR ON A FOREIGN DESCRIPTION IS DECLARED HERE: **MERGE.** ───────────
-    Never overwrite, never refuse. Both alternatives were considered and both are worse:
-
-    **REFUSE** turns a human's sentence into an ingest failure — and doc-tools' ingest is what
-    fills the substrate. That is *a check whose only remedy is prohibited*: it gets disabled, and
-    the rule goes with it. The blast radius makes it worse than the usual version of that trap.
-
-    **OVERWRITE** destroys documentation silently, on every run, with nothing red anywhere. The
-    reader cannot compensate — it sees our marker in a description and has no way to know prose
-    was there before — which is not a gap in the reader's half but proof the decision belongs on
-    this side.
-
-    **AND MERGE IS ENFORCED, NOT REQUESTED.** This is the only implementation of the encoding, so
-    a writer that merges is a writer that called it; and
-    :func:`iagent_mesh.conformance.check_writer_stamp` fails admission for any writer whose
-    output loses a line that was there before. Measured: a writer stubbed to overwrite is refused
-    with *"destroyed existing prose"*. So a tolerant reader cannot hide a prose-destroying writer,
-    because a prose-destroying writer cannot be admitted.
-
-    ── WHY THIS FIELD AND NOT A SEPARATE `CollectionMetadata` COLLECTION ──────────────────────
-    A marker object in its own collection avoids prose entirely and was the strongest
-    alternative. It is rejected on LIFETIME: a description **dies with the collection it
-    describes**, while a separate marker outlives a recreated collection and becomes a confident
-    statement about vectors that no longer exist — a stale record that reads exactly like a
-    current one, which is the failure mode this entire stamp exists to end. (A marker object
-    *inside* `OntologyClass` or `Predicate` is worse still: it would be a candidate in hybrid
-    search.)
+    One implementation, so the writer and reader cannot diverge by agreeing on a shape separately.
     """
-    stamp = EmbeddingStamp(model=model, version=version)
-    line = f'{EMBEDDING_STAMP_SENTINEL} {{"model": "{stamp.model}", "version": "{stamp.version}"}}'
-    kept = [ln for ln in (description or "").splitlines()
-            if not ln.strip().startswith(EMBEDDING_STAMP_SENTINEL)]
-    while kept and not kept[-1].strip():
-        kept.pop()
-    return chr(10).join([*kept, line]) if kept else line
+    marker = CollectionMarker(
+        collection=collection, model=model, version=version, dimension=dimension,
+        written_by=written_by, collection_created_unix_ms=collection_created_unix_ms,
+    )
+    return marker.model_dump()
 
 
-def read_embedding_stamp(description: Optional[str]) -> Optional[EmbeddingStamp]:
-    """Read the stamp out of a description. ``None`` means ABSENT — never "matches".
-
-    **FOUR STATES, AND THE FOURTH IS WHY THE ENCODING IS SELF-IDENTIFYING.** ``description`` is
-    prose that a person may edit at any time, so the reader must decide *ours* or *not ours*
-    without guessing:
-
-        no sentinel      -> ABSENT. Covers an empty field AND a human's prose. Open, report once.
-        sentinel, valid  -> compare model and version.
-        sentinel, broken -> :class:`CorruptEmbeddingStamp`. OUR record, damaged.
-
-    **"NOT OURS" MUST COLLAPSE TO ABSENT, NEVER TO MISMATCH.** If a person writes "The ontology
-    class collection" and a reader treats unparseable prose as a wrong model, it refuses — and
-    **someone documenting a collection takes routing down.** That is a worse defect than the one
-    being fixed and it is reachable the first time anyone writes a description.
-    """
-    if not description:
+def read_collection_marker(raw: Optional[dict]) -> Optional[CollectionMarker]:
+    """``None`` means ABSENT — never "matches". A malformed marker RAISES."""
+    if raw is None:
         return None
-    for line in description.splitlines():
-        text = line.strip()
-        if not text.startswith(EMBEDDING_STAMP_SENTINEL):
-            continue
-        payload = text[len(EMBEDDING_STAMP_SENTINEL):].strip()
-        try:
-            import json
+    try:
+        return CollectionMarker(**raw)
+    except Exception as exc:  # noqa: BLE001
+        raise CorruptCollectionMarker(
+            f"a {MESH_COLLECTION_META} marker exists and is not readable ({exc}). This is OUR "
+            f"record damaged, not an absent one — refusing rather than opening"
+        ) from exc
 
-            return EmbeddingStamp(**json.loads(payload))
-        except Exception as exc:  # noqa: BLE001
-            raise CorruptEmbeddingStamp(
-                f"the collection carries our sentinel {EMBEDDING_STAMP_SENTINEL!r} followed by "
-                f"{payload!r}, which is not a readable stamp. This is OUR record damaged, not an "
-                f"absent one — refusing rather than opening, because something wrote over it"
-            ) from exc
-    return None
+
+def marker_is_stale(marker: CollectionMarker, oldest_object_unix_ms: Optional[int]) -> bool:
+    """Does this marker predate the collection it claims to describe?
+
+    **MEASURED CONSTRAINT: a vector store here exposes NO collection-level creation timestamp** —
+    the class schema carries nothing time-like. So the collection's age is proxied by its OLDEST
+    OBJECT: a recreated-and-re-ingested collection has all-new objects, so its oldest is newer
+    than a marker left behind by the old one.
+
+    **AN EMPTY COLLECTION CANNOT BE DATED, AND THAT IS ABSENT RATHER THAN VALID.** With no object
+    there is no proxy, and treating an undatable marker as current is exactly the confident-stale
+    reading the field exists to prevent.
+    """
+    if oldest_object_unix_ms is None:
+        return True
+    return marker.collection_created_unix_ms < oldest_object_unix_ms
 
 
 @runtime_checkable
