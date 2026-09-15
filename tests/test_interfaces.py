@@ -339,3 +339,20 @@ def test_a_writer_that_loses_a_field_fails_admission():
 def test_every_field_is_required_because_a_partial_marker_cannot_discriminate():
     with pytest.raises(Exception, match="needs every field|discriminate"):
         collection_marker(**{**_WRITTEN, "model": ""})
+
+
+def test_THE_STALENESS_PROXY_IS_DECLARED_DEFEATED_not_quietly_shipped():
+    """A KNOWN-BROKEN CHECK THAT SAYS SO IS A GAP WITH AN OWNER; the same check shipped silent is
+    the confident green this whole mechanism exists to end.
+
+    Measured 2026-09-15 by the eo lane: the writer replaces objects on deterministic UUIDs and the
+    store preserves `creationTimeUnix`, so the oldest object's creation time does not move while
+    the vectors are rewritten. This asserts the WARNING is present, so the defect cannot be
+    silently inherited by a reader who trusts the docstring — and it fails if someone deletes the
+    warning without fixing the proxy.
+    """
+    import iagent_mesh.interfaces as I
+
+    doc = I.marker_is_stale.__doc__ or ""
+    assert "ALREADY DEFEATED" in doc, "the proxy's known defeat must be stated where it is used"
+    assert "UNPROVEN" in doc, "a non-stale verdict must be declared as unproven, not as freshness"

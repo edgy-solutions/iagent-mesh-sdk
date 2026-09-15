@@ -317,6 +317,27 @@ def marker_is_stale(marker: CollectionMarker, oldest_object_unix_ms: Optional[in
     **AN EMPTY COLLECTION CANNOT BE DATED, AND THAT IS ABSENT RATHER THAN VALID.** With no object
     there is no proxy, and treating an undatable marker as current is exactly the confident-stale
     reading the field exists to prevent.
+
+    ⚠⚠ **THIS PROXY IS ALREADY DEFEATED IN THE CURRENT FLEET — MEASURED, NOT PREDICTED, AND THIS
+    FUNCTION MUST NOT BE RELIED ON UNTIL IT IS REPLACED.** The writer rewrites objects IN PLACE on
+    deterministic UUIDs, and the store PRESERVES ``creationTimeUnix`` across a replace. Measured
+    2026-09-15: 132 of 132 sampled `Predicate` objects carry an update time later than their
+    creation time, the widest gap 81 days. So the oldest object's creation time **does not move
+    while the vectors underneath are rewritten** — the proxy stops advancing exactly when it
+    matters, and the check keeps passing and means nothing.
+
+    It is shipped in this state DELIBERATELY AND DECLARED RATHER THAN QUIETLY: a known-broken
+    check that says so is a gap with an owner; the same check shipped silent is the confident
+    green this entire mechanism exists to end. **A conformance run may treat a non-stale verdict
+    from this function as UNPROVEN, never as evidence of freshness.**
+
+    THE REPLACEMENT UNDER RULING makes staleness UNREPRESENTABLE rather than detectable: refresh
+    the marker in the same act that WRITES VECTORS, not only at creation. Then the code path that
+    changes the vectors changes the marker, a marker describing vectors that no longer exist
+    cannot be produced, and this function, its timestamp field and the empty-collection edge case
+    all disappear together. The alternative — forbidding the writer to preserve creation times —
+    abandons deterministic-uuid idempotency to keep an external measurement alive, which is the
+    data model serving the instrument.
     """
     if oldest_object_unix_ms is None:
         return True
