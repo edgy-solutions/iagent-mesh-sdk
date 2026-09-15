@@ -233,46 +233,101 @@ def test_nominate_scopes_by_a_SEQUENCE_of_domains_not_a_single_one():
     assert sig.parameters["domains"].default == (), "an empty sequence means no domain filter"
 
 
-# ── the embedding contract, and what it deliberately cannot check ────────────────────────
+# ── the embedding contract: AT OPEN, three states, one declared key ──────────────────────
+
+from iagent_mesh.conformance import check_embedding_contract, check_writer_stamp  # noqa: E402
+from iagent_mesh.interfaces import (  # noqa: E402
+    EMBEDDING_METADATA_KEY,
+    embedding_stamp,
+    read_embedding_stamp,
+)
+
+_OK = dict(operation="nominate", declared_model="nomic-embed-text", declared_version="1.5",
+           expected_dimension=768, read_stored_dimension=lambda: 768)
+_MATCHING = embedding_stamp("nomic-embed-text", "1.5")
+
+
+def test_MATCHING_stamp_opens():
+    """POSITIVE CONTROL for the refusals below."""
+    check_embedding_contract(**_OK, read_collection_metadata=lambda: _MATCHING)
+
+
+def test_a_different_MODEL_refuses_at_open_naming_both():
+    with pytest.raises(ConformanceFailure) as exc:
+        check_embedding_contract(**_OK,
+                                 read_collection_metadata=lambda: embedding_stamp("other", "1.5"))
+    assert "other" in str(exc.value) and "nomic-embed-text" in str(exc.value)
+    assert "OPEN" in str(exc.value)
+
+
+def test_a_different_VERSION_refuses_too():
+    """VERSION IS NOT DECORATION. A re-trained model spells the same and produces vectors that
+    are not numerically compatible with the stored ones."""
+    with pytest.raises(ConformanceFailure, match="2.0|1.5"):
+        check_embedding_contract(**_OK,
+                                 read_collection_metadata=lambda: embedding_stamp("nomic-embed-text", "2.0"))
+
+
+def test_ABSENT_stamp_opens_but_REPORTS_THE_GAP():
+    reported = []
+    check_embedding_contract(**_OK, read_collection_metadata=lambda: None,
+                             report_gap=reported.append)
+    assert len(reported) == 1 and EMBEDDING_METADATA_KEY in reported[0]
+
+
+def test_a_MALFORMED_stamp_is_treated_as_ABSENT_not_as_a_partial_match():
+    """A half-written stamp is no more evidence of agreement than no stamp."""
+    reported = []
+    check_embedding_contract(**_OK,
+                             read_collection_metadata=lambda: {EMBEDDING_METADATA_KEY: {"model": "x"}},
+                             report_gap=reported.append)
+    assert len(reported) == 1
+
+
+def test_ABSENT_with_NO_reporter_is_a_FAILURE():
+    """Absent is not matching — opening silently restores the self-comparison."""
+    with pytest.raises(ConformanceFailure, match="ABSENT IS NOT MATCHING"):
+        check_embedding_contract(**_OK, read_collection_metadata=lambda: None)
+
 
 def test_the_embedding_arm_catches_a_dimension_mismatch():
-    from iagent_mesh.conformance import check_embedding_contract
     with pytest.raises(ConformanceFailure, match="two different models"):
-        check_embedding_contract(operation="nominate", declared_model="nomic-embed-text",
-                                 expected_dimension=768, read_stored_dimension=lambda: 1536)
-
-
-def test_the_embedding_arm_refuses_an_UNDECLARED_model():
-    from iagent_mesh.conformance import check_embedding_contract
-    with pytest.raises(ConformanceFailure, match="declared no embedding model"):
-        check_embedding_contract(operation="nominate", declared_model="  ",
-                                 expected_dimension=768, read_stored_dimension=lambda: 768)
+        check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
+                                 expected_dimension=768, read_stored_dimension=lambda: 1536,
+                                 read_collection_metadata=lambda: _MATCHING)
 
 
 def test_an_UNREADABLE_dimension_is_a_failure_not_an_empty_collection():
-    """A skipped check reads exactly like a passed one."""
-    from iagent_mesh.conformance import check_embedding_contract
     with pytest.raises(ConformanceFailure, match="failing to run"):
-        check_embedding_contract(operation="nominate", declared_model="m",
-                                 expected_dimension=768, read_stored_dimension=lambda: None)
+        check_embedding_contract(operation="nominate", declared_model="m", declared_version="1",
+                                 expected_dimension=768, read_stored_dimension=lambda: None,
+                                 read_collection_metadata=lambda: _MATCHING)
 
 
-def test_a_conforming_embedding_contract_passes():
-    """POSITIVE CONTROL for the three refusals above."""
-    from iagent_mesh.conformance import check_embedding_contract
-    check_embedding_contract(operation="nominate", declared_model="nomic-embed-text",
-                             expected_dimension=768, read_stored_dimension=lambda: 768)
+# ── the key is a CONTRACT, not an agreement between two lanes ────────────────────────────
+
+def test_a_writer_recording_under_ITS_OWN_KEY_fails_admission():
+    """THE RULING'S TEETH. Two lanes agreeing on a key is an agreement enforced by remembering —
+    the defect this stamp closes, reproduced inside its own fix."""
+    with pytest.raises(ConformanceFailure, match="declared by the contract"):
+        check_writer_stamp({"embedding_info": {"model": "nomic-embed-text", "version": "1.5"}})
 
 
-def test_THE_LIMIT_IS_ASSERTED_a_same_dimension_model_swap_is_NOT_caught():
-    """THE ARM'S OWN BLIND SPOT, asserted so its green is not over-read.
+def test_a_writer_recording_an_UNPARSEABLE_shape_fails_admission():
+    """A stamp only the writer understands is a stamp nobody can check."""
+    with pytest.raises(ConformanceFailure, match="cannot parse"):
+        check_writer_stamp({EMBEDDING_METADATA_KEY: "nomic-embed-text@1.5"})
 
-    Two models at the same dimension pass this check and produce numerically incompatible
-    vectors — the fleet's constant says so in as many words. Writing the limit as a passing test
-    means a reader who wants the real check finds the gap here rather than trusting the green,
-    and it fails the day someone makes the model genuinely checkable, which is the prompt to
-    strengthen the arm.
-    """
-    from iagent_mesh.conformance import check_embedding_contract
-    check_embedding_contract(operation="nominate", declared_model="a-DIFFERENT-model",
-                             expected_dimension=768, read_stored_dimension=lambda: 768)
+
+def test_a_conforming_writer_is_admitted():
+    """POSITIVE CONTROL, and the round trip: what the writer helper produces is what the reader
+    helper parses. ONE implementation of the shape, so the sides cannot diverge."""
+    check_writer_stamp(embedding_stamp("nomic-embed-text", "1.5"))
+    stamp = read_embedding_stamp(embedding_stamp("nomic-embed-text", "1.5"))
+    assert (stamp.model, stamp.version) == ("nomic-embed-text", "1.5")
+
+
+def test_a_stamp_with_an_EMPTY_half_is_refused_at_construction():
+    """A name with no version cannot discriminate a re-trained model from the stored one."""
+    with pytest.raises(Exception, match="model and a version"):
+        embedding_stamp("nomic-embed-text", "")

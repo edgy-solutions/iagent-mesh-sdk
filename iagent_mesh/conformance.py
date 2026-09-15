@@ -23,11 +23,17 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Sequence
 
-from .interfaces import Initiator, ServiceIdentityRefused
+from .interfaces import (
+    EMBEDDING_METADATA_KEY,
+    Initiator,
+    ServiceIdentityRefused,
+    read_embedding_stamp,
+)
 from .results import MeshResult
 
 __all__ = [
     "check_embedding_contract",
+    "check_writer_stamp",
     "ConformanceFailure",
     "assert_fixture_discriminates",
     "check_offline",
@@ -169,29 +175,32 @@ def check_embedding_contract(
     declared_model: str,
     expected_dimension: int,
     read_stored_dimension: Callable[[], Optional[int]],
+    declared_version: str = "",
+    read_collection_metadata: Callable[[], Optional[dict]] = lambda: None,
+    report_gap: Optional[Callable[[str], None]] = None,
 ) -> None:
-    """The embedding half of :class:`~iagent_mesh.interfaces.MeshVectors`, asserted HONESTLY.
+    """The embedding contract, AT OPEN, in three states — and the third is the one that bites.
 
-    **THIS ARM DELIBERATELY DOES NOT CLAIM TO CHECK THE MODEL.** Nothing on the collection records
-    which model produced the stored vectors — measured, not assumed: ``vectorizer: None``,
-    ``moduleConfig: {}``, no model property. An arm phrased "verify the model against the
-    collection" would be satisfied by an implementation comparing its own constant to its own
-    constant, which is a vacuous green wearing a real check's name.
+    Ruled 2026-09-14: the writer records the embedding model as collection metadata, and this is
+    asserted **at open** rather than per query. Open is the one moment both sides pass through —
+    a per-query check costs a round trip on every search and **still leaves the first WRITE
+    unguarded**, and a write with the wrong model is as much the failure as a read.
 
-    So it asserts the two things that exist:
+        matching      open
+        mismatching   refuse, naming BOTH
+        absent        open, and REPORT THE GAP ONCE
 
-    * the implementation DECLARES a model (so the value is at least present and nameable), and
-    * the stored DIMENSION matches what the implementation expects, checked BEFORE searching.
+    **ABSENT MUST NOT BE SILENTLY TREATED AS MATCHING.** Readers land before writers, so metadata
+    is missing for a while; swallowing that is the vacuous self-comparison this property was
+    rewritten to avoid, arriving dressed as tolerance. A suite that exercises only the matching
+    case cannot tell the assertion from its absence.
 
-    **THE LIMIT IS PART OF THE CONTRACT, not a caveat on it.** A dimension check catches a model
-    swap only when the dimensions differ. The fleet's own constant warns that vectors stored under
-    one model *"are not numerically compatible with vectors from a new model, even if the
-    dimensions match"* — so the silent case is the one that matters and this does not reach it.
-    Upgrading this into a real check needs the WRITER to record its model per collection, which is
-    the doc-tools sync's change and is named in the Protocol with its owner.
+    The DIMENSION check stays as the today-check and its limit is part of the contract: it
+    catches a model swap only when the dimensions differ, and vectors under two models at one
+    dimension are not numerically compatible.
     """
     if not (declared_model or "").strip():
-        _fail(operation, "declared no embedding model — the value is the only handle a future "
+        _fail(operation, "declared no embedding model — the value is the only handle the "
                          "writer-side check will have, so an unnamed model cannot be upgraded")
 
     stored = read_stored_dimension()
@@ -203,3 +212,42 @@ def check_embedding_contract(
         _fail(operation, f"stored vectors are {stored}-dimensional and this implementation embeds "
                          f"at {expected_dimension}. Searching would compare vectors from two "
                          f"different models against one index")
+
+    stamp = read_embedding_stamp(read_collection_metadata())
+    if stamp is None:
+        # ABSENT *AND* MALFORMED LAND HERE, deliberately. A half-written stamp is no more
+        # evidence of agreement than no stamp, and a reader that told them apart would be
+        # tempted to treat one as a partial match.
+        if report_gap is None:
+            _fail(operation, "collection metadata carries no readable embedding stamp and no gap "
+                             "reporter was supplied. ABSENT IS NOT MATCHING — an implementation "
+                             "that opens silently here has restored the self-comparison this arm "
+                             "exists to prevent")
+        report_gap(
+            f"{operation}: the collection carries no readable {EMBEDDING_METADATA_KEY!r} stamp, "
+            f"so {declared_model!r}@{declared_version!r} could not be verified against it. "
+            f"Opened anyway; the writer records this at create-or-first-write."
+        )
+        return
+
+    if (stamp.model, stamp.version) != (declared_model, declared_version):
+        _fail(operation, f"the collection was written with {stamp.model!r}@{stamp.version!r} and "
+                         f"this implementation embeds with {declared_model!r}@{declared_version!r}. "
+                         f"Refusing at OPEN, before a vector is read or written")
+
+
+def check_writer_stamp(recorded: dict) -> None:
+    """A WRITER is admitted only if what it records is readable under the declared key.
+
+    The ruling's teeth: a writer recording under a key of its own choosing fails admission, and
+    so does a reader looking under one. Both sides conform to the Protocol's declaration rather
+    than to each other — a key two lanes agree on is an agreement enforced by remembering, which
+    is the defect this stamp closes.
+    """
+    if EMBEDDING_METADATA_KEY not in (recorded or {}):
+        _fail("writer stamp", f"recorded no {EMBEDDING_METADATA_KEY!r} entry. The key is declared "
+                              f"by the contract, not chosen by the writer")
+    if read_embedding_stamp(recorded) is None:
+        _fail("writer stamp", f"recorded {EMBEDDING_METADATA_KEY!r} in a shape the contract's own "
+                              f"reader cannot parse — a stamp only the writer understands is a "
+                              f"stamp nobody can check")

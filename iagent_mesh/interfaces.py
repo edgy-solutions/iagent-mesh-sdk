@@ -219,6 +219,64 @@ class MeshOntology(Protocol):
         """
 
 
+#: THE COLLECTION METADATA KEY — declared HERE, by the contract, not agreed between lanes.
+#: A key two implementations agree on is an agreement enforced by remembering, which is the exact
+#: defect this stamp exists to close; a key the Protocol declares is a contract both conform to,
+#: and conformance asserts it. Namespaced so it cannot collide with a store's own keys.
+EMBEDDING_METADATA_KEY = "iagent_mesh.embedding"
+
+
+class EmbeddingStamp(BaseModel):
+    """What the writer records and the reader checks: model NAME and VERSION.
+
+    VERSION IS NOT OPTIONAL. A name alone cannot distinguish a re-trained model from the one that
+    produced the stored vectors, and those are numerically incompatible while spelling the same.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str
+    version: str
+
+    @field_validator("model", "version")
+    @classmethod
+    def _present(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("an embedding stamp needs both a model and a version; "
+                             "an empty half is a stamp that cannot discriminate")
+        return v
+
+
+def embedding_stamp(model: str, version: str) -> dict:
+    """What a WRITER records at create-or-first-write. One implementation, both sides.
+
+    A declared SHAPE would still leave two lanes writing two serialisers that agree by
+    convention — the packet's defect reproduced inside its fix. This function and
+    :func:`read_embedding_stamp` are that shape's only implementation, so the sides cannot
+    diverge without one of them failing conformance.
+    """
+    stamp = EmbeddingStamp(model=model, version=version)
+    return {EMBEDDING_METADATA_KEY: {"model": stamp.model, "version": stamp.version}}
+
+
+def read_embedding_stamp(metadata: Optional[dict]) -> Optional[EmbeddingStamp]:
+    """What a READER parses. ``None`` means ABSENT — never "matches".
+
+    Absent and malformed are deliberately the SAME answer here (``None``) and the caller reports
+    the gap either way: a half-written stamp is no more evidence of agreement than no stamp, and
+    a reader that distinguished them would be tempted to treat one as a partial match.
+    """
+    if not metadata:
+        return None
+    raw = metadata.get(EMBEDDING_METADATA_KEY)
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return EmbeddingStamp(**raw)
+    except Exception:  # noqa: BLE001 — a malformed stamp is an ABSENT stamp, not a crash
+        return None
+
+
 @runtime_checkable
 class MeshVectors(Protocol):
     """Semantic lookup within a declared collection and domain.
@@ -255,20 +313,37 @@ class MeshVectors(Protocol):
         legal input that makes two behaviours identical, arriving on the arm meant to prevent
         exactly that.
 
-        **WHAT CONFORMANCE ASSERTS TODAY** is therefore the dimension, before searching, plus
-        this declaration — see :func:`iagent_mesh.conformance.check_embedding_contract`. It
-        catches a model swap **only when the dimensions differ**, and the weak half is named
-        rather than implied: the fleet's own constant carries the warning that vectors stored
-        under an old model *"are not numerically compatible with vectors from a new model, even
-        if the dimensions match"*. The silent case is the one that matters and this does not
-        reach it.
+        **ASSERTED AT OPEN, NOT PER QUERY** (ruled 2026-09-14). Open is the one moment both
+        sides pass through: a per-query check costs a round trip on every search **and still
+        leaves the first WRITE unguarded**, and a write with the wrong model is as much the
+        failure as a read. A mismatch at open is a REFUSAL NAMING BOTH.
 
-        **THE UPGRADE PATH IS A WRITER-SIDE CHANGE AND IT IS NOT THIS SDK'S TO MAKE.** The
-        collections are written by the doc-tools sync; readers only read. For this property to be
-        genuinely assertable the WRITER must record the model it embedded with — a property per
-        object, or one marker object per collection. **Named here, with its owner, so it is a
-        known gap rather than a vacuous green** — no implementation on the reading side can
-        create what it needs to check against.
+        **THREE STATES, AND THE THIRD IS THE ONE THAT BITES.** The writer records the model's
+        name and version as collection metadata at create-or-first-write; readers land before
+        writers, so metadata is ABSENT for a while:
+
+            matching      open
+            mismatching   refuse, naming both
+            absent        open, and REPORT THE GAP ONCE
+
+        **Absent must never be silently treated as matching** — that is precisely the vacuous
+        self-comparison this whole property was rewritten to avoid, and it would arrive looking
+        like tolerance. A conformance suite exercising only the matching case cannot tell the
+        assertion from its absence.
+
+        Until metadata exists the only thing derivable is the stored DIMENSION, and it catches a
+        model swap **only when the dimensions differ**: the fleet's own constant warns that
+        vectors stored under an old model *"are not numerically compatible with vectors from a
+        new model, even if the dimensions match"*. The silent case is the one that matters and
+        the dimension does not reach it.
+
+        **THE WRITER-SIDE HALF IS NOT THIS SDK'S TO MAKE** and is named with its owner: the
+        collections are written by the doc-tools sync, readers only read, so no reading-side
+        implementation can create what it needs to check against. A known gap with an owner
+        rather than a vacuous green.
+
+        *(The one-shared-constant framing was considered and rejected: making the two copies
+        agree with each other still leaves nobody agreeing with the vectors already stored.)*
         """
 
     def nominate(
