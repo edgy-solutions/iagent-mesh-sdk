@@ -244,11 +244,61 @@ class CollectionMarker(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     collection: str
+
     model: str
-    version: str
+    """**THE SERVED IDENTITY — what the endpoint SAID IT USED, not what we asked for and not a
+    constant.** Measured in-cluster: an OpenAI-compatible embeddings response carries
+    ``model`` in the same payload as the vector it describes, and the writer already makes that
+    call and discards the field one line from where it is needed. Free, provider-neutral, and it
+    catches the case NEITHER constant reaches — an endpoint quietly serving something other than
+    what was requested.
+
+    ⚠ A CONSEQUENCE WORTH EXPECTING: a collection written while the endpoint was misconfigured
+    records the wrong model FAITHFULLY. That marker will disagree with both constants and will
+    look like a bug — and it will be the only thing in the system telling the truth about what
+    produced those vectors.
+
+    The weaker readings, and why each is refused: a constant records what the code believes; ``LLM_EMBED_MODEL`` overrides the default at
+    ``LLM_EMBED_MODEL`` overrides the default at runtime on both sides, so a writer that stamps its
+    constant and a reader that compares its constant AGREE WITH EACH OTHER WHILE BOTH DISAGREE
+    WITH THE VECTORS ON DISK. The resolved request value is better and still records an
+    intention; only the response records an outcome."""
+
+    version: Optional[str] = None
+    """The model's version, **ABSENT WHERE NONE IS KNOWN — and absent is a STATE, not a value.**
+
+    There is no version source in the writer's repo today: two constants, a model name and a
+    dimension, and the embeddings response is never inspected for one. A DECLARED SENTINEL was
+    the obvious alternative and is refused: a sentinel is still a string, ``marker.version ==
+    mine.version`` matches it happily, and the contract can say a sentinel match is not evidence
+    while the TYPE cannot enforce it. ``Optional`` enforces what prose cannot.
+
+    **A comparison runs only when BOTH sides carry one.** Otherwise the version is reported
+    UNVERIFIED — never silently agreed.
+
+    **IF IT IS FILLED IT MUST BE AN IMMUTABLE IDENTITY — A DIGEST, NEVER A TAG.** Measured: the
+    embeddings response carries no version at all, and the provider's own tag route returns
+    ``nomic-embed-text:latest`` alongside a digest. **``:latest`` is a mutable pointer**; stamping
+    it records a name that can point at different content tomorrow, which is the
+    green-for-the-wrong-reason this field exists to avoid, wearing a version's clothes.
+
+    **AND A DIGEST CANNOT BE A CONTRACT REQUIREMENT**, because the routes that expose one are
+    provider-specific while the fleet configures an OpenAI-compatible base URL. Requiring it
+    would bind this SDK to one provider — a worse coupling than the one being removed. So: an
+    Ollama-backed writer MAY enrich this field, a LiteLLM-backed writer honestly reports absence,
+    and **no implementation is ever forced to invent the field the marker exists to compare.**
+
+    NOT ENFORCED IN CODE, DELIBERATELY: rejecting "a tag" would mean parsing a provider-specific
+    string format, which is the same mistake as sniffing an identity's shape. The contract states
+    it; a validator that guessed would be wrong in a deployment nobody here has seen."""
+
     dimension: int
+    """THE OBSERVED VECTOR LENGTH, never a constant. Same reasoning as ``model``, and it buys a
+    second independent witness: a stored vector's own length is checkable without any marker at
+    all, so marker-says-N and vectors-are-N are two facts whose disagreement is detectable."""
     written_by: str
-    """Which writer stamped it. A marker nobody can attribute is a marker nobody can question."""
+    """WHICH SIDE stamped it — the repo or service, not the asset. On a mismatch the reader's
+    question is *which side changed*, and an asset name does not answer it."""
 
     collection_created_unix_ms: int
     """The collection's creation stamp AS THE WRITER OBSERVED IT — the anti-staleness handle.
@@ -260,7 +310,7 @@ class CollectionMarker(BaseModel):
     reader detect that.
     """
 
-    @field_validator("collection", "model", "version", "written_by")
+    @field_validator("collection", "model", "written_by")
     @classmethod
     def _present(cls, v: str) -> str:
         if not v.strip():
@@ -269,8 +319,9 @@ class CollectionMarker(BaseModel):
         return v
 
 
-def collection_marker(*, collection: str, model: str, version: str, dimension: int,
-                      written_by: str, collection_created_unix_ms: int) -> dict:
+def collection_marker(*, collection: str, model: str, dimension: int,
+                      written_by: str, collection_created_unix_ms: int,
+                      version: Optional[str] = None) -> dict:
     """What a WRITER stores, in the SAME ACT that creates the collection.
 
     **FOLD, NOT HAND-RUN** — the way the prime writes its own run row. A marker written by a

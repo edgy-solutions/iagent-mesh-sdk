@@ -246,22 +246,43 @@ def check_embedding_contract(
                    f"that outlived what it described is not evidence about what is there now.")
         return
 
-    if (marker.model, marker.version) != (declared_model, declared_version):
-        _fail(operation, f"the collection was written with {marker.model!r}@{marker.version!r} "
-                         f"and this implementation embeds with "
-                         f"{declared_model!r}@{declared_version!r}. Refusing at OPEN, before a "
-                         f"vector is read or written")
-    if marker.dimension != expected_dimension:
-        _fail(operation, f"the marker records {marker.dimension}-dimensional vectors and this "
-                         f"implementation embeds at {expected_dimension}")
+    if marker.model != declared_model:
+        _fail(operation, f"the collection was written with {marker.model!r} and this "
+                         f"implementation embeds with {declared_model!r}. Refusing at OPEN, "
+                         f"before a vector is read or written")
+
+    # VERSION IS COMPARED ONLY WHEN BOTH SIDES CARRY ONE. Absent is a STATE, not a value: a
+    # missing version that compared equal to another missing version would report agreement on a
+    # field where neither side ever knew anything — a green for the wrong reason, on one of the
+    # two fields this marker exists to compare.
+    if marker.version is not None and declared_version:
+        if marker.version != declared_version:
+            _fail(operation, f"the collection was written with version {marker.version!r} and "
+                             f"this implementation embeds with {declared_version!r}")
+    elif report_gap is not None:
+        report_gap(f"{operation}: the model version is UNVERIFIED — "
+                   f"marker={marker.version!r}, implementation={declared_version or None!r}. "
+                   f"Absent is not agreement.")
+
+    # THE OBSERVED LENGTH IS THE INDEPENDENT WITNESS. Comparing the marker against the
+    # implementation's own constant would let a constant-stamping writer and a constant-trusting
+    # reader agree while both disagree with the vectors on disk.
+    observed = read_stored_dimension()
+    if marker.dimension != observed:
+        _fail(operation, f"the marker records {marker.dimension}-dimensional vectors and the "
+                         f"stored vectors are {observed}-dimensional. The marker describes what "
+                         f"the writer believed, not what is there")
+    if observed != expected_dimension:
+        _fail(operation, f"stored vectors are {observed}-dimensional and this implementation "
+                         f"embeds at {expected_dimension}")
 
 
 def check_writer_marker(**kw) -> None:
     """A WRITER is admitted only if what it records is readable by the contract's own reader.
 
-    The property kept unchanged from the description encoding, because it is what made that
-    carrier safe and it is carrier-independent: ONE implementation of the write, and admission
-    checking its output. Neither side writes a parser, so neither side can drift.
+    The property kept unchanged across two carrier changes, because it is what made each of them
+    safe and it is carrier-independent: ONE implementation of the write, and an admission check
+    over its output. Neither side writes a parser, so neither side can drift.
     """
     written = collection_marker(**kw)
     try:

@@ -244,12 +244,12 @@ from iagent_mesh.interfaces import (  # noqa: E402
     read_collection_marker,
 )
 
-_WRITTEN = dict(collection="OntologyClass", model="nomic-embed-text", version="1.5",
-                dimension=768, written_by="doc-tools-sync",
+_WRITTEN = dict(collection="OntologyClass", model="nomic-embed-text",
+                dimension=768, written_by="doc-tools",
                 collection_created_unix_ms=1_780_980_389_974)
 _MARKER = collection_marker(**_WRITTEN)
 _FRESH = lambda: 1_780_980_389_974          # noqa: E731 — oldest object, same age as the marker
-_OK = dict(operation="nominate", declared_model="nomic-embed-text", declared_version="1.5",
+_OK = dict(operation="nominate", declared_model="nomic-embed-text", declared_version="",
            expected_dimension=768, read_stored_dimension=lambda: 768,
            read_oldest_object_unix_ms=_FRESH)
 
@@ -266,11 +266,35 @@ def test_a_different_MODEL_refuses_at_open_naming_both():
     assert "other-model" in str(exc.value) and "nomic-embed-text" in str(exc.value)
 
 
-def test_a_different_VERSION_refuses_too():
+def test_a_different_VERSION_refuses_WHEN_BOTH_SIDES_HAVE_ONE():
     """A re-trained model spells the same and produces incompatible vectors."""
     with pytest.raises(ConformanceFailure, match="2.0"):
-        check_embedding_contract(**_OK,
+        check_embedding_contract(**{**_OK, "declared_version": "1.5"},
                                  read_marker=lambda: collection_marker(**{**_WRITTEN, "version": "2.0"}))
+
+
+def test_AN_ABSENT_VERSION_IS_REPORTED_UNVERIFIED_never_agreed():
+    """THE ARM THAT STOPS A GREEN FOR THE WRONG REASON. There is no version source in the writer
+    today, so a required field would be filled with a placeholder — and two placeholders compare
+    EQUAL, reporting agreement on a field where neither side ever knew anything.
+
+    A declared sentinel was refused for the same reason: a sentinel is still a string, `==`
+    matches it happily, and the contract can say a sentinel match is not evidence while the TYPE
+    cannot enforce it. Absent is a STATE.
+    """
+    reported = []
+    check_embedding_contract(**_OK, read_marker=lambda: _MARKER, report_gap=reported.append)
+    assert any("UNVERIFIED" in m for m in reported), "an absent version must be reported, not agreed"
+
+
+def test_THE_MARKER_IS_CHECKED_AGAINST_THE_OBSERVED_VECTORS_not_a_constant():
+    """A constant-stamping writer and a constant-trusting reader AGREE WITH EACH OTHER WHILE BOTH
+    DISAGREE WITH THE VECTORS ON DISK. The stored length is the independent witness."""
+    lying = collection_marker(**{**_WRITTEN, "dimension": 768})
+    with pytest.raises(ConformanceFailure, match="not what is there"):
+        check_embedding_contract(**{**_OK, "read_stored_dimension": lambda: 1536,
+                                   "expected_dimension": 1536},
+                                 read_marker=lambda: lying)
 
 
 def test_ABSENT_opens_and_reports_the_gap():
@@ -336,9 +360,15 @@ def test_a_writer_that_loses_a_field_fails_admission():
         check_writer_marker(**{**_WRITTEN, "written_by": "  "})
 
 
-def test_every_field_is_required_because_a_partial_marker_cannot_discriminate():
+def test_the_FILLABLE_fields_are_required_because_a_partial_marker_cannot_discriminate():
     with pytest.raises(Exception, match="needs every field|discriminate"):
         collection_marker(**{**_WRITTEN, "model": ""})
+
+
+def test_version_is_the_ONE_field_allowed_to_be_absent():
+    """Four fields are fillable today; version has no source and blocks. Optional enforces that
+    distinction where a required field would force a placeholder."""
+    assert read_collection_marker(collection_marker(**_WRITTEN)).version is None
 
 
 def test_THE_STALENESS_PROXY_IS_DECLARED_DEFEATED_not_quietly_shipped():
@@ -356,3 +386,18 @@ def test_THE_STALENESS_PROXY_IS_DECLARED_DEFEATED_not_quietly_shipped():
     doc = I.marker_is_stale.__doc__ or ""
     assert "ALREADY DEFEATED" in doc, "the proxy's known defeat must be stated where it is used"
     assert "UNPROVEN" in doc, "a non-stale verdict must be declared as unproven, not as freshness"
+
+
+def test_THE_MODEL_ITSELF_defaults_version_to_absent_not_to_a_placeholder():
+    """GUARDS THE DIRECT CONSTRUCTOR, which the helper-based arm above cannot reach.
+
+    `collection_marker()` always passes `version=` explicitly, so a placeholder DEFAULT on the
+    model is invisible to a test that goes through the helper — found by a mutation that set the
+    default to "unknown" and survived. An implementer constructing CollectionMarker directly
+    would get the placeholder, and two placeholders compare equal.
+    """
+    from iagent_mesh.interfaces import CollectionMarker
+
+    m = CollectionMarker(collection="c", model="m", dimension=768, written_by="w",
+                         collection_created_unix_ms=1)
+    assert m.version is None, "an unsupplied version must be ABSENT, never a placeholder string"
