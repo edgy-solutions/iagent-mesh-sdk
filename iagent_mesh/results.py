@@ -46,14 +46,22 @@ two consumers: an empty result is a first-class ABSTAIN in a resolver fan-out an
 INPUT on a dashboard, and those want opposite handling. The contract's job is to make the
 distinction expressible; the policy belongs to the caller.
 
-**AND IT DOES NOT FOLLOW THAT EVERY EMPTY-RETURNING SITE MUST ADOPT IT.** The three basis sites
-above are a SCOPED count, not every place a bare ``[]`` is returned — a raw scan of "except
-handlers returning an empty container" is wider and includes at least one site that **degrades
-OPEN on purpose**: a served-class filter whose empty means *do not filter*, where failing closed
-would empty the candidate pool and take routing down globally. That one is architect-ruled to
-STAY as it is. A conformance requirement phrased over the raw count would demand it change, so
-the requirement is phrased over reads that go through these interfaces — deliberate degrade-open
-behaviour behind a documented reason is not a defect this type is chasing.
+**DEGRADE-OPEN IS A DISPOSITION, NOT AN EXEMPTION — and the difference is the whole value.**
+The three basis sites above are a SCOPED count, not every place a bare ``[]`` is returned; a raw
+scan of "except handlers returning an empty container" is wider, and at least one of those sites
+**degrades OPEN on purpose**: a served-class filter whose empty means *do not filter*, where
+failing closed would empty the candidate pool and take routing down globally. It is ruled to keep
+that behaviour.
+
+**It still returns this type.** It is a named operation on the interface, so its callers receive
+a ``MeshResult`` and then CHOOSE to treat ``failed`` as ``empty`` — explicitly, at the call site,
+with the reason written beside it. That is strictly better than today, where the rule lives in a
+helper's docstring and the call site cannot see that a decision was made at all.
+
+So the requirement is phrased over reads that go through these interfaces, and a deliberate
+degrade-open is expressed THROUGH the type rather than around it. **An exemption would hide the
+one decision worth showing** — which is the same failure as the collapse itself, arriving as
+policy instead of as a bug.
 """
 
 from __future__ import annotations
