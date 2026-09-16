@@ -3,3 +3,4 @@ LLM Integration Guidelines:
 - Base URLs for Local/Private inference (like vLLM) should be configurable.
 - The `iagent_mesh` does not tie you to any specific LLM provider, providing maximum flexibility to the data scientist.
 - **DevEx Integration**: Use the repository's built-in FastMCP Server (`mcp_server/server.py`) to give your LLM IDE the ability to locally scaffold and publish new tools (The Inception Pattern).
+- **Substrate access**: Read the graph, RDF and vector stores ONLY through the Protocols in `iagent_mesh.interfaces` (`MeshGraph`, `MeshOntology`, `MeshVectors`). Do not hold a driver and do not write a Cypher/SPARQL passthrough — a query-language slot is arbitrary code in a query's clothes. Every operation takes an `Initiator` first and returns a `MeshResult`; `if result:` raises, because the four outcomes (`answered`/`empty`/`failed`/`unreachable`) must not collapse. Full guide: `docs/interfaces.md`.

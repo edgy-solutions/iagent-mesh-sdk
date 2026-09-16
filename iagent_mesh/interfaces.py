@@ -10,13 +10,31 @@ Nothing here imports ``neo4j``, ``weaviate-client``, ``rdflib`` or ``httpx``. A 
 imported its implementation would make the dependency real however the module is named — R-038's
 rule, and there is a seal asserting it rather than a comment claiming it.
 
-**Enforcement of the ban is NOT here and is not a name list.** It is a NetworkPolicy: a pod that
-cannot route to the store cannot reach it whatever it imports. Three findings drove that and each
+**Enforcement of the ban is NOT here and is not a name list.** Three findings drove that and each
 defeats a name-based instrument on its own — *the import name is not the capability* (``rdflib``
 parses local Turtle and is not a driver), *the pyproject is not the import*
 (``agent_fleet/utils/`` has no pyproject and three engines import it), and *the import is not the
 connection* (Jena is reached by raw ``httpx``; Weaviate by ``urllib.request``, which ships with
-Python and can never be banned).
+Python and can never be banned). Those three stand: a name list cannot enforce this ban.
+
+⚠ **WHAT ENFORCES IT TODAY IS NOT WHAT THIS DOCSTRING USED TO CLAIM.** It said *"It is a
+NetworkPolicy"* — present tense, a control that **does not exist**. Measured 2026-09-16: the chart
+carries no NetworkPolicy template and the string appears nowhere in it. That is the same absent
+control the allowlist seal cited, and a docstring asserting enforcement that is not deployed is
+worse than one that asserts nothing: an implementer reads this file and concludes the perimeter
+holds, so the claim **removes** the scrutiny the gap needs.
+
+The honest statement:
+
+- a NetworkPolicy is the INTENDED enforcement — a pod that cannot route to the store cannot
+  reach it whatever it imports, which is the only instrument the three findings do not defeat;
+- **none exists as of 2026-09-16**;
+- until one does, the ban rests on the **substrate-address lint** and the **import seal** — both
+  real, both weaker than a route-level control, and neither reaching the ``urllib.request`` case
+  the third finding names;
+- the gap is carried as a **strict xfail**, so the day the policy lands that arm goes XPASS and
+  **forces this paragraph to be rewritten** rather than leaving a stale denial behind a shipped
+  control.
 
 ── THE OPERATIONS ARE DERIVED, NOT DESIGNED ────────────────────────────────────────────────
 Every method below comes from the engine-o read inventory — a census of what direct substrate

@@ -3,12 +3,15 @@
 This repository serves as the Data-Driven Developer Experience (DevEx) Hub and provides the `iagent_mesh` SDK core library, which includes universal contracts and an infrastructure wrapper for the iagent Mesh platform.
 
 > 📖 **Architectural Guide:** Read [Launch Domain Nodes, Not Scripts](docs/architecture_manifesto.md) to understand why this framework is required for enterprise AI deployments.
+>
+> 🔌 **Substrate Interfaces:** Read [Substrate Interfaces](docs/interfaces.md) for `MeshGraph` / `MeshOntology` / `MeshVectors` — the named reads an engine uses instead of a driver or a query language, the `MeshResult` type every one of them returns, and the conformance suite that admits an implementation.
 
 ## Architecture & Features
 
 This Hub leverages the **Inception Pattern** to dynamically scaffold new agent tools.
 
 - **`iagent_mesh` Core Library**: Contains `MeshTool` for routing, FastAPI execution, and Topaz Zero-Trust security.
+- **Substrate Interfaces** (`iagent_mesh.interfaces`): Three `Protocol`s — `MeshGraph`, `MeshOntology`, `MeshVectors` — giving an engine *named reads* over the property graph, the RDF store and the vector store instead of a driver handle or a query-language slot. Every operation carries the `Initiator` (who is asking) and returns a `MeshResult` that distinguishes *answered* / *empty* / *failed* / *unreachable*. Implementations are admitted by passing `iagent_mesh.conformance`, never by being named in the SDK. See [docs/interfaces.md](docs/interfaces.md).
 - **Templates**: Standardized data scientist environments (Pure Math, Instructor + Polars, BAML + Pandas).
 - **Interactive Scaffolding**: Use `scripts/scaffold.sh` to locally generate a new agent from a template.
 - **MCP Server**: The `mcp_server/server.py` exposes tools (`scaffold_local_workspace`, `publish_local_to_mesh`) for intelligent IDE-based agent creation.
