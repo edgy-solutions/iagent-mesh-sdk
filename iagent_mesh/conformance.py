@@ -29,7 +29,7 @@ from .interfaces import (
     Initiator,
     ServiceIdentityRefused,
     collection_marker,
-    marker_is_stale,
+    marker_predates_collection,
     read_collection_marker,
 )
 from .results import MeshResult
@@ -232,7 +232,7 @@ def check_embedding_contract(
                    f"anyway; the writer records this in the act that creates the collection.")
         return
 
-    if marker_is_stale(marker, read_oldest_object_unix_ms()):
+    if marker_predates_collection(marker, read_oldest_object_unix_ms()):
         # STALE READS AS ABSENT, NOT AS A MISMATCH. A marker left behind by a recreated
         # collection describes vectors that no longer exist; refusing on it would take a healthy
         # collection down, and trusting it is the confident-stale reading the field exists to

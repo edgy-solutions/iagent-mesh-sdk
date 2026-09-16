@@ -240,7 +240,7 @@ from iagent_mesh.interfaces import (  # noqa: E402
     MESH_COLLECTION_META,
     CorruptCollectionMarker,
     collection_marker,
-    marker_is_stale,
+    marker_predates_collection,
     read_collection_marker,
 )
 
@@ -340,11 +340,12 @@ def test_AN_EMPTY_COLLECTION_CANNOT_BE_DATED_and_that_is_ABSENT_not_valid():
     assert len(reported) == 1
 
 
-def test_marker_is_stale_DISCRIMINATES_rather_than_always_answering_one_way():
+def test_marker_predates_collection_DISCRIMINATES_rather_than_always_answering_one_way():
     """FIXTURE DISCRIMINATION, on the staleness helper itself: a check that answered the same
     for a fresh and a recreated collection would pass both arms above for the wrong reason."""
     m = read_collection_marker(_MARKER)
-    assert marker_is_stale(m, 1_790_000_000_000) is not marker_is_stale(m, _FRESH())
+    assert (marker_predates_collection(m, 1_790_000_000_000)
+            is not marker_predates_collection(m, _FRESH()))
 
 
 # ── the writer: one implementation, admission checks its output ──────────────────────────
@@ -383,7 +384,7 @@ def test_THE_STALENESS_PROXY_IS_DECLARED_DEFEATED_not_quietly_shipped():
     """
     import iagent_mesh.interfaces as I
 
-    doc = I.marker_is_stale.__doc__ or ""
+    doc = I.marker_predates_collection.__doc__ or ""
     assert "ALREADY DEFEATED" in doc, "the proxy's known defeat must be stated where it is used"
     assert "UNPROVEN" in doc, "a non-stale verdict must be declared as unproven, not as freshness"
 
@@ -401,3 +402,82 @@ def test_THE_MODEL_ITSELF_defaults_version_to_absent_not_to_a_placeholder():
     m = CollectionMarker(collection="c", model="m", dimension=768, written_by="w",
                          collection_created_unix_ms=1)
     assert m.version is None, "an unsupplied version must be ABSENT, never a placeholder string"
+
+
+# ── the predicate is named for what it can assert ────────────────────────────────────────
+
+def test_THE_PREDICATE_IS_NAMED_FOR_WHAT_IT_CAN_ASSERT():
+    """RULED: the name states `absent-or-older-than-oldest-object`, not a staleness CONCLUSION.
+
+    `stale` claims the marker is out of date with respect to the vectors. What is computed is a
+    comparison against the oldest object's creation time, and the two differ exactly when the
+    proxy is defeated — which is today. A caveat leaves the wrong inference available and asks
+    each reader to remember the correction; the name removes it. A name is read; a docstring
+    is not.
+    """
+    import iagent_mesh.interfaces as I
+
+    assert hasattr(I, "marker_predates_collection")
+    assert "marker_predates_collection" in I.__all__
+
+
+def test_FRESHNESS_IS_DECLARED_OUT_OF_SCOPE_IN_THE_CONTRACT_NOT_IN_PROSE():
+    """THE ARM THE RULING ASKS FOR. A property that cannot be established must be NAMED as
+    unasserted, or its absence reads as its presence — a green from `check_embedding_contract`
+    would otherwise be taken as evidence the vectors are current, which nothing here establishes.
+
+    Asserted as DATA so a caller can ask the contract what it covers rather than infer it from
+    the absence of a failure."""
+    from iagent_mesh.interfaces import MARKER_ASSERTS, MARKER_DOES_NOT_ASSERT
+
+    assert "currency" in MARKER_DOES_NOT_ASSERT, (
+        "freshness is not declared out of scope, so a passing contract check reads as evidence "
+        "of currency — which the defeated proxy cannot provide"
+    )
+    assert "currency" not in MARKER_ASSERTS
+    assert set(MARKER_ASSERTS) == {"model", "dimension"}, (
+        "the marker's TWO WITNESSES are model and dimension; adding a third here claims an "
+        "assertion the check does not make"
+    )
+
+
+def test_THE_OLD_NAME_STILL_IMPORTS_AND_WARNS():
+    """EXPAND/CONTRACT, NOT A CLEAN RENAME. `marker_is_stale` is public in 0.9.0 and 0.9.1 and
+    another lane is building against it now — removing it in the act that introduces the new name
+    would break an importer to fix a wording. The warning is what makes the interval finite."""
+    import warnings
+
+    from iagent_mesh.interfaces import marker_is_stale, read_collection_marker
+
+    m = read_collection_marker(_MARKER)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = marker_is_stale(m, _FRESH())
+
+    assert [w for w in caught if issubclass(w.category, DeprecationWarning)], (
+        "the old name does not warn, so a caller learns nothing at runtime and the interval "
+        "never ends"
+    )
+    msg = str(caught[0].message)
+    assert "marker_predates_collection" in msg, "the warning must name the replacement"
+    assert result is marker_predates_collection(m, _FRESH()), (
+        "the alias does not delegate — two implementations of one predicate is the divergence "
+        "the rename exists to avoid"
+    )
+
+
+def test_THE_PACKAGE_DOES_NOT_CALL_ITS_OWN_DEPRECATED_NAME():
+    """A library that trips its own DeprecationWarning teaches callers to filter the warning,
+    which is how the interval stops ending. `conformance.py` was the one in-package caller."""
+    import pathlib
+
+    pkg = pathlib.Path(__file__).resolve().parents[1] / "iagent_mesh"
+    offenders = []
+    for f in pkg.glob("*.py"):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if "marker_is_stale" not in line:
+                continue
+            if f.name == "interfaces.py":
+                continue  # the definition, the export and the docstring reference live here
+            offenders.append(f"{f.name}:{n}")
+    assert not offenders, f"in-package callers still use the deprecated name: {offenders}"

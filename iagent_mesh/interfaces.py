@@ -54,7 +54,10 @@ __all__ = [
     "CorruptCollectionMarker",
     "collection_marker",
     "read_collection_marker",
-    "marker_is_stale",
+    "marker_predates_collection",
+    "marker_is_stale",  # DEPRECATED alias; removed once in-fleet callers move
+    "MARKER_ASSERTS",
+    "MARKER_DOES_NOT_ASSERT",
 ]
 
 
@@ -357,8 +360,16 @@ def read_collection_marker(raw: Optional[dict]) -> Optional[CollectionMarker]:
         ) from exc
 
 
-def marker_is_stale(marker: CollectionMarker, oldest_object_unix_ms: Optional[int]) -> bool:
+def marker_predates_collection(marker: CollectionMarker,
+                               oldest_object_unix_ms: Optional[int]) -> bool:
     """Does this marker predate the collection it claims to describe?
+
+    **NAMED FOR WHAT IT CAN ASSERT.** It was `marker_is_stale`, which names a CONCLUSION
+    this predicate cannot reach: `stale` implies the marker is out of date with respect to
+    the vectors, and what is actually computed is `absent-or-older-than-the-oldest-object`.
+    Those differ exactly when the proxy is defeated, which is today (see below). A caveat
+    leaves the wrong inference available and asks every reader to remember the correction;
+    narrowing the NAME removes it. **A name is read; a docstring is not.**
 
     **MEASURED CONSTRAINT: a vector store here exposes NO collection-level creation timestamp** —
     the class schema carries nothing time-like. So the collection's age is proxied by its OLDEST
@@ -393,6 +404,54 @@ def marker_is_stale(marker: CollectionMarker, oldest_object_unix_ms: Optional[in
     if oldest_object_unix_ms is None:
         return True
     return marker.collection_created_unix_ms < oldest_object_unix_ms
+
+
+def marker_is_stale(marker: CollectionMarker, oldest_object_unix_ms: Optional[int]) -> bool:
+    """DEPRECATED — the old name for :func:`marker_predates_collection`. Delegates.
+
+    EXPAND/CONTRACT, NOT A CLEAN RENAME, and the reason is a live consumer: this name is public
+    in 0.9.0 and 0.9.1 and another lane is building against it right now. Removing it in the same
+    act that introduces the new name would break an importer to fix a wording — a rename needs a
+    dual interval, the same rule as a grant key.
+
+    The warning is the point: **a DeprecationWarning is READ AT RUNTIME, where a docstring is
+    not.** It names the replacement and why the old name was wrong, so a caller who never opens
+    this file still learns that `stale` was asserting more than the check can reach.
+
+    CONTRACT: removed in the release AFTER every in-fleet caller moves. It is an interval, not a
+    permanent alias — a permanent one would keep the misleading name readable, which is the whole
+    thing the rename exists to stop.
+    """
+    import warnings
+
+    warnings.warn(
+        "marker_is_stale() is deprecated: the name asserts STALENESS, which this predicate "
+        "cannot determine — it computes absent-or-older-than-the-oldest-object, and that proxy "
+        "is currently defeated by the store preserving creationTimeUnix across a replace. Use "
+        "marker_predates_collection(), which is named for what it can assert. FRESHNESS IS NOT "
+        "ASSERTED BY THIS CONTRACT (see MARKER_DOES_NOT_ASSERT).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return marker_predates_collection(marker, oldest_object_unix_ms)
+
+
+#: WHAT A MARKER CHECK ESTABLISHES, AS DATA RATHER THAN PROSE.
+#:
+#: The ruling: freshness is declared OUT OF SCOPE **in the contract**, not implied by a green and
+#: not corrected in a docstring. These two tuples are that declaration — a reader (and a test)
+#: can ask the contract what it asserts instead of inferring it from the absence of a failure.
+#:
+#: A passing `check_embedding_contract` means the collection's vectors were written by the model
+#: and dimension declared — TWO WITNESSES — and says NOTHING about whether they are current.
+MARKER_ASSERTS: tuple = ("model", "dimension")
+
+#: Deliberately NOT asserted. `currency` is here because the only available proxy for it is
+#: defeated by the substrate rather than by any choice a writer can make: the store preserves
+#: `creationTimeUnix` across a replace-on-deterministic-UUID (measured: 132 of 132 Predicate
+#: rows, widest gap 81 days). A property that cannot be established must be named as unasserted,
+#: or its absence reads as its presence.
+MARKER_DOES_NOT_ASSERT: tuple = ("currency",)
 
 
 @runtime_checkable
