@@ -30,8 +30,6 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0.0",
-    "fastapi>=0.100.0",
-    "uvicorn>=0.23.0",
     "httpx>=0.24.0",
     # UPPER BOUND IS LOAD-BEARING. `mcp` 2.x renamed FastMCP -> MCPServer, so an unbounded
     # `mcp>=1.0.0` resolved to 2.x and `mcp_server/server.py` failed at import — the SDK's own
@@ -56,6 +54,32 @@ dependencies = [
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
+# ── THE SERVER STACK, OPTIONAL SINCE 0.9.3 ──────────────────────────────────────────────────
+# Needed only to SERVE: `iagent_mesh.core` (the engine host) and the FastAPI dependency factory
+# in `transport_auth`. The CLIENT surface — CallerIdentity, current_caller, the mesh interfaces,
+# MeshResult, the conformance helpers — imports and runs without any of it.
+#
+# THIS IS THE SECOND HALF OF A TWO-COMMIT CHANGE AND THE ORDER WAS LOAD-BEARING. The guard that
+# makes `transport_auth` importable without fastapi shipped in 0.9.1 and has had its own green CI
+# run. Shipping this extra in the same commit would have meant it rode on the CLAIM that the
+# guard was present, when the guard's run is the evidence its safety depends on. Without the
+# guard, this line converts a loud install failure into a SILENT AUTHORIZATION CHANGE in any
+# consumer that soft-imports the SDK — dag-tools returns (sdk_present=False, None) under a bare
+# `except`, which makes its request-context rung non-terminal and drops a per-user read to the
+# service identity.
+#
+# MEASURED, so nobody has to guess what this achieves:
+#   * `fastapi` is genuinely removed for non-web consumers — `mcp` (a hard dependency) pulls
+#     starlette, NOT fastapi, so nothing else drags it in.
+#   * `uvicorn` moving out changes nothing today: the SDK never imports it (checked by AST, zero
+#     references), and `mcp` requires it, so every install still gets it. It is here because
+#     declaring a dependency this package does not use was always wrong, not because the move
+#     removes anything.
+#   * SIX FLEET ENGINES DECLARE NO uvicorn OF THEIR OWN — data_analyst, finance_agent,
+#     neo4j_expert, planning_agent, restate_analyst, weaviate_expert. They keep working ONLY
+#     because `mcp` supplies it. That safety is ACCIDENTAL, not declared, and it should be fixed
+#     on the fleet side: an app that runs uvicorn should say so.
+server = ["fastapi>=0.100.0", "uvicorn>=0.23.0"]
 dev = ["pytest", "pytest-asyncio", "httpx", "pytest-mock"]
 
 [project.urls]

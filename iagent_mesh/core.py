@@ -41,7 +41,28 @@ from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
 import nest_asyncio
-from fastapi import FastAPI, HTTPException, Request
+# ── THE SERVER STACK IS AN EXTRA SINCE 0.9.3, SO SAY SO RATHER THAN LET IT LOOK LIKE A BUG ──
+# This module IS the engine host: it builds a FastAPI app, so it genuinely cannot work without
+# one and is not guarded the way `transport_auth`'s client surface is. What changed is the
+# READING of the failure. While fastapi was a hard dependency, `ModuleNotFoundError: fastapi`
+# meant a broken install. Now it usually means `[server]` was not installed — a different
+# problem with a different fix, and a bare traceback cannot tell them apart.
+#
+# `import iagent_mesh` does NOT import this module, so the package still imports without the
+# extra; only reaching for the HOST requires it.
+try:
+    from fastapi import FastAPI, HTTPException, Request
+except ImportError as _exc:
+    raise ModuleNotFoundError(
+        "iagent_mesh.core is the ENGINE HOST and needs the server stack: "
+        + (getattr(_exc, "name", None) or "fastapi")
+        + " is not installed.\n"
+        "    pip install 'iagent-mesh[server]'\n"
+        "Since 0.9.3 fastapi and uvicorn are an OPTIONAL extra, so this is usually a "
+        "missing extra rather than a broken install. The CLIENT surface — CallerIdentity, "
+        "current_caller, the mesh interfaces, MeshResult, the conformance helpers — needs "
+        "none of it, which is why the split exists."
+    ) from _exc
 
 # Allow nested event loops (e.g. agents using asyncio inside synchronous tool bodies).
 nest_asyncio.apply()

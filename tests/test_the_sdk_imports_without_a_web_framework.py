@@ -161,3 +161,72 @@ def test_the_client_surface_names_no_fastapi_symbol():
         assert symbol not in src, (
             f"current_caller references {symbol} — it is no longer framework-free"
         )
+
+
+# ── the [server] extra: the second half of the two-commit change ─────────────────────────
+
+def _pyproject() -> str:
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_THE_SERVER_STACK_IS_NOT_A_HARD_DEPENDENCY():
+    """THE ARM THE EXTRA EXISTS FOR. While fastapi sat in `dependencies`, every consumer paid for
+    a web framework including the ones that never serve — and the extra is the only thing that
+    stops that."""
+    import re
+
+    deps = re.search(r"^dependencies = \[(.*?)^\]", _pyproject(), re.S | re.M)
+    assert deps, "the dependencies block could not be parsed"
+    block = deps.group(1)
+    for pkg in ("fastapi", "uvicorn"):
+        assert f'"{pkg}' not in block, (
+            f"{pkg} is back in the HARD dependencies, so the [server] extra buys nothing and "
+            f"non-web consumers are paying for a web framework again"
+        )
+
+
+def test_THE_SERVER_EXTRA_EXISTS_AND_CARRIES_BOTH():
+    """Removing them from `dependencies` without an extra to install them from would strand
+    every engine — the fleet needs a name to ask for the stack by."""
+    import re
+
+    extras = re.search(r"^server = \[(.*?)\]", _pyproject(), re.S | re.M)
+    assert extras, "there is no [server] extra, so nothing can ask for the stack by name"
+    for pkg in ("fastapi", "uvicorn"):
+        assert pkg in extras.group(1), f"the server extra does not carry {pkg}"
+
+
+def test_THE_ENGINE_HOST_REFUSES_WITH_A_REASON_RATHER_THAN_A_BARE_IMPORT_ERROR():
+    """`core.py` IS the host, so it genuinely cannot work without fastapi — what changed is the
+    READING of the failure. While fastapi was a hard dependency, a missing one meant a broken
+    install; now it usually means the extra was not installed. A bare traceback cannot tell
+    those apart, and they have different fixes."""
+    r = _run(_BLOCK_FASTAPI + """
+    try:
+        import iagent_mesh.core
+    except ModuleNotFoundError as exc:
+        msg = str(exc)
+        assert "ENGINE HOST" in msg, msg
+        assert "iagent-mesh[server]" in msg, "the refusal must name what to install"
+        assert "CLIENT surface" in msg, "it must say which half still works without the stack"
+        print("HOST REFUSED WELL")
+    """)
+    assert "HOST REFUSED WELL" in r.stdout, r.stderr[-800:]
+
+
+def test_THE_PACKAGE_STILL_IMPORTS_WITHOUT_THE_EXTRA():
+    """THE WHOLE POINT, RESTATED AGAINST THE NEW PACKAGING: making the stack optional is only
+    safe because the guard landed first. If `import iagent_mesh` needed fastapi, this extra
+    would break exactly the consumers it was written to serve."""
+    r = _run(_BLOCK_FASTAPI + """
+    import iagent_mesh
+    assert iagent_mesh.current_caller() is None
+    assert iagent_mesh.MeshVectors is not None
+    assert "currency" in iagent_mesh.MARKER_DOES_NOT_ASSERT
+    print("CLIENT SURFACE INTACT WITHOUT THE EXTRA")
+    """)
+    assert "CLIENT SURFACE INTACT WITHOUT THE EXTRA" in r.stdout, r.stderr[-800:]
