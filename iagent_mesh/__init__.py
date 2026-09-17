@@ -73,6 +73,12 @@ from .conformance import (
     check_offline,
     check_writer_marker,
 )
+from .edge_types import (
+    REGISTRAR_EDGE_TYPES,
+    TRACE_WRITER_EDGE_TYPES,
+    UndeclaredWriteInterface,
+    declared_edge_types,
+)
 from .enumeration import (
     DEFAULT_ENUMERATE_LIMIT,
     EnumerateInstancesRequest,
@@ -109,6 +115,11 @@ from .results import (
 # already use it, which is what the interval owes them, and no wider.
 
 __all__ = [
+    # the write interfaces' edge-type registries
+    "REGISTRAR_EDGE_TYPES",
+    "TRACE_WRITER_EDGE_TYPES",
+    "UndeclaredWriteInterface",
+    "declared_edge_types",
     # the enumerate contract
     "DEFAULT_ENUMERATE_LIMIT",
     "EnumerateInstancesRequest",
