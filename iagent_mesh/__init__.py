@@ -73,6 +73,12 @@ from .conformance import (
     check_offline,
     check_writer_marker,
 )
+from .enumeration import (
+    DEFAULT_ENUMERATE_LIMIT,
+    EnumerateInstancesRequest,
+    EnumerateInstancesResponse,
+    InstanceOption,
+)
 from .interfaces import (
     MARKER_ASSERTS,
     MARKER_DOES_NOT_ASSERT,
@@ -103,6 +109,11 @@ from .results import (
 # already use it, which is what the interval owes them, and no wider.
 
 __all__ = [
+    # the enumerate contract
+    "DEFAULT_ENUMERATE_LIMIT",
+    "EnumerateInstancesRequest",
+    "EnumerateInstancesResponse",
+    "InstanceOption",
     # the interface surface (interfaces / results / conformance)
     "ConformanceFailure",
     "assert_fixture_discriminates",
