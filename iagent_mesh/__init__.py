@@ -56,7 +56,78 @@ from .graph_manifest import (
     validate_dir,
 )
 
+# ── THE INTERFACE SURFACE: reachable from `import iagent_mesh`, not only from submodules ────
+# An engine asking for a mesh interface should not have to know which FILE it lives in —
+# `from iagent_mesh.interfaces import MeshVectors` makes the module path part of the contract,
+# so moving the definition is a rename every consumer sees. R-038 applied to a module name.
+#
+# SAFE WITH RESPECT TO THE FASTAPI GUARD, checked rather than assumed: these three modules import
+# only `typing` and `pydantic`, both already hard dependencies and neither a web framework. If a
+# future edit gives one of them a server dependency, `test_the_sdk_imports_without_a_web_framework`
+# reds — that seal imports the PACKAGE, so it covers every name added here.
+from .conformance import (
+    ConformanceFailure,
+    assert_fixture_discriminates,
+    check_embedding_contract,
+    check_live,
+    check_offline,
+    check_writer_marker,
+)
+from .interfaces import (
+    MARKER_ASSERTS,
+    MARKER_DOES_NOT_ASSERT,
+    MESH_COLLECTION_META,
+    CollectionMarker,
+    CorruptCollectionMarker,
+    Initiator,
+    MeshGraph,
+    MeshOntology,
+    MeshVectors,
+    ServiceIdentityRefused,
+    collection_marker,
+    marker_predates_collection,
+    read_collection_marker,
+)
+from .results import (
+    OUTCOMES,
+    AmbiguousResultTruth,
+    MeshResult,
+    Outcome,
+    ResultNotAnswered,
+)
+
+# `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
+# `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
+# life rather than ending it — a caller who finds it at the package root has no reason to think
+# it is on its way out. It stays importable from `iagent_mesh.interfaces` for the consumers that
+# already use it, which is what the interval owes them, and no wider.
+
 __all__ = [
+    # the interface surface (interfaces / results / conformance)
+    "ConformanceFailure",
+    "assert_fixture_discriminates",
+    "check_embedding_contract",
+    "check_live",
+    "check_offline",
+    "check_writer_marker",
+    "MARKER_ASSERTS",
+    "MARKER_DOES_NOT_ASSERT",
+    "MESH_COLLECTION_META",
+    "CollectionMarker",
+    "CorruptCollectionMarker",
+    "Initiator",
+    "MeshGraph",
+    "MeshOntology",
+    "MeshVectors",
+    "ServiceIdentityRefused",
+    "collection_marker",
+    "marker_predates_collection",
+    "read_collection_marker",
+    "OUTCOMES",
+    "AmbiguousResultTruth",
+    "MeshResult",
+    "Outcome",
+    "ResultNotAnswered",
     "MeshClient",
     "MeshResponse",
     "CallerIdentity",

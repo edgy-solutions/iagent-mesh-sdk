@@ -468,16 +468,56 @@ def test_THE_OLD_NAME_STILL_IMPORTS_AND_WARNS():
 
 def test_THE_PACKAGE_DOES_NOT_CALL_ITS_OWN_DEPRECATED_NAME():
     """A library that trips its own DeprecationWarning teaches callers to filter the warning,
-    which is how the interval stops ending. `conformance.py` was the one in-package caller."""
+    which is how a deprecation interval stops ending. `conformance.py` was the one in-package
+    caller and it moved.
+
+    READ BY AST, NOT BY LINE SCAN, and the first version was the line scan. It matched any
+    OCCURRENCE of the name, so a COMMENT in `__init__.py` explaining why the alias is
+    deliberately not re-exported reported as a caller — the seal failed on prose that documented
+    compliance with it. A comment cannot call anything. Same correction Lane 1 made for their
+    referent extraction: a text instrument on a structured question sees the text, not the
+    structure. An AST walk sees references and imports and nothing else.
+    """
+    import ast
     import pathlib
 
     pkg = pathlib.Path(__file__).resolve().parents[1] / "iagent_mesh"
     offenders = []
-    for f in pkg.glob("*.py"):
-        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-            if "marker_is_stale" not in line:
-                continue
-            if f.name == "interfaces.py":
-                continue  # the definition, the export and the docstring reference live here
-            offenders.append(f"{f.name}:{n}")
+    for f in sorted(pkg.glob("*.py")):
+        if f.name == "interfaces.py":
+            continue  # the definition and its export live here
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "marker_is_stale":
+                offenders.append(f"{f.name}:{node.lineno} (reference)")
+            elif isinstance(node, ast.Attribute) and node.attr == "marker_is_stale":
+                offenders.append(f"{f.name}:{node.lineno} (attribute)")
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    if a.name == "marker_is_stale":
+                        offenders.append(f"{f.name}:{node.lineno} (import)")
     assert not offenders, f"in-package callers still use the deprecated name: {offenders}"
+
+
+def test_THE_AST_READER_ACTUALLY_FINDS_A_REFERENCE():
+    """CONTROL ON THE INSTRUMENT ABOVE. An AST walk that matched nothing would pass the arm
+    whatever the package contained — which is exactly how the line scan failed, in reverse.
+    Proves the three node shapes it looks for are the shapes a real usage takes."""
+    import ast
+
+    found = {"name": False, "attribute": False, "import": False}
+    src = """
+from iagent_mesh.interfaces import marker_is_stale
+marker_is_stale(m, n)
+I.marker_is_stale(m, n)
+"""
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "marker_is_stale":
+            found["name"] = True
+        elif isinstance(node, ast.Attribute) and node.attr == "marker_is_stale":
+            found["attribute"] = True
+        elif isinstance(node, ast.ImportFrom):
+            if any(a.name == "marker_is_stale" for a in node.names):
+                found["import"] = True
+    assert all(found.values()), f"the reader cannot see: {[k for k,v in found.items() if not v]}"
