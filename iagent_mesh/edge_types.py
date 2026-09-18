@@ -58,18 +58,28 @@ class UndeclaredWriteInterface(LookupError):
 #: carrying `verb_iri`, `_tool_urn`, `slot`, `required`) and nothing else structural.
 REGISTRAR_EDGE_TYPES: frozenset = frozenset({"PARAMETERISED_BY"})
 
-#: THE TRACE WRITER'S SET IS NOT YET DERIVED, AND `None` IS NOT `frozenset()`.
+#: THE TRACE WRITER'S SET, DERIVED FROM THE FLEET-WIDE WRITE CENSUS — not read off the names.
+#: Source: invincible-agent `docs/plans/fleet-write-census-store-classes.md`, which partitions all
+#: THIRTEEN structural edge types 13/13 with no residue and nothing undecided:
 #:
-#: R-012: unset is "cannot know", not "empty". An empty set here would DECLARE that the trace
-#: writer emits no structural edges — a positive claim, and a false one: `answer_artifact_writer`
-#: demonstrably writes at least PRODUCED_BY, PRODUCED_FOR, DERIVED_FROM and CITES. Membership is
-#: DERIVED from the eo lane's fleet-wide write census, per the ruling, and a list assembled by
-#: reading names would be exactly the guess that ruling forbids.
+#:     4  artifact writer  CITES DERIVED_FROM PRODUCED_BY PRODUCED_FOR
+#:                         src/iagent/answer_artifact_writer.py
+#:     1  registrar        PARAMETERISED_BY
+#:                         agent_fleet/mesh_registrar/v2_substrate.py
+#:     8  doc-tools ingest GOVERNED_BY HAS_CHILD REPLACED_BY REQUIRES_TOOL SUBJECT_TO
+#:                         HAS_PART REFERENCES INSTANCE_OF  —  A SIBLING REPO
 #:
-#: A conformance seal must therefore SKIP this interface while it is None and SAY SO — a skip is
-#: not a pass, and an unverified write path reported as verified is the failure this whole
-#: mechanism exists to prevent.
-TRACE_WRITER_EDGE_TYPES: Optional[frozenset] = None
+#: THE EIGHT ARE NOT DECLARED HERE AND THAT IS THE FINDING, NOT AN OMISSION. ADR-0054 names two
+#: doors; doc-tools' domain-plugin ingest is a third, and giving it a registry entry would
+#: legitimise the write path the ADR says should not exist. `declared_edge_types` refuses an
+#: unknown interface by name for exactly that reason.
+#:
+#: `trace writer` is ADR-0054's term; the census calls the same component `the artifact writer`
+#: after the module that implements it. One thing, two names — recorded so a reader comparing the
+#: two documents does not go looking for a third writer.
+TRACE_WRITER_EDGE_TYPES: Optional[frozenset] = frozenset(
+    {"CITES", "DERIVED_FROM", "PRODUCED_BY", "PRODUCED_FOR"}
+)
 
 _INTERFACES = {
     "registrar": REGISTRAR_EDGE_TYPES,
@@ -83,6 +93,12 @@ def declared_edge_types(interface: str) -> frozenset:
     Raises :class:`UndeclaredWriteInterface` when the set has not been derived, rather than
     returning an empty one — a caller that cannot tell "writes nothing" from "nobody has
     measured yet" will report an unverified path as clean.
+
+    BOTH DOORS ARE MEASURED NOW, so nothing in this module is currently unset. The mechanism
+    stays because the state it represents is real and will recur: **it is for the NEXT interface
+    nobody has counted, not for one whose census has landed.** Shipping a measured set as `None`
+    would use an honest "we do not know" to stand in for an answer that exists — the opposite of
+    what the distinction is for, and a skip that hides a fact rather than a gap.
     """
     if interface not in _INTERFACES:
         raise UndeclaredWriteInterface(

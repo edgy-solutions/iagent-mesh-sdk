@@ -21,23 +21,48 @@ def test_THE_REGISTRAR_DECLARES_WHAT_IT_WRITES():
     assert declared_edge_types("registrar") == frozenset({"PARAMETERISED_BY"})
 
 
-def test_AN_UNDERIVED_SET_IS_NONE_AND_NOT_AN_EMPTY_SET():
-    """R-012 ON A REGISTRY. `frozenset()` is a positive claim — "this interface writes no
-    structural edges" — and it is false: answer_artifact_writer writes PRODUCED_BY, PRODUCED_FOR,
-    DERIVED_FROM and CITES. `None` says nobody has derived it, which is the true state."""
-    assert TRACE_WRITER_EDGE_TYPES is None, (
-        "the trace writer's set became a concrete value — if it was DERIVED from the write "
-        "census, good; if it was assembled by reading names, that is the guess the ruling forbids"
+def test_THE_TRACE_WRITER_IS_DECLARED_FROM_THE_CENSUS_NOT_SHIPPED_AS_UNSET():
+    """It was `None` while the write census was outstanding. The census has landed and partitions
+    all thirteen types 13/13 with no residue, so `None` here would now use an honest "we have not
+    measured" to stand in for an answer that EXISTS — which is the opposite of what the
+    unset/empty distinction is for, and a skip that hides a fact rather than a gap."""
+    assert TRACE_WRITER_EDGE_TYPES is not None, (
+        "the trace writer's set is unset while the census that derives it has landed"
     )
-    assert TRACE_WRITER_EDGE_TYPES != frozenset(), "None and empty must not compare equal here"
+    assert declared_edge_types("trace_writer") == frozenset(
+        {"CITES", "DERIVED_FROM", "PRODUCED_BY", "PRODUCED_FOR"}
+    )
 
 
-def test_ASKING_FOR_AN_UNDERIVED_SET_RAISES_RATHER_THAN_RETURNING_EMPTY():
-    """THE ARM THAT MATTERS. A caller handed `frozenset()` cannot tell "writes nothing" from
-    "nobody measured", and will report an unverified write path as clean — which is the exact
-    failure the registry exists to prevent, reproduced inside the mechanism."""
+def test_THE_TWO_DOORS_DO_NOT_CLAIM_THE_EIGHT_THAT_BELONG_TO_A_THIRD():
+    """THE FINDING, HELD OPEN BY AN ASSERTION. The census assigns eight types to doc-tools'
+    domain-plugin ingest — a door ADR-0054 does not have. Declaring them under either real
+    interface would make the partition add up while hiding the write path that should not exist,
+    which is the catch-all the ruling forbade."""
+    ingest = {"GOVERNED_BY", "HAS_CHILD", "REPLACED_BY", "REQUIRES_TOOL",
+              "SUBJECT_TO", "HAS_PART", "REFERENCES", "INSTANCE_OF"}
+    claimed = declared_edge_types("registrar") | declared_edge_types("trace_writer")
+    assert not (claimed & ingest), (
+        f"a declared door has absorbed {sorted(claimed & ingest)} — those belong to the ingest "
+        f"writer in a sibling repo, and absorbing them retires the finding by bookkeeping"
+    )
+    assert len(claimed) + len(ingest) == 13, (
+        "the partition no longer totals thirteen; the census and this registry disagree"
+    )
+
+
+def test_THE_UNSET_MECHANISM_STILL_WORKS_FOR_AN_INTERFACE_NOBODY_HAS_COUNTED(monkeypatch):
+    """BOTH DOORS ARE MEASURED, so nothing real is unset — and the mechanism must still be sealed,
+    because the state it represents will recur the next time a write interface appears before its
+    census does. Exercised against a HYPOTHETICAL interface rather than by leaving a real one
+    unset: a registry entry exists to be believed, and adding a fake door to keep a test honest
+    would be the same bookkeeping this file refuses elsewhere.
+    """
+    import iagent_mesh.edge_types as et
+
+    monkeypatch.setitem(et._INTERFACES, "some_future_door", None)
     with pytest.raises(UndeclaredWriteInterface) as exc:
-        declared_edge_types("trace_writer")
+        declared_edge_types("some_future_door")
     msg = str(exc.value)
     assert "UNSET, not" in msg, "the refusal must distinguish unset from empty"
     assert "SKIP" in msg, "it must tell a checker what to do — skip, and report unverified"
