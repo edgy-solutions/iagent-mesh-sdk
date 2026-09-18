@@ -230,3 +230,38 @@ def test_THE_PACKAGE_STILL_IMPORTS_WITHOUT_THE_EXTRA():
     print("CLIENT SURFACE INTACT WITHOUT THE EXTRA")
     """)
     assert "CLIENT SURFACE INTACT WITHOUT THE EXTRA" in r.stdout, r.stderr[-800:]
+
+
+def test_THE_DEV_EXTRA_PULLS_THE_SERVER_STACK():
+    """THE SUITE TESTS THE SERVER SURFACE, so a dev environment without it cannot COLLECT.
+
+    Eight modules import `fastapi.testclient` or `iagent_mesh.core` directly. When fastapi moved
+    from `dependencies` to the `[server]` extra, `uv run --extra dev` stopped resolving it and CI
+    died at collection with eight import errors.
+
+    IT COULD NOT HAVE BEEN CAUGHT LOCALLY, and that is why this arm exists rather than a note: the
+    move left fastapi ALREADY INSTALLED in every venv that predated it, so the declared set and
+    the actual environment disagreed and only a clean resolution could tell. The same shape as a
+    system-wide editable install — the environment answering a question about the declaration.
+
+    Asserted as a SELF-REFERENCE rather than by listing fastapi twice: `server` owns the version
+    bounds and `dev` asks for it by name. Two lists are free to drift, and a dev environment
+    resolving a different fastapi than the extra declares is the divergence this change is about.
+    """
+    import re
+
+    # THE WHOLE LINE, not a bracket-to-bracket match. A non-greedy `\[(.*?)\]` stops at the FIRST
+    # `]` — which is the one inside `iagent-mesh[server]`, the very token being looked for. The
+    # instrument could not see its target because the target contains the instrument's terminator.
+    dev = re.search(r"^dev = (.+)$", _pyproject(), re.M)
+    assert dev, "the dev extra could not be parsed"
+    assert "iagent-mesh[server]" in dev.group(1), (
+        "the dev extra no longer pulls the server stack, so `uv run --extra dev` cannot collect "
+        "the eight modules that import fastapi — CI dies before a single test runs, and no "
+        "existing venv will reproduce it"
+    )
+    for pkg in ("fastapi", "uvicorn"):
+        assert f'"{pkg}' not in dev.group(1), (
+            f"{pkg} is listed in `dev` directly — that is a second copy of the version bounds, "
+            f"free to drift from the [server] extra it duplicates"
+        )

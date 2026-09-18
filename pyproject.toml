@@ -80,7 +80,19 @@ requires-python = ">=3.10"
 #     because `mcp` supplies it. That safety is ACCIDENTAL, not declared, and it should be fixed
 #     on the fleet side: an app that runs uvicorn should say so.
 server = ["fastapi>=0.100.0", "uvicorn>=0.23.0"]
-dev = ["pytest", "pytest-asyncio", "httpx", "pytest-mock"]
+# DEV DEPENDS ON THE SERVER EXTRA, because THE SUITE TESTS THE SERVER SURFACE. Eight modules
+# import `fastapi.testclient` or `iagent_mesh.core` directly, so a dev environment without the
+# stack cannot COLLECT, let alone run.
+#
+# This was found by CI and could not have been found locally: moving fastapi to an extra left it
+# already installed in every existing venv, so the declared set and the actual environment
+# disagreed and only a clean resolution could tell. Fixing the WORLD (the declaration) rather
+# than the arms — the eight modules genuinely need a web framework.
+#
+# A SELF-REFERENCE, not a second copy of the version bounds: `server` owns them, `dev` asks for
+# it by name. Two lists would be free to drift, and a dev environment resolving a different
+# fastapi than the extra declares is the divergence this whole change is about.
+dev = ["pytest", "pytest-asyncio", "httpx", "pytest-mock", "iagent-mesh[server]"]
 
 [project.urls]
 Homepage = "https://github.com/edgy-solutions/iagent-mesh-sdk"
