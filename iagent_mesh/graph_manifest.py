@@ -98,6 +98,30 @@ class SlotDecl(BaseModel):
     referent: Optional[str] = None
     values: Optional[list[str]] = None
     default: Optional[Any] = None
+    #: WHICH OTHER SLOTS OF THIS ROW RESTRICT THIS SLOT'S VALID VALUES. Declared, because
+    #: nothing in a provider's silence tells a scoping dimension from an ordinary bound value:
+    #: `lot` genuinely restricts which rate vintages are valid, `direction: upstream` restricts
+    #: nothing, and a gateway that treats every bound slot as scoping refuses menus that were
+    #: always right — a worse defect than the one it fixes, because it fires on working paths.
+    #:
+    #: THE INVARIANT, AND IT IS THE OTHER HALF OF
+    #: :attr:`iagent_mesh.enumeration.EnumerateInstancesResponse.scoped_by`:
+    #:
+    #:     scoped_by  <=  narrowed_by  &  bound
+    #:
+    #: A provider's `scoped_by` is DRAWN FROM this list, intersected with what is actually bound
+    #: this turn. This side is the OBLIGATION, stated once at ratification; that side is the
+    #: provider's CLAIM about one answer. A name here that never appears there is a narrowing
+    #: nobody applied — the menu is refused. A name there that is not here is a provider
+    #: claiming a scoping this row never declared, which is out of the invariant in the other
+    #: direction and is a provider defect, not a row one.
+    #:
+    #: OPTIONAL AND `None`-DEFAULTED ON PURPOSE. `ref_basis` dumps slots with
+    #: `exclude_none=True`, so an undeclared slot carries nothing into the hash and EVERY
+    #: EXISTING `manifest_ref` IS UNCHANGED by this field's arrival. A `= []` default would put
+    #: `narrowed_by: []` on every slot of every row and move every ref in the fleet, including
+    #: rows that have nothing to do with menus. Measured, not assumed.
+    narrowed_by: Optional[list[str]] = None
 
     @model_validator(mode="after")
     def _referent_only_on_spoken(self) -> "SlotDecl":
@@ -105,6 +129,40 @@ class SlotDecl(BaseModel):
             raise ValueError(
                 f"slot {self.name!r}: a referent belongs on a SPOKEN slot. A handle is resolved "
                 f"by the dispatcher from the store and was never something a speaker names."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _narrowed_by_is_well_formed(self) -> "SlotDecl":
+        if self.narrowed_by is None:
+            return self
+        if not self.narrowed_by:
+            raise ValueError(
+                f"slot {self.name!r}: narrowed_by is present but empty. An empty list and an "
+                f"absent one would mean the same thing while looking like a decision — omit it."
+            )
+        for other in self.narrowed_by:
+            if not other or not other.strip():
+                raise ValueError(
+                    f"slot {self.name!r}: narrowed_by carries a blank slot name, which claims "
+                    f"a scoping nobody can check"
+                )
+        if len(set(self.narrowed_by)) != len(self.narrowed_by):
+            raise ValueError(f"slot {self.name!r}: narrowed_by repeats a slot name")
+        if self.name in self.narrowed_by:
+            raise ValueError(
+                f"slot {self.name!r}: a slot cannot be narrowed by itself — the menu would be "
+                f"gated on the value it exists to choose"
+            )
+        # The CARRIER must be spoken, same reasoning as `referent` above: a menu is drawn for
+        # somebody to pick from, and a handle is resolved by the dispatcher rather than picked.
+        # A narrowing declared on a handle is inert, and an inert declaration that looks live is
+        # the defect this field exists to prevent. The slots NAMED may be of any kind — a handle
+        # the dispatcher bound can legitimately scope what a speaker is then offered.
+        if self.kind not in ("spoken-mandatory", "spoken-optional"):
+            raise ValueError(
+                f"slot {self.name!r}: narrowed_by belongs on a SPOKEN slot. Nothing draws a "
+                f"menu for a {self.kind} slot, so the declaration could never fire."
             )
         return self
 
@@ -188,6 +246,23 @@ class GraphManifest(BaseModel):
                     f"{self.graph_id}: slot {s.name!r} of type {s.type!r} is an untyped "
                     f"passthrough — ADR-0046 §2 refuses it. Declare the fields the graph reads."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _narrowed_by_names_resolve(self) -> "GraphManifest":
+        # A NAME THAT MATCHES NOTHING IS THE SILENT FAILURE. `narrowed_by: ["Lot"]` against a
+        # slot called `lot` never appears in any provider's `scoped_by`, so the gateway refuses
+        # that menu FOREVER and the row looks correct. SlotDecl cannot catch it — it cannot see
+        # its siblings — so the check belongs here, where the population is.
+        known = {s.name for s in self.slots}
+        for s in self.slots:
+            for other in s.narrowed_by or ():
+                if other not in known:
+                    raise ValueError(
+                        f"{self.graph_id}: slot {s.name!r} declares narrowed_by {other!r}, "
+                        f"which is not a slot of this row. Known slots: "
+                        f"{sorted(known)}"
+                    )
         return self
 
 

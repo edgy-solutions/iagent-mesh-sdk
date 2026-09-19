@@ -52,12 +52,13 @@ Binding this shape is the contract half; the fan-out is a separate act by a sepa
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 __all__ = [
     "DEFAULT_ENUMERATE_LIMIT",
+    "unhonoured_scoping",
     "EnumerateInstancesRequest",
     "EnumerateInstancesResponse",
     "InstanceOption",
@@ -140,6 +141,19 @@ class EnumerateInstancesResponse(BaseModel):
     Reported as the slot NAMES rather than a boolean, because "scoped" is not one state: a
     provider handed `{"lot", "category"}` that honours only `lot` has produced a list scoped by
     one of two, and a boolean would let the ask builder believe both were applied.
+
+    THE INVARIANT, AND IT IS THE OTHER HALF OF
+    :attr:`iagent_mesh.graph_manifest.SlotDecl.narrowed_by`:
+
+        scoped_by  <=  narrowed_by  &  bound
+
+    This list is DRAWN FROM the slot's `narrowed_by` — the row's declaration of which dimensions
+    restrict it — intersected with what is actually bound this turn. That side is the
+    OBLIGATION, stated once at ratification; this side is the CLAIM about one answer. A declared
+    name missing here is a narrowing the provider did not apply, and the menu is refused;
+    :func:`unhonoured_scoping` is the comparison. A name here that the row never declared is out
+    of the invariant the other way — a provider claiming a scoping nobody asked for, which is a
+    provider defect rather than a row one, and it does not make a menu safe to draw.
     """
 
     @field_validator("scoped_by")
@@ -166,3 +180,27 @@ class EnumerateInstancesResponse(BaseModel):
         caller cares about, and this is the only method that surfaces the difference.
         """
         return sorted(set((requested or {}).keys()) - set(self.scoped_by))
+
+
+def unhonoured_scoping(
+    declared: Sequence[str],
+    bound: Mapping[str, str],
+    response: "EnumerateInstancesResponse",
+) -> list:
+    """Declared narrowing slots that were BOUND this turn and the provider did NOT apply.
+
+    The invariant `scoped_by <= narrowed_by & bound`, evaluated: this returns what is missing
+    from the left of it. Non-empty means the menu is a class-wide list wearing a scoped one —
+    draw it and the user picks an option the verb will reject. Empty means the menu is honest,
+    either because everything declared was applied or because nothing declared is bound yet.
+
+    **INTERSECTING WITH `bound` IS THE WHOLE POINT.** A slot declared as narrowing but not yet
+    bound cannot scope anything, and refusing on it would refuse the first menu of every turn —
+    the same over-refusal as treating every bound value as a scoping dimension, reached from
+    the other side.
+
+    Takes the declaration as a plain sequence rather than a `SlotDecl`, so `enumeration` does
+    not import `graph_manifest`: the gateway already holds the slot, and the contract here is
+    the NAMES, not the model.
+    """
+    return sorted((set(declared) & set(bound)) - set(response.scoped_by))

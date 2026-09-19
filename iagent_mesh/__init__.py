@@ -97,6 +97,7 @@ from .enumeration import (
     EnumerateInstancesRequest,
     EnumerateInstancesResponse,
     InstanceOption,
+    unhonoured_scoping,
 )
 from .interfaces import (
     MARKER_ASSERTS,
@@ -150,6 +151,7 @@ __all__ = [
     "EnumerateInstancesRequest",
     "EnumerateInstancesResponse",
     "InstanceOption",
+    "unhonoured_scoping",
     # the interface surface (interfaces / results / conformance)
     "ConformanceFailure",
     "assert_fixture_discriminates",
