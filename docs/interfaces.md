@@ -1,13 +1,35 @@
 # Substrate Interfaces: `iagent_mesh.interfaces`
 
-**Status:** shipped in SDK `0.9.2`. Import from `iagent_mesh.interfaces` and
-`iagent_mesh.results` — these names are **not** re-exported from the top-level
-`iagent_mesh` package, so `from iagent_mesh import MeshGraph` will fail.
+**Status:** shipped in SDK `0.9.3`. **Both import paths work** — the root one is
+new in `0.9.3`, and the sentence here previously said it would fail.
+
+```python
+from iagent_mesh import Initiator, MeshGraph, MeshOntology, MeshVectors, MeshResult
+```
+
+The module paths keep working and nothing needs to change:
 
 ```python
 from iagent_mesh.interfaces import Initiator, MeshGraph, MeshOntology, MeshVectors
 from iagent_mesh.results import MeshResult
 ```
+
+Prefer the root. Importing by module path makes the FILE part of the contract, so a
+definition cannot move without every consumer seeing a rename — which is the reason
+the names were promoted.
+
+> ⚠ **Not everything is at the root, and the omissions are deliberate rather than
+> incomplete.** `task_kinds` and `discovery` each export `resolve`, and `task_kinds`
+> also collides with `graph_manifest` on `compose`, `json_schema` and `validate_dir`.
+> A root carrying both sides of a collision would answer one caller's question with
+> the other's function, so those modules are imported by path until the names are
+> settled. `tests/test_every_public_name_is_reachable.py` records which modules are
+> exported, which are declined, and why.
+
+**What `0.9.3` also carries:** the `[server]` extra (`pip install 'iagent-mesh[server]'`
+for the engine host and the auth dependency — the client surface needs neither), the
+`mesh:enumerateInstances` request/response shape with `scoped_by`, the edge-type
+registries, and the `SOURCE_LEDGER` row vocabulary.
 
 ---
 
@@ -441,9 +463,17 @@ the confident-stale reading the field exists to prevent.
 
 `marker_is_stale()` is the old name and delegates to
 `marker_predates_collection()`, emitting a `DeprecationWarning`. It is kept for
-one dual-key interval because the name is public in `0.9.0`/`0.9.1` and there are
-live importers — a rename needs an expand/contract interval, not a clean cut. **It
-is removed in the release after every in-fleet caller moves.** Migrate now:
+one dual-key interval because the name is public in `0.9.0`/`0.9.1` — a rename
+needs an expand/contract interval, not a clean cut.
+
+**The in-fleet caller has now moved** (engine-o's `mesh_vectors._ensure_opened`, and
+its own seal asserts it does not drift back). An audit across every repo checked out
+locally finds no remaining importer — only prose mentions in a ruling doc and a
+comment. **That audit covers the repos on one machine, not the world:** the name was
+the *real* function in `0.9.0`/`0.9.1`, so anyone installing from PyPI on those
+versions has a caller nobody here can see, and they get one release of deprecation
+warning rather than an interval. **It is removed in a later release, deliberately —
+not in `0.9.3`.** Migrate now:
 
 ```diff
 - from iagent_mesh.interfaces import marker_is_stale
