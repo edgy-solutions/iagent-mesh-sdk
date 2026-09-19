@@ -20,10 +20,37 @@ silently shadow the other:
     validate_dir    graph_manifest.py  task_kinds.py
     resolve         discovery.py       task_kinds.py
 
-`resolve` is the sharpest: `discovery.resolve` loads an interface implementation and
-`task_kinds.resolve` resolves a task kind. Same name, unrelated jobs — a root that exported both
-would answer one caller's question with the other's function. So the surface is chosen per
-module, and the modules left out say why here rather than by omission.
+`compose` IS THE ONE WITH BOTH CONSUMERS ALREADY SHIPPED, which makes it the better example:
+
+    graph_manifest.compose   composes a ratified GRAPH ROW with its overlays
+                             consumed by agent_fleet/graph_host/main.py:43-46
+    task_kinds.compose       composes a TASK KIND
+                             consumed by src/iagent/human_tasks.py:536
+
+Two live callers, one name, unrelated jobs. `resolve` is the same shape — `discovery.resolve`
+loads an interface implementation, `task_kinds.resolve` resolves a task kind. A root exporting
+either pair would answer one caller's question with the other's function, and nothing would
+report it. So the surface is chosen per module, and the modules left out say why here rather than
+by omission.
+
+── WHO ACTUALLY CONSUMES THE SURFACE THIS FILE GUARDS: NOBODY IN THE FLEET ─────────────────
+Measured across invincible-agent: `from iagent_mesh import ...` has ZERO occurrences. Every
+consumer there imports by submodule path — `from iagent_mesh.graph_manifest import compose`, and
+so on. The SDK's own tests use the root; the fleet never does.
+
+**A READER WHO GREPS FOR ROOT IMPORTS, FINDS NONE, AND CONCLUDES THIS SEAL PROTECTS NOTHING HAS
+THE FACT RIGHT AND THE LESSON BACKWARDS.** A surface with no local consumer is exactly where a
+seal earns most: breakage there trips nobody in this repo, so nothing reports it, and the only
+party who feels it is a team following the documented import from outside. A surface with local
+consumers defends itself — someone's build breaks. This one has no such defence, which is the
+argument FOR the arms rather than against them.
+
+THE ORIGINATING STORY, NARROWED BY THE LANE THAT TOLD IT, because it travelled oversized:
+`enforce_refusal` missing from the root in v0.7.0 BROKE NO IN-REPO CONSUMER — engine-lg imported
+it from `graph_manifest` then and still does. What it broke was the DOCUMENTED SURFACE and route
+C. Still a defect, still the reason to derive this seal; just not "the function the release
+existed to share was unavailable", which is what the shorter telling implies. Recorded at its
+true size so nobody inflates it back.
 """
 from __future__ import annotations
 
@@ -139,10 +166,17 @@ def test_A_DECLINED_MODULE_IS_NOT_ALSO_EXPORTED():
 # ── the collision that makes a blanket re-export impossible ──────────────────────────────
 
 def test_THE_ROOT_DOES_NOT_CARRY_A_COLLIDING_NAME_FROM_BOTH_SIDES():
-    """`discovery.resolve` loads an interface implementation; `task_kinds.resolve` resolves a task
-    kind. Same name, unrelated jobs. A root exporting both would answer one caller's question with
-    the other's function, and nothing would report it — which is why the surface is chosen per
-    module rather than swept."""
+    """TWO INSTANCES IN THE WILD, not one hypothetical.
+
+    `compose` is the one with both consumers already shipped — `graph_manifest.compose` composes a
+    ratified graph row (graph_host/main.py:43-46), `task_kinds.compose` composes a task kind
+    (human_tasks.py:536). `resolve` is the same shape: `discovery.resolve` loads an interface
+    implementation, `task_kinds.resolve` resolves a task kind.
+
+    A root exporting either pair answers one caller's question with the other's function, and
+    nothing reports it. A rule with two instances found in the wild reads differently from one
+    with a single example — the next person to propose a blanket sweep will check this comment
+    before they check the code."""
     import collections
 
     seen = collections.defaultdict(list)
