@@ -73,6 +73,19 @@ from .conformance import (
     check_offline,
     check_writer_marker,
 )
+from .rows import (
+    HOLE_DISPOSITIONS,
+    NON_HOLE_DISPOSITIONS,
+    ROW_DISPOSITIONS,
+    VERDICT_KEYS,
+    disposition_for,
+    fetch_row,
+    has_content,
+    holes_from,
+    reachable_for,
+    row,
+    verdict_of,
+)
 from .edge_types import (
     REGISTRAR_EDGE_TYPES,
     TRACE_WRITER_EDGE_TYPES,
@@ -115,6 +128,18 @@ from .results import (
 # already use it, which is what the interval owes them, and no wider.
 
 __all__ = [
+    # the SOURCE_LEDGER row vocabulary (ADR-0046)
+    "HOLE_DISPOSITIONS",
+    "NON_HOLE_DISPOSITIONS",
+    "ROW_DISPOSITIONS",
+    "VERDICT_KEYS",
+    "disposition_for",
+    "fetch_row",
+    "has_content",
+    "holes_from",
+    "reachable_for",
+    "row",
+    "verdict_of",
     # the write interfaces' edge-type registries
     "REGISTRAR_EDGE_TYPES",
     "TRACE_WRITER_EDGE_TYPES",
