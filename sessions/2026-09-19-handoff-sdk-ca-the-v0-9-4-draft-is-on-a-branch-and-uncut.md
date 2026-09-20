@@ -19,16 +19,26 @@ step.
 > (a: promote the declined root names; b: the stale `uv.lock`; c: derive the slot-ref test). The
 > ORDER of steps 1–6 is unchanged and still governs. Only the expected VALUES moved:
 >
->     step 1   expect `0 3`, not `N 2`   — three ahead of master
+>     step 1   expect `0 7`, not `N 2`   — seven ahead of master, measured at c303b35
 >     step 2   expect 421 passed, not 412
->     step 3   FIVE commits to merge, not two, and the same rule applies: do not squash.
->              Each carries its own justification.
+>     step 3   SEVEN commits to merge, not two, and the same rule applies: do not squash.
+>              Each carries its own justification. Four are code; three are sessions.
 >
+>     247ff5e  feat(manifest): a slot declares what narrows it — SlotDecl.narrowed_by
+>     711c6d0  fix(rows): reachable_for REFUSES an undeclared clause instead of failing open
+>     6a6c1ed  docs(handoff): the v0.9.4 draft is on a branch and uncut          [sessions]
 >     14b0f59  chore(lock): uv.lock catches up to the 0.9.3 extras split
 >     9a1e498  feat(root): sixteen names come to the package root; four stay module-qualified
 >     195e2dd  test(ref): the slot-ref arm is derived from SlotDecl, not a hand list
+>     c303b35  docs(sessions): land eo's vector measurement, amend this handoff  [sessions]
 >
-> Plus `6a6c1ed`, which is this file. **`uv.lock` no longer dirties on a suite run** — §2's
+> The code-only tip, which is the check the overnight order asked for:
+>
+>     git diff --stat 711c6d0..lane/ca -- . ':!sessions'
+>     -> iagent_mesh/__init__.py · tests/test_every_public_name_is_reachable.py
+>        tests/test_graph_manifest.py · uv.lock          (4 files, nothing else)
+>
+> **`uv.lock` no longer dirties on a suite run** — §2's
 > warning about that is now historical, and a dirty `uv.lock` after `uv run` would be a new
 > finding rather than the expected state.
 >
