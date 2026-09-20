@@ -30,8 +30,23 @@ silently shadow the other:
 Two live callers, one name, unrelated jobs. `resolve` is the same shape — `discovery.resolve`
 loads an interface implementation, `task_kinds.resolve` resolves a task kind. A root exporting
 either pair would answer one caller's question with the other's function, and nothing would
-report it. So the surface is chosen per module, and the modules left out say why here rather than
-by omission.
+report it.
+
+── 0.9.4: THE CHOICE MOVED FROM THE MODULE TO THE NAME ─────────────────────────────────────
+Until 0.9.4 the answer was to decline the whole module, which kept the four names off the root
+and SIXTEEN OTHERS with them — names that collided with nothing and were absent for no reason
+anyone had stated. `declarations`, `discovery` and `task_kinds` are exported now; the four
+colliding names are withheld ONE AT A TIME in `_EXEMPT`, each with its own reason, because the
+two cases are not the same failure. `resolve` is absent on both sides, so a caller gets an
+AttributeError. `compose`, `json_schema` and `validate_dir` are PRESENT at the root as
+graph_manifest's, so on the task_kinds side the caller gets a working function that does
+another job — which is why the coverage arm below now compares IDENTITY and not `hasattr`.
+
+MEASURED, because "the old arms were weaker" is the kind of claim this file exists to refuse:
+with the three modules promoted and `task_kinds.compose` re-exported over graph_manifest's, the
+old `hasattr` arm passed all eleven modules, and the old collision arm — which read _EXPORTED
+membership rather than the root — failed IDENTICALLY on the shadowed tree and on the correct
+one. One arm blind to the defect, one arm red either way. Neither carried information.
 
 ── WHO ACTUALLY CONSUMES THE SURFACE THIS FILE GUARDS: NOBODY IN THE FLEET ─────────────────
 Measured across invincible-agent: `from iagent_mesh import ...` has ZERO occurrences. Every
@@ -55,6 +70,7 @@ true size so nobody inflates it back.
 from __future__ import annotations
 
 import ast
+import importlib
 import pathlib
 
 import pytest
@@ -66,8 +82,8 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: Modules whose public surface IS the package's surface. Every `__all__` name must be reachable
 #: from `import iagent_mesh`.
 _EXPORTED = {
-    "conformance", "edge_types", "enumeration", "graph_manifest",
-    "interfaces", "results", "rows", "shapes",
+    "conformance", "declarations", "discovery", "edge_types", "enumeration",
+    "graph_manifest", "interfaces", "results", "rows", "shapes", "task_kinds",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a
@@ -77,18 +93,42 @@ _DECLINED = {
             "fastapi back in the path of `import iagent_mesh` and undo the 0.9.1 guard",
     "transport_auth": "its CLIENT half (CallerIdentity, current_caller) IS exported by name; the "
                       "rest is the server dependency factory",
-    "declarations": "not yet part of the promised surface — exported by name when a second "
-                    "consumer needs it, which is this repo's extract-at-the-second-consumer rule",
-    "discovery": "exports `resolve`, which collides with task_kinds.resolve; the root cannot "
-                 "carry both and choosing silently is the shadowing this file exists to prevent",
-    "task_kinds": "exports `resolve`, `compose`, `json_schema` and `validate_dir`, all of which "
-                  "collide with another module. Needs a naming decision before a root export",
     "client": "no __all__ — MeshClient and MeshResponse are exported by name",
     "models": "tool input/output base classes, consumed by subclassing from the module",
 }
 
 #: Names public in an EXPORTED module and deliberately absent from the root, with the reason.
+#: RULED 2026-09-19 (the architect): the four names exported by two modules each are NEVER
+#: exported bare at the root. They stay module-qualified, and the decision is recorded here —
+#: per NAME and per SIDE — rather than by declining a whole module, because declining the module
+#: also withheld sixteen names that never collided with anything and had no reason to be absent.
+#:
+#: WHY THE TWO REASONS ARE NOT INTERCHANGEABLE, and this is the part a reader needs:
+#: `resolve` is absent from the root on BOTH sides, so a caller writing `iagent_mesh.resolve`
+#: gets an AttributeError and goes looking. `compose`, `json_schema` and `validate_dir` ARE at
+#: the root and mean GRAPH_MANIFEST'S — shipped since 0.7.x, consumed by
+#: agent_fleet/graph_host/main.py:43-46. So on the task_kinds side the failure mode is worse
+#: than absence: the caller gets a function, of the right name, that does another job. That is
+#: the shadowing this file exists to prevent, and it is why the coverage arm below compares
+#: IDENTITY rather than asking `hasattr` — under `hasattr` these three read as reachable.
 _EXEMPT = {
+    ("discovery", "resolve"):
+        "collides with task_kinds.resolve — `discovery.resolve` loads an interface "
+        "implementation, `task_kinds.resolve` resolves a task kind. RULED: neither comes to the "
+        "root, so the name is absent on both sides and a caller is told so by AttributeError",
+    ("task_kinds", "resolve"):
+        "collides with discovery.resolve. RULED: neither side comes to the root",
+    ("task_kinds", "compose"):
+        "collides with graph_manifest.compose, which IS at the root and has shipped since "
+        "0.7.x (agent_fleet/graph_host/main.py:43-46). RULED: the task_kinds one stays "
+        "module-qualified. Withdrawing graph_manifest's so the root carries neither would be a "
+        "SUBTRACTION from a published surface, which the same ruling forbids in its last line",
+    ("task_kinds", "json_schema"):
+        "collides with graph_manifest.json_schema, which is at the root. Same ruling, same "
+        "reason as `compose`",
+    ("task_kinds", "validate_dir"):
+        "collides with graph_manifest.validate_dir, which is at the root and is what the policy "
+        "repo's PR gate imports. Same ruling, same reason as `compose`",
     ("interfaces", "marker_is_stale"):
         "the deprecated alias for marker_predates_collection. Promoting a deprecated name into a "
         "NEW namespace extends its life rather than ending it — it stays importable from "
@@ -122,16 +162,40 @@ def _modules_with_all() -> set:
 @pytest.mark.parametrize("module", sorted(_EXPORTED))
 def test_EVERY_PUBLIC_NAME_OF_AN_EXPORTED_MODULE_IS_REACHABLE(module):
     """THE ARM v0.7.0 NEEDED. A release whose point is sharing a name, that does not re-export
-    it, ships its own purpose broken — and the pin moves before anyone notices."""
+    it, ships its own purpose broken — and the pin moves before anyone notices.
+
+    IT ASKS FOR IDENTITY, NOT `hasattr`, AND THAT IS THE 0.9.4 CHANGE. Three modules joined
+    _EXPORTED in 0.9.4, and one of them — `task_kinds` — declares `compose`, `json_schema` and
+    `validate_dir`, all three of which ALREADY resolve at the root as graph_manifest's
+    functions. `hasattr(iagent_mesh, "compose")` is True, so under the old form this arm would
+    have reported task_kinds' public surface as fully reachable while the root handed every
+    caller another module's function.
+
+    A GREEN OVER THE WRONG OBJECT IS INDISTINGUISHABLE FROM A GREEN OVER THE RIGHT ONE, so the
+    two failures are separated and named: a name the root cannot reach is MISSING, and a name
+    the root reaches as somebody else's object is SHADOWED. The second is the one that was
+    invisible, and it is the whole reason the four colliding names needed a ruling rather than
+    a re-export."""
     declared = _module_all(module)
     assert declared, f"{module} is listed as exported but declares no __all__"
-    missing = sorted(
-        n for n in declared
-        if not hasattr(iagent_mesh, n) and (module, n) not in _EXEMPT
-    )
+    mod = importlib.import_module(f"iagent_mesh.{module}")
+    missing, shadowed = [], []
+    for n in sorted(declared):
+        if (module, n) in _EXEMPT:
+            continue
+        if not hasattr(iagent_mesh, n):
+            missing.append(n)
+        elif getattr(iagent_mesh, n) is not getattr(mod, n):
+            shadowed.append(n)
     assert not missing, (
         f"{module} declares {missing} public and `import iagent_mesh` cannot reach them. Either "
         f"re-export them, or add each to _EXEMPT with the reason it is withheld."
+    )
+    assert not shadowed, (
+        f"the root carries {shadowed} but NOT {module}'s — a caller who reads {module}'s "
+        f"__all__ and imports that name from the root gets another module's object. Either the "
+        f"root should carry this module's, or add each to _EXEMPT saying which side the root "
+        f"means and why."
     )
 
 
@@ -154,6 +218,29 @@ def test_EVERY_DECLINED_MODULE_AND_EXEMPT_NAME_CARRIES_A_REASON():
         assert why and why.strip(), f"{mod} is declined with no reason"
     for (mod, name), why in _EXEMPT.items():
         assert why and why.strip(), f"{mod}.{name} is exempt with no reason"
+
+
+def test_AN_EXEMPT_NAME_IS_ACTUALLY_ABSENT_FROM_THE_ROOT():
+    """AN EXEMPTION IS A CLAIM, SO CHECK IT. `_EXEMPT` says "this module's name is deliberately
+    not at the root"; the coverage arm then SKIPS that pair. So the table is the one place in
+    this file where writing a sentence makes an arm stop looking — and if the name later
+    arrives at the root anyway, every reason recorded here becomes false with nothing red.
+
+    THE CONCRETE ONE: `("discovery", "resolve")` says "neither side comes to the root". Add
+    `from .discovery import resolve` to the package root and, without this arm, the suite stays
+    GREEN — the coverage arm skips the exempt pair and the collision arm is satisfied because
+    the OTHER side is exempt too. The ruling would be broken, the reason in the table would be
+    a lie, and the only evidence would be the sentence itself."""
+    for (module, name), why in _EXEMPT.items():
+        mod = importlib.import_module(f"iagent_mesh.{module}")
+        if not hasattr(iagent_mesh, name):
+            continue
+        assert getattr(iagent_mesh, name) is not getattr(mod, name), (
+            f"({module!r}, {name!r}) is in _EXEMPT — recorded as withheld from the root, "
+            f"because: {why} — but `iagent_mesh.{name}` IS {module}.{name}. The exemption is "
+            f"now false. Either drop the entry and let the coverage arm cover the name, or "
+            f"take the export back out."
+        )
 
 
 def test_A_DECLINED_MODULE_IS_NOT_ALSO_EXPORTED():
@@ -185,15 +272,40 @@ def test_THE_ROOT_DOES_NOT_CARRY_A_COLLIDING_NAME_FROM_BOTH_SIDES():
             seen[n].append(module)
     colliding = {n: mods for n, mods in seen.items() if len(mods) > 1}
     assert colliding, (
-        "no collisions found — if they were resolved by renaming, this arm and the _DECLINED "
+        "no collisions found — if they were resolved by renaming, this arm and the _EXEMPT "
         "reasons that cite them are stale and should be re-derived"
     )
-    for name, mods in colliding.items():
-        exported_sides = [m for m in mods if m in _EXPORTED]
-        assert len(exported_sides) <= 1, (
-            f"{name!r} is exported by {exported_sides}; the root can only mean one of them and "
-            f"the other is shadowed silently"
+
+    # ── MEASURED AT THE ROOT, NOT FROM _EXPORTED MEMBERSHIP ─────────────────────────────────
+    # Until 0.9.4 this arm asked which colliding modules were in _EXPORTED. That was a PROXY,
+    # and it held only because a declined module put nothing at the root — so the proxy and the
+    # fact moved together and nothing distinguished them. 0.9.4 promoted `task_kinds` WITH its
+    # four colliding names withheld, and the proxy stopped tracking the fact in both directions
+    # at once: it would now call a correct root a shadowing (the module is exported), and it
+    # would still have nothing to say about WHICH object the root actually hands back.
+    # The fact is about what `iagent_mesh.<name>` IS. Ask that.
+    for name, mods in sorted(colliding.items()):
+        owners = []
+        for m in mods:
+            mod = importlib.import_module(f"iagent_mesh.{m}")
+            if hasattr(iagent_mesh, name) and getattr(iagent_mesh, name) is getattr(mod, name):
+                owners.append(m)
+        assert len(owners) <= 1, (
+            f"{name!r} at the root is the same object as {owners}'s on more than one side — "
+            f"the collision is not what this arm believes it is"
         )
+        if hasattr(iagent_mesh, name):
+            assert owners, (
+                f"the root carries {name!r} and it is NOT the object of any of {sorted(mods)}, "
+                f"which all export that name. Something else bound it, and the collision this "
+                f"arm reasons about is no longer the one in the code"
+            )
+        for m in sorted(set(mods) - set(owners)):
+            assert (m, name) in _EXEMPT, (
+                f"{m}.{name} is not what the root means by {name!r} — the root means "
+                f"{owners[0] if owners else 'nothing'} — and ({m!r}, {name!r}) is not in "
+                f"_EXEMPT. An omission with a reason is a decision; this one records nothing."
+            )
 
 
 # ── the move this file shipped with ──────────────────────────────────────────────────────
