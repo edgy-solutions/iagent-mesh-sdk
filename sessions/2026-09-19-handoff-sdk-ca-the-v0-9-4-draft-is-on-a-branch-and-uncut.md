@@ -1,7 +1,8 @@
 # Handoff — SDK lane (ca), 2026-09-19
 
 to: iagent-mesh-sdk / `lane/ca`
-read-by: iagent-mesh-sdk / `lane/ca`
+read-by: iagent-mesh-sdk / `lane/ca` · ia-eo / `lane/eo` (2026-09-19, overnight; §2's head `711c6d0` had
+  already moved to `6a6c1ed` when I read it)
 from: session `iagent-mesh-sdk-de [c0e91c]`
 
 **The v0.9.4 draft is committed and pushed on `lane/ca`. It is NOT cut and must not be cut on
@@ -11,6 +12,29 @@ step.
 ---
 
 ## 1. THE EXACT NEXT STEP
+
+> ### ⚠ AMENDMENT, 2026-09-19 overnight (session on `lane/ca`) — THE NUMBERS BELOW ARE STALE
+>
+> Three commits landed after this handoff was written, on an overnight order from the architect
+> (a: promote the declined root names; b: the stale `uv.lock`; c: derive the slot-ref test). The
+> ORDER of steps 1–6 is unchanged and still governs. Only the expected VALUES moved:
+>
+>     step 1   expect `0 3`, not `N 2`   — three ahead of master
+>     step 2   expect 421 passed, not 412
+>     step 3   FIVE commits to merge, not two, and the same rule applies: do not squash.
+>              Each carries its own justification.
+>
+>     14b0f59  chore(lock): uv.lock catches up to the 0.9.3 extras split
+>     9a1e498  feat(root): sixteen names come to the package root; four stay module-qualified
+>     195e2dd  test(ref): the slot-ref arm is derived from SlotDecl, not a hand list
+>
+> Plus `6a6c1ed`, which is this file. **`uv.lock` no longer dirties on a suite run** — §2's
+> warning about that is now historical, and a dirty `uv.lock` after `uv run` would be a new
+> finding rather than the expected state.
+>
+> **STILL TRUE AND STILL GOVERNING: no tag, no PyPI, not cut on its own.** The overnight order
+> restated both. §4's open items on `limit`, the four double-exported names and the hand-listed
+> slot-ref test are addressed or answered — see §4's own amendment note.
 
 **There is no next step you may take unilaterally. The branch is parked, waiting on a pin the
 fleet calls for.** When the architect calls that pin, in this order and no other:
@@ -191,6 +215,26 @@ Expect the tree to go dirty on `uv.lock` the first time you run the suite.
   architect reading `lane/eo` directly (this order §1).
 
 ### Open, and whose
+
+> **AMENDMENT, 2026-09-19 overnight.** Of the six items below:
+>
+> * **`limit`** — still open, still NOT invented. The overnight order asked for a PROPOSAL only,
+>   and it went out as a packet: `invincible-agent/sessions/2026-09-19-packet-from-ca-limit-the-
+>   response-cannot-say-it-truncated.md`. Two options, a recommendation, and the finding that
+>   `len(instances) <= limit` is an invariant nothing checks. **Unruled. Do not build it.**
+> * **The four double-exported names** — RULED and landed at `9a1e498`. `compose`,
+>   `json_schema`, `validate_dir` and `resolve` are never exported bare at the root; sixteen
+>   other names were promoted. The order said fourteen; the measured count is sixteen and the
+>   commit message carries the arithmetic. One place the literal ruling was not followed, flagged
+>   there rather than here.
+> * **`test_changing_any_SLOT_field_mints_a_new_ref` is a HAND-LIST** — FIXED at `195e2dd`. It
+>   derives from `SlotDecl.model_fields` now. It had drifted four fields of eight, `narrowed_by`
+>   among them.
+> * **`uv.lock` is stale on master** — FIXED at `14b0f59`, its own commit, `uv lock` only.
+> * **`marker_is_stale`** and **the NetworkPolicy strict xfail** — untouched, still open, still
+>   as described below.
+
+
 
 * **`limit` has not had the `scoped_by` treatment and is not implemented — OURS, but it wants
   its own ruling first.** A truncated list wearing a complete menu is the same defect as a
