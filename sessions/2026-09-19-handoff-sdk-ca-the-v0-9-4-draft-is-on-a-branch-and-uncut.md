@@ -15,14 +15,24 @@ step.
 
 > ### ⚠ AMENDMENT, 2026-09-19 overnight (session on `lane/ca`) — THE NUMBERS BELOW ARE STALE
 >
-> Three commits landed after this handoff was written, on an overnight order from the architect
-> (a: promote the declined root names; b: the stale `uv.lock`; c: derive the slot-ref test). The
-> ORDER of steps 1–6 is unchanged and still governs. Only the expected VALUES moved:
+> An overnight order from the architect landed THREE CODE commits after this handoff was written
+> (a: promote the declined root names; b: the stale `uv.lock`; c: derive the slot-ref test), plus
+> session commits including this amendment. The ORDER of steps 1–6 is unchanged and still
+> governs. Only the expected VALUES moved:
 >
->     step 1   expect `0 7`, not `N 2`   — seven ahead of master, measured at c303b35
+>     step 1   DO NOT expect a number. `N 2` is wrong and so is any count written here —
+>              this block has already been wrong twice for the same reason, because a
+>              document that lists its own commits is stale the moment it is committed.
+>              What is INVARIANT, and what step 1 should actually check:
+>
+>                  git diff --stat 711c6d0..lane/ca -- . ':!sessions'
+>                  -> exactly 4 files, listed below, and NOTHING else
+>
+>              Anything outside those four, or any `sessions/` file appearing in that
+>              command's output, is a real finding. The commit COUNT is not.
 >     step 2   expect 421 passed, not 412
->     step 3   SEVEN commits to merge, not two, and the same rule applies: do not squash.
->              Each carries its own justification. Four are code; three are sessions.
+>     step 3   do not squash — the same rule as before, over more commits. Each carries
+>              its own justification. Four are code; the rest are sessions.
 >
 >     247ff5e  feat(manifest): a slot declares what narrows it — SlotDecl.narrowed_by
 >     711c6d0  fix(rows): reachable_for REFUSES an undeclared clause instead of failing open
@@ -31,6 +41,7 @@ step.
 >     9a1e498  feat(root): sixteen names come to the package root; four stay module-qualified
 >     195e2dd  test(ref): the slot-ref arm is derived from SlotDecl, not a hand list
 >     c303b35  docs(sessions): land eo's vector measurement, amend this handoff  [sessions]
+>     …        and any sessions commit after it. Re-measure; do not trust this list's length.
 >
 > The code-only tip, which is the check the overnight order asked for:
 >
