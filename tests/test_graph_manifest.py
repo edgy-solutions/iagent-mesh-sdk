@@ -20,6 +20,7 @@ from iagent_mesh.graph_manifest import (
     REF_COSMETIC,
     GraphManifest,
     ManifestError,
+    SlotDecl,
     compose,
     load_manifests,
     manifest_ref,
@@ -232,21 +233,78 @@ def test_changing_any_CONTRACT_field_mints_a_new_ref(field):
     )
 
 
-@pytest.mark.parametrize("slot_field", ["kind", "type", "required", "referent"])
+#: TWO SLOTS, and the second one is not decoration. `narrowed_by` names a sibling slot, and
+#: `_narrowed_by_names_resolve` refuses a name that is not a slot of the same row — correctly,
+#: because a narrowing pointed at nothing is the silent failure that validator exists to catch.
+#: A one-slot row therefore cannot perturb `narrowed_by` at all: the only legal value would be
+#: the slot's own name, which `_narrowed_by_is_well_formed` refuses in its own right. The
+#: population a derivation needs is the population the field can legally take.
+def _two_slot_row(**over):
+    d = _row(**over)
+    d["slots"] = [
+        {"name": "program_id", "kind": "spoken-mandatory", "type": "string",
+         "required": True, "referent": "http://invincible-agent/fin#Program"},
+        {"name": "vintage", "kind": "spoken-optional", "type": "string"},
+    ]
+    return d
+
+
+#: The perturbation per SlotDecl field. Separate from the test so the arm below can assert the
+#: table COVERS the model rather than quietly iterating whatever happens to be written here.
+_SLOT_ALT = {
+    "name": "program_ref",
+    "kind": "spoken-optional",
+    "type": "integer",
+    "required": False,
+    "referent": "http://invincible-agent/fin#ControlAccount",
+    "values": ["FY24", "FY25"],
+    "default": "P-1",
+    "narrowed_by": ["vintage"],
+}
+
+
+@pytest.mark.parametrize("slot_field", sorted(SlotDecl.model_fields))
 def test_changing_any_SLOT_field_mints_a_new_ref(slot_field):
-    """`referent` is the field whose omission was the gap, and it is here by derivation: slots
-    go into the basis via `model_dump`, so every declared SlotDecl field is covered."""
-    base = manifest_ref(GraphManifest(**VALID))
-    alt = {"kind": "spoken-optional", "type": "integer", "required": False,
-           "referent": "http://invincible-agent/fin#ControlAccount"}
-    row = _row()
-    row["slots"][0][slot_field] = alt[slot_field]
-    if slot_field in ("kind", "required"):
-        row["arity"] = None            # the forcing rule no longer applies
+    """DERIVED FROM `SlotDecl.model_fields`, which is what this file said it was doing and was
+    not. The parametrize was the hand list `["kind", "type", "required", "referent"]`, under a
+    docstring claiming coverage "by derivation: slots go into the basis via `model_dump`, so
+    every declared SlotDecl field is covered". The BASIS was derived. The ASSERTION was not, and
+    a derivation nobody iterates is a claim about code that never runs.
+
+    IT HAD ALREADY DRIFTED THREE FIELDS BEFORE `narrowed_by` MADE IT FOUR. `name`, `values` and
+    `default` were never in the list. Then 247ff5e added `narrowed_by` two commits ago — a field
+    whose entire purpose is to change what a row means — and the arm that claims to fire on ANY
+    slot field never saw it. Nothing went red, because nothing was looking: the list grew when
+    someone remembered, and nobody did.
+
+    THE SAME DEFECT SHAPE AS THE ONE THIS SECTION WAS BUILT FOR, one level down. `referent`'s
+    omission from the ref basis passed all fifteen tests here because the seal varied two fields
+    and was read as covering the contract. This list varied four and was read as covering the
+    slot. A derivation grows when the basis does; a list grows when someone remembers."""
+    base = manifest_ref(GraphManifest(**_two_slot_row()))
+    assert slot_field in _SLOT_ALT, (
+        f"SlotDecl declares {slot_field!r} and _SLOT_ALT has NO perturbation for it, so its "
+        f"coverage is unasserted. Add one — do not skip, which is how `referent` survived, and "
+        f"do not drop it from the parametrize, which is how `narrowed_by` arrived uncovered."
+    )
+    row = _two_slot_row()
+    row["slots"][0][slot_field] = _SLOT_ALT[slot_field]
     assert manifest_ref(GraphManifest(**row)) != base, (
         f"slot.{slot_field} changed and the ref did not move — the ref does not identify the "
         f"contract it claims to"
     )
+
+
+def test_the_SLOT_perturbation_table_names_no_field_the_model_dropped():
+    """THE OTHER DIRECTION, and it is why the table is a module-level dict rather than a local.
+
+    A stale entry here is harmless to the arms above — the parametrize iterates the MODEL, so a
+    perturbation for a deleted field is simply never used. That is exactly what makes it
+    dangerous to read: it documents a field the model no longer has, and the next person deriving
+    something from this table inherits the ghost. `test_every_model_field_is_classified_as_
+    contract_or_cosmetic` already does this for REF_COSMETIC; slots get the same treatment."""
+    stale = sorted(set(_SLOT_ALT) - set(SlotDecl.model_fields))
+    assert not stale, f"_SLOT_ALT perturbs fields SlotDecl no longer declares: {stale}"
 
 
 @pytest.mark.parametrize("field", sorted(REF_COSMETIC))
