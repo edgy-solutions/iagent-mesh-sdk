@@ -97,6 +97,7 @@ from .enumeration import (
     EnumerateInstancesRequest,
     EnumerateInstancesResponse,
     InstanceOption,
+    over_limit,
     unhonoured_scoping,
 )
 from .interfaces import (
@@ -201,6 +202,7 @@ __all__ = [
     "EnumerateInstancesRequest",
     "EnumerateInstancesResponse",
     "InstanceOption",
+    "over_limit",
     "unhonoured_scoping",
     # the interface surface (interfaces / results / conformance)
     "ConformanceFailure",

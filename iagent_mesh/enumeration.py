@@ -19,9 +19,10 @@ TWO OF THOSE DIVERGENCES CHANGE BEHAVIOUR, not style:
     planning and 422s against the other four — so the same malformed request is a refusal from
     four engines and an answer from one, and nothing reports which happened.
 
-── THE THREE STATES OF AN ENUMERATION, AND WHY `scoped_by` IS A FIELD ──────────────────────
-RULED 2026-09-16. A provider may be handed bound slots as scoping context; the response must say
-whether it USED them.
+── THE THREE STATES OF AN ENUMERATION, AND WHY `scoped_by` AND `completeness` ARE FIELDS ────
+RULED 2026-09-16 (scoping) and 2026-09-23 (limit — the same ruling, extended). A provider may be
+handed bound slots as scoping context, and asked for at most `limit` instances; the response must
+say whether it USED the context and whether it delivered the WHOLE menu.
 
     scoped_by: ["lot"]   the provider honoured the bound slots — this list is lot-scoped
     scoped_by: []        it answered CLASS-WIDE, whatever it was given
@@ -38,11 +39,28 @@ the slots but forgets the field is reported as class-wide, so the menu is refuse
 under-claims. The opposite default would make a forgetful provider's class-wide list look scoped,
 which is the exact defect. This is the only asymmetry in the model and it is deliberate.
 
-⚠ **THE SAME RULE APPLIES TO `limit` AND IS NOT IMPLEMENTED HERE.** A truncated list wearing a
+**THE SAME RULE APPLIES TO `limit`, AND NOW IT IS IMPLEMENTED.** A truncated list wearing a
 complete menu is the same defect as a class-wide list wearing a scoped one: the caller cannot
 tell "these are the options" from "these are the first 25 of them", and a menu that silently
-omits the user's answer is worse than a refusal. The ruling covered scoping, so this model covers
-scoping — the symmetry is recorded rather than invented, and it wants its own ruling.
+omits the user's answer is worse than a refusal. `completeness` names three states the same shape
+as scoping:
+
+    completeness: "complete"     the provider claims `instances` is the whole population
+    completeness: "truncated"    the provider claims more exist beyond `instances`
+    completeness: "unknown"      the provider has not said either way
+
+`completeness` DEFAULTS TO `"unknown"`, AND THE DEFAULT IS THE SAME FAIL-SAFE DIRECTION AS
+`scoped_by`'S DEFAULT OF `[]`. A provider that has not been migrated to this field (0 of 5
+providers currently emit it — see the table above) must not be read as either "complete" or
+"truncated": `"unknown"` is an honest under-claim, not a guess collapsed into `"complete"`. This
+field is a CLAIM the provider makes, never something this module DERIVES from
+`len(instances) < limit` — inferring completeness from the count is exactly the shape this
+docstring warns against for `scoped_by`, in the other direction: there, a name that was NOT
+claimed is the defect; here, a completeness that was not claimed would be the defect.
+`total_available`, when a provider knows the population size, says how far short
+`instances` falls; `None` means "not knowable or not reported", not zero. :func:`over_limit` is
+the seal on the one thing this module CAN check without trusting a claim: the invariant
+`len(instances) <= limit` itself.
 
 ── WHAT THIS MODULE DOES NOT DO ────────────────────────────────────────────────────────────
 It does not make anything call an enumerate. `src/iagent/defs/dynamic_supervisor.py` records that
@@ -52,13 +70,14 @@ Binding this shape is the contract half; the fan-out is a separate act by a sepa
 """
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence
+from typing import Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 __all__ = [
     "DEFAULT_ENUMERATE_LIMIT",
     "unhonoured_scoping",
+    "over_limit",
     "EnumerateInstancesRequest",
     "EnumerateInstancesResponse",
     "InstanceOption",
@@ -165,6 +184,41 @@ class EnumerateInstancesResponse(BaseModel):
             )
         return v
 
+    completeness: Literal["complete", "truncated", "unknown"] = "unknown"
+    """Does `instances` hold the WHOLE population the provider knows of, or a prefix of it?
+
+    Mirrors `scoped_by` exactly, one state per read:
+
+        "complete"    the provider claims `instances` IS the whole population
+        "truncated"   the provider claims more exist beyond what `instances` holds
+        "unknown"     the provider has not said either way
+
+    DEFAULTS TO `"unknown"`, AND THE DEFAULT IS THE FAIL-SAFE DIRECTION, for the identical reason
+    `scoped_by` defaults to `[]` rather than to something read as "definitely scoped". 0 of 5
+    providers in the module docstring's table currently emit this field, so a provider that has
+    not been migrated must not be read as either "complete" or "truncated" — `"unknown"` is an
+    honest under-claim, never a guess that collapses into `"complete"`. A caller MUST be able to
+    tell "the provider said complete" from "the provider never said anything about completeness";
+    that distinction is the entire reason this is a three-value `Literal` and not a boolean.
+
+    THIS FIELD IS A CLAIM THE PROVIDER MAKES, NEVER SOMETHING THIS MODULE DERIVES. Inferring
+    `completeness` from `len(instances) < limit` would look free — a response with fewer than
+    `limit` instances often IS complete — but a provider that has 3 of 25 requested and forgot to
+    declare `limit` is not "complete" just because it returned fewer than the limit. That is
+    exactly the shape this docstring warns against for `scoped_by` in the other direction: a claim
+    this module invents is as dishonest as a claim a provider drops.
+    """
+
+    total_available: Optional[int] = None
+    """The size of the population the provider knows about, WHEN it knows it.
+
+    `None` means "not knowable or not reported", not zero — a provider that cannot count its own
+    population (or has not been migrated to say so) must not be read as reporting an empty one.
+    Paired with `completeness == "truncated"`, this is how far short `instances` falls; paired
+    with `"unknown"`, it may still be `None`, because a provider can fail to claim completeness
+    and fail to know its population size independently of each other.
+    """
+
     def is_class_wide(self) -> bool:
         """True when nothing was scoped. The ask builder refuses a scoped menu on this."""
         return len(self.scoped_by) == 0
@@ -204,3 +258,24 @@ def unhonoured_scoping(
     the NAMES, not the model.
     """
     return sorted((set(declared) & set(bound)) - set(response.scoped_by))
+
+
+def over_limit(
+    request: "EnumerateInstancesRequest",
+    response: "EnumerateInstancesResponse",
+) -> bool:
+    """Does this answer VIOLATE the invariant `len(instances) <= limit`?
+
+    Unlike `completeness`, which is a claim the provider makes about itself, this is the one
+    thing about limit-honouring this module CAN check without trusting anybody: `request.limit`
+    is what was asked, `response.instances` is what came back, and nothing before this function
+    compared the two. A provider that ignores `limit` entirely — the two providers in the module
+    docstring's table that enumerate unbounded — would otherwise pass silently, its answer
+    accepted as a menu with no seal on its size at all.
+
+    A free function taking BOTH objects, not a method on either, for the same reason as
+    `unhonoured_scoping`: the request and the response are both needed, and neither one alone
+    carries enough information — a response cannot know what was asked, and a request cannot
+    know what came back.
+    """
+    return len(response.instances) > request.limit
