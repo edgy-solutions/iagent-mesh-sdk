@@ -71,6 +71,7 @@ from .conformance import (
     check_embedding_contract,
     check_live,
     check_offline,
+    check_ontology_contract,
     check_writer_marker,
 )
 from .rows import (
@@ -210,6 +211,7 @@ __all__ = [
     "check_embedding_contract",
     "check_live",
     "check_offline",
+    "check_ontology_contract",
     "check_writer_marker",
     "MARKER_ASSERTS",
     "MARKER_DOES_NOT_ASSERT",

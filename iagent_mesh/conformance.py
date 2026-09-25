@@ -17,10 +17,15 @@ answered-nothing from failed-silently. So this suite ASSERTS ITS OWN FIXTURES DI
 before trusting them — :func:`assert_fixture_discriminates` — rather than carrying a list of
 remembered instances. A suite whose fixtures are undiscriminating passes exactly the
 error-swallowing implementations it exists to reject.
+
+The ontology arm, :func:`check_ontology_contract`, takes the implementer's OWN fixture (an
+absent IRI, a present one, and the typed terms their serializer emits), because only they know
+their store; it asserts that fixture discriminates before trusting it.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Optional, Sequence
 
 from .interfaces import (
@@ -41,6 +46,7 @@ __all__ = [
     "assert_fixture_discriminates",
     "check_offline",
     "check_live",
+    "check_ontology_contract",
 ]
 
 
@@ -295,3 +301,98 @@ def check_writer_marker(**kw) -> None:
         if getattr(back, field) != expected:
             _fail("writer marker", f"round trip lost {field}: wrote {expected!r}, read "
                                    f"{getattr(back, field)!r}")
+
+
+# ── the ontology arm ─────────────────────────────────────────────────────────────────────
+
+_LANG_SUFFIX = re.compile(r'"@[A-Za-z]+(?:-[A-Za-z0-9]+)*\Z')
+
+
+def _untyped_form(term: str) -> str:
+    """The same lexical form with its datatype or language tag removed."""
+    if "^^" in term:
+        return term[: term.index("^^")]
+    return _LANG_SUFFIX.sub('"', term)
+
+
+def check_ontology_contract(
+    impl: Any,
+    *,
+    call_ask_present: Callable[[], MeshResult],
+    call_ask_absent: Callable[[], MeshResult],
+    call_construct: Callable[[], MeshResult],
+    typed_terms: Sequence[str],
+) -> None:
+    """The ``MeshOntology`` contract: absence is an ANSWER, and a typed read keeps its types.
+
+    The three ``call_*`` are zero-argument and already bound to a PERSON initiator by the
+    caller. ``typed_terms`` are the exact substrings the implementation's serializer emits for
+    typed terms in the fixture subject (``'"42"^^xsd:integer'``, ``'"hello"@en'``).
+
+    Two properties, each the reverse of a defect that shipped. ``ask`` on an IRI that does not
+    exist is ``empty`` — asked, and it is not there — and never ``failed``/``unreachable`` (a
+    check that cannot say no) nor ``answered`` (a check that cannot say no, the other way).
+    ``construct`` returns Turtle with TERM TYPES intact, because the SELECT executor drops them.
+    """
+    op_ask, op_construct = "ontology.ask", "ontology.construct"
+
+    if not typed_terms:
+        _fail(op_construct, "no typed terms supplied — a suite over nothing passes everything, "
+                            "and a construct that strips every type would pass it")
+
+    # THE FIXTURE MUST DISCRIMINATE: a term with no datatype and no language tag is
+    # indistinguishable from its stripped form, so it cannot tell typed from stripped.
+    for term in typed_terms:
+        if "^^" not in term and not _LANG_SUFFIX.search(term):
+            _fail(op_construct, f"fixture does not discriminate: {term!r} carries no datatype "
+                                f"and no language tag, so a construct that dropped term types "
+                                f"would still emit it. Supply typed terms such as "
+                                f"'\"42\"^^xsd:integer' or '\"hello\"@en'")
+        assert_fixture_discriminates(
+            f"{op_construct} typed term {term!r} vs untyped", term, _untyped_form(term),
+            describe=lambda t: t,
+        )
+
+    present = call_ask_present()
+    try:
+        absent = call_ask_absent()
+    except Exception as exc:  # noqa: BLE001 - ANY raise on an absent IRI is the defect
+        _fail(op_ask, f"ask() raised {type(exc).__name__} on an ABSENT iri: {exc}. That is 'could "
+                      f"not ask' read from a legitimate absence: ask() must not raise or fail on "
+                      f"an IRI that does not exist, it answers empty")
+
+    assert_fixture_discriminates(
+        "ontology.ask present vs absent", present, absent, describe=lambda r: r.outcome
+    )
+
+    if absent.outcome in ("failed", "unreachable"):
+        _fail(op_ask, f"an ABSENT iri produced {absent.outcome!r}. That is 'could not ask' read "
+                      f"from a legitimate absence: ask() must not raise or fail on an IRI that "
+                      f"does not exist, because empty means asked-and-it-is-not-there and "
+                      f"collapsing the two is how a guard came to be a check that could not fail")
+    if absent.outcome != "empty":
+        _fail(op_ask, f"an ABSENT iri produced {absent.outcome!r} — an IRI that does not exist "
+                      f"reported as existing. The existence check cannot say no")
+    if present.outcome != "answered":
+        _fail(op_ask, f"a PRESENT iri produced {present.outcome!r}, not 'answered'. This is the "
+                      f"positive control: an ask() that is always empty passes the absent arm "
+                      f"trivially")
+
+    built = call_construct()
+    if built.outcome != "answered":
+        _fail(op_construct, f"a PRESENT subject produced {built.outcome!r}, not 'answered' — "
+                            f"nothing to compare term types against, and a typed read that "
+                            f"returns nothing is not a typed read")
+    for row in built.rows:
+        if not isinstance(row, str):
+            _fail(op_construct, f"a row is {type(row).__name__}, not str. construct() returns "
+                                f"Turtle TEXT; rows of another shape are the SELECT executor's "
+                                f"bindings, which is where term types are dropped")
+    turtle = "\n".join(built.rows)
+    if not turtle.strip():
+        _fail(op_construct, "answered with rows that are all blank — no Turtle was returned")
+    for term in typed_terms:
+        if term not in turtle:
+            _fail(op_construct, f"the Turtle does not contain {term!r}. Term types were DROPPED "
+                                f"(a typed literal came back untyped or the term is missing): "
+                                f"types intact is the point of CONSTRUCT over SELECT")
