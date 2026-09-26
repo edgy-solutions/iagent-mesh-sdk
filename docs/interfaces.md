@@ -262,6 +262,21 @@ write came to be guarded by a check that could not fail.
 `construct` exists rather than a SELECT because the SELECT executor drops term
 types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a guess.
 
+**What an implementation is held to** ([§6](#ontology-implementations-one-extra-check)):
+
+- `ask` on an IRI that does not exist answers `empty` — never `failed`,
+  `unreachable`, or a raised exception, and never `answered`. A caller that gets
+  `failed` from a legitimate absence cannot tell *no* from *could not ask*.
+- `ask` on an IRI that does exist answers `answered`. Without this, an `ask` that
+  is always `empty` would satisfy the rule above.
+- `construct` answers with Turtle **text** (`str` rows) that still carries its term
+  types: `"42"^^xsd:integer` stays typed, `"hello"@en` keeps its tag.
+
+> **Status: the contract has a conformance arm and no implementation.** No
+> `MeshOntology` implementation exists in the fleet yet, and the entry-point group
+> `iagent_mesh.ontology` is unfilled. `check_ontology_contract` is proven against
+> in-memory fakes, not against a real RDF store.
+
 > **There is no write half, and for a specific reason: there is no verified
 > working path.** The update endpoint is derived by replacing `/sparql` with
 > `/update` in an endpoint spelled `.../ds/query` — no configured endpoint
@@ -583,6 +598,34 @@ its own fixtures discriminate **before** the arm that uses them, rather than
 carrying a list of remembered instances — both of its authors shipped an
 undiscriminating fixture. Use this helper in your own arms too.
 
+### Ontology implementations: one extra check
+
+```python
+from iagent_mesh.conformance import check_ontology_contract, check_offline
+
+person = Initiator(subject="user:someone", kind="person")
+
+check_ontology_contract(
+    impl,
+    call_ask_present=lambda: impl.ask(person, iri=EXISTING_IRI),
+    call_ask_absent=lambda: impl.ask(person, iri=IRI_THAT_EXISTS_NOWHERE),
+    call_construct=lambda: impl.construct(person, subject=EXISTING_IRI),
+    typed_terms=['"42"^^xsd:integer', '"hello"@en'],   # as YOUR serializer emits them
+)
+```
+
+You supply the fixture; the SDK ships no RDF dependency. The subject behind
+`EXISTING_IRI` must carry **at least one datatype literal and one language-tagged
+literal**, and `typed_terms` are the exact substrings your serializer writes for
+them. The check is a substring match, so it is a floor: parse the Turtle in your
+own test if you want term types compared structurally.
+
+The arm refuses a fixture that cannot discriminate (present and absent must answer
+differently; a term with no datatype and no tag cannot tell *typed* from *stripped*),
+and refuses `typed_terms=()`. It does **not** assert what `construct` returns for
+an absent subject — the Protocol does not say. Run `check_offline` as well, for the
+service-identity refusal and the `MeshResult` return type.
+
 ### Vector implementations: two extra checks
 
 ```python
@@ -636,7 +679,55 @@ must:
 
 ---
 
-## 8. Quick reference
+## 8. Saying how a figure was computed: `MethodBlock`
+
+```python
+from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
+
+class RateOutput(ToolOutput):
+    total: float
+
+out = RateOutput(
+    total=100.0,
+    method=MethodBlock(
+        formula="rate * hours",
+        inputs=[
+            MethodInput(name="rate", value=12.5, unit="USD/h"),
+            MethodInput(name="hours", value=8),
+        ],
+        bound=40.0,
+        bound_defaulted=True,          # the producer filled the bound in; the caller did not
+        producer_sha="3f2a91c",        # the code that computed it
+    ),
+)
+```
+
+This is not a substrate interface; it lives here because it answers the same question
+the result types do — *what should a reader believe about this value* — for a number
+instead of a read.
+
+`ToolOutput.method` is **optional and additive**. An output that sets none dumps
+exactly what it dumped before, with no `method: null` key, and a subclass that
+already declares its own field named `method` keeps it.
+
+| Field | Meaning |
+| --- | --- |
+| `formula` | How the figure was produced. Required, not blank. |
+| `inputs` | `MethodInput(name, value, unit=None)` for each input, with the value it took. The value keeps its type (`12` stays an `int`, `True` a `bool`). `unit=None` means *no unit stated*, not *dimensionless*. |
+| `bound` | An optional numeric bound the computation ran under. |
+| `bound_defaulted` | `True` if the producer supplied the bound, `False` if the caller did, `None` if the producer did not say. **`None` is not `False`**: an unmade claim is not a claim the caller chose the bound. |
+| `producer_sha` | The code that produced the figure. Required, not blank. |
+
+`MethodBlock` is `extra="forbid"` and frozen: a misspelt key is refused rather than
+dropped. It records what the producer **says** about its method; nothing in the SDK
+verifies that the formula is the one that ran or that `producer_sha` is the sha that
+was deployed.
+
+> **Unreleased.** This ships in v0.9.4, which has not been cut.
+
+---
+
+## 9. Quick reference
 
 ```python
 from iagent_mesh.interfaces import (
@@ -651,8 +742,9 @@ from iagent_mesh.results import (
 )
 from iagent_mesh.conformance import (
     check_offline, check_live, check_embedding_contract, check_writer_marker,
-    assert_fixture_discriminates, ConformanceFailure,
+    check_ontology_contract, assert_fixture_discriminates, ConformanceFailure,
 )
+from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 ```
 
 Deprecated, removed after in-fleet callers move: `marker_is_stale`.

@@ -1,9 +1,38 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
-from typing import Optional
+from typing import Optional, Union
 
 class ToolInput(BaseModel):
     """Base class for all Data Scientist inputs."""
     pass
+
+
+class MethodInput(BaseModel):
+    """One input to a formula: its name, the value it took, and the unit the value is in.
+
+    ``unit`` is optional because some inputs have none (a count, a flag). ``None`` means "no unit
+    stated", never "dimensionless" — an input the producer did not annotate must not be read as one
+    it asserted to be unitless.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    value: Union[bool, int, float, str]
+    unit: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("a method input must be named")
+        return v
+
+    @field_validator("unit")
+    @classmethod
+    def _unit_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("a blank unit is not 'no unit' — omit it")
+        return v
 
 
 class MethodBlock(BaseModel):
@@ -22,7 +51,7 @@ class MethodBlock(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     formula: str
-    inputs: list[str]
+    inputs: list[MethodInput]
     bound: Optional[float] = None
     bound_defaulted: Optional[bool] = None
     producer_sha: str

@@ -13,9 +13,9 @@ from typing import Optional
 import pytest
 from pydantic import ValidationError
 
-from iagent_mesh.models import MethodBlock, ToolOutput
+from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 
-_BLOCK = dict(formula="rate * hours", inputs=["rate", "hours"], producer_sha="abc1234")
+_BLOCK = dict(formula="rate * hours", inputs=[{"name": "rate", "value": 12.5, "unit": "USD/h"}, {"name": "hours", "value": 8}], producer_sha="abc1234")
 
 
 # â”€â”€ the block â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -92,3 +92,38 @@ def test_A_SUBCLASS_METHOD_FIELD_THAT_IS_NONE_IS_STILL_DUMPED():
         method: Optional[str] = None
 
     assert Own().model_dump() == {"method": None}
+
+
+# ── inputs carry their values ────────────────────────────────────────────────────────────
+
+def test_AN_INPUT_CARRIES_ITS_VALUE_AND_AN_OPTIONAL_UNIT():
+    m = MethodBlock(**_BLOCK)
+    rate, hours = m.inputs
+    assert (rate.name, rate.value, rate.unit) == ("rate", 12.5, "USD/h")
+    assert hours.unit is None, "no unit stated is None — not dimensionless, not an empty string"
+
+
+def test_THE_BARE_NAME_FORM_IS_REFUSED_rather_than_coerced():
+    """`inputs` was `list[str]`. A name with no value is exactly what this block now refuses to
+    carry: a formula's inputs are only re-derivable if their values are recorded."""
+    with pytest.raises(ValidationError):
+        MethodBlock(**{**_BLOCK, "inputs": ["rate", "hours"]})
+
+
+def test_AN_INPUT_VALUE_KEEPS_ITS_TYPE():
+    """`12` must not become `12.0`, nor `True` become `1`: the value is evidence of what ran."""
+    m = MethodBlock(**{**_BLOCK, "inputs": [
+        {"name": "n", "value": 12}, {"name": "on", "value": True}, {"name": "x", "value": 0.5},
+    ]})
+    assert [type(i.value) for i in m.inputs] == [int, bool, float]
+
+
+@pytest.mark.parametrize("bad", [
+    {"name": " ", "value": 1},
+    {"name": "x", "value": 1, "unit": " "},
+    {"name": "x"},
+    {"name": "x", "value": 1, "scale": 2},
+])
+def test_A_MALFORMED_INPUT_IS_REFUSED(bad):
+    with pytest.raises(ValidationError):
+        MethodInput(**bad)
