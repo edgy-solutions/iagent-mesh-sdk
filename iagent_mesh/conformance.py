@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional, Sequence
 from .interfaces import (
     MESH_COLLECTION_META,
     CorruptCollectionMarker,
+    DelegateIdentityRefused,
     Initiator,
     ServiceIdentityRefused,
     collection_marker,
@@ -38,6 +39,7 @@ from .interfaces import (
     read_collection_marker,
 )
 from .results import MeshResult
+from .write_results import MeshWriteResult
 
 __all__ = [
     "check_embedding_contract",
@@ -47,6 +49,8 @@ __all__ = [
     "check_offline",
     "check_live",
     "check_ontology_contract",
+    "check_writer_offline",
+    "check_ontology_writer_contract",
 ]
 
 
@@ -128,6 +132,81 @@ def check_offline(
             _fail(name, f"emitted mode {out.mode!r}, which this interface does not declare "
                         f"({list(declared_modes)}). A mode a consumer cannot anticipate is a "
                         f"mode nobody can match")
+
+
+# ── the write-half offline arm, ruled 2026-09-27 ────────────────────────────────────────────
+
+
+def check_writer_offline(
+    impl: Any,
+    *,
+    operations: Sequence[tuple[str, Callable[[Initiator], MeshWriteResult]]],
+) -> None:
+    """Properties every writer Protocol shares, provable with no substrate. ALWAYS RUN THIS.
+
+    The write-side sibling of :func:`check_offline`, and it draws the boundary WIDER on purpose —
+    ruling item 4, 2026-09-27: a write admits a person OR a delegate, refusing only a bare
+    service. `check_offline` on the read side never had to draw this line because reads keep the
+    narrower `require_person` gate; a writer that reused `check_offline` here would refuse a
+    delegate the write boundary was ruled to admit, and this suite would then fail every
+    conforming writer rather than a defective one.
+
+    ``operations`` is a list of ``(name, call)`` pairs, the implementer's own — only they know the
+    keyword arguments their write operations need.
+    """
+    if not operations:
+        _fail("check_writer_offline", "no operations supplied — a conformance run over zero "
+                                       "operations is a green that proves nothing")
+
+    person = Initiator(subject="conformance-person", kind="person")
+    service = Initiator(subject="conformance-service", kind="service")
+    delegate = Initiator(subject="conformance-delegate", kind="delegate", on_behalf_of="conformance-person")
+
+    # THE FIXTURE MUST DISCRIMINATE, three ways: a suite that cannot tell the three kinds apart
+    # cannot tell an admission from a refusal either.
+    assert_fixture_discriminates("initiator kinds (person/service)", person, service,
+                                  describe=lambda i: i.kind)
+    assert_fixture_discriminates("initiator kinds (delegate/service)", delegate, service,
+                                  describe=lambda i: i.kind)
+
+    for name, call in operations:
+        # ── a bare service is refused; a person AND a delegate are admitted ──
+        try:
+            call(service)
+        except ServiceIdentityRefused:
+            pass
+        except DelegateIdentityRefused:
+            _fail(name, "refused a SERVICE identity by raising DelegateIdentityRefused — that "
+                        "exception names 'a delegate reached a person-only operation', which is "
+                        "not what happened here. A write boundary refuses a service with "
+                        "ServiceIdentityRefused, the same exception the read side raises for the "
+                        "same identity")
+        except NotImplementedError:
+            _fail(name, "not implemented — a write operation on a declared interface must apply "
+                        "or refuse, never be absent")
+        else:
+            _fail(name, "accepted a SERVICE identity. A write attributed to a service records a "
+                        "state change no person can be asked about — refuse it the same way the "
+                        "read boundary refuses one, only for a stronger reason")
+
+        try:
+            delegate_out = call(delegate)
+        except (ServiceIdentityRefused, DelegateIdentityRefused):
+            _fail(name, "refused a DELEGATE identity carrying on_behalf_of. Ruling item 4, "
+                        "2026-09-27: the write boundary is require_person_or_delegate, not "
+                        "require_person — a delegate acting on its own entitlements is exactly "
+                        "who this boundary exists to admit")
+        else:
+            if not isinstance(delegate_out, MeshWriteResult):
+                _fail(name, f"returned {type(delegate_out).__name__} for a delegate initiator, "
+                            f"not MeshWriteResult")
+
+        # ── every operation returns the shared write-result type for an admitted identity ──
+        out = call(person)
+        if not isinstance(out, MeshWriteResult):
+            _fail(name, f"returned {type(out).__name__}, not MeshWriteResult. A bare bool or "
+                        f"None cannot say WHETHER a write landed and WITH WHAT, which is the "
+                        f"defect this type exists to end on the write side")
 
 
 # ── the live arm ─────────────────────────────────────────────────────────────────────────
@@ -396,3 +475,58 @@ def check_ontology_contract(
             _fail(op_construct, f"the Turtle does not contain {term!r}. Term types were DROPPED "
                                 f"(a typed literal came back untyped or the term is missing): "
                                 f"types intact is the point of CONSTRUCT over SELECT")
+
+
+# ── the ontology WRITER arm, ruled 2026-09-27 ───────────────────────────────────────────────
+
+
+def check_ontology_writer_contract(
+    *,
+    call_upsert: Callable[[], MeshWriteResult],
+    call_ask_within_graph: Callable[[], MeshResult],
+    call_ask_default_graph: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshOntologyWriter`` contract: a write claiming to be GRAPH-scoped must be PROVEN
+    scoped, not merely asserted — the same "verify the mutation applied" discipline as
+    :func:`check_writer_marker`, aimed at the defect this Protocol exists to end.
+
+    ``call_upsert`` performs one upsert into a known graph for a known ``iri``, already bound by
+    the caller. ``call_ask_within_graph`` and ``call_ask_default_graph`` are both zero-argument
+    :class:`iagent_mesh.interfaces.MeshOntology` ``ask()`` calls for that SAME ``iri`` — one
+    scoped to the graph just written, one scoped to Jena's default graph (``graph=None``) — bound
+    to a PERSON initiator by the caller, run AFTER the upsert.
+
+    A writer that inserted unscoped (the exact doc-tools defect this Protocol exists to close)
+    would make both calls agree: the IRI is answerable both inside its graph and in the default
+    graph, because it is really only ever in the one place Jena treats as "no graph at all". This
+    arm fails on that agreement, not merely on the upsert's own reported outcome — a writer could
+    report ``written`` while having inserted in the wrong place, and the point of this arm is that
+    that lie does not survive being asked.
+    """
+    op = "ontology.upsert"
+
+    written = call_upsert()
+    if not written.applied:
+        _fail(op, f"the upsert itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify scoping against")
+
+    within = call_ask_within_graph()
+    default = call_ask_default_graph()
+
+    # THE FIXTURE MUST DISCRIMINATE: if a write into the default graph would make both asks
+    # answer identically regardless of scoping, this arm cannot tell a scoped writer from an
+    # unscoped one — which is precisely the doc-tools defect this Protocol exists to catch.
+    assert_fixture_discriminates(
+        f"{op} scoped vs default-graph ask", within, default, describe=lambda r: r.outcome
+    )
+
+    if within.outcome != "answered":
+        _fail(op, f"asking for the written iri WITHIN the graph it was upserted into produced "
+                  f"{within.outcome!r}, not 'answered'. The write claimed to land in that graph "
+                  f"and a scoped read cannot find it there")
+    if default.outcome != "empty":
+        _fail(op, f"asking for the written iri in Jena's DEFAULT graph produced "
+                  f"{default.outcome!r}, not 'empty'. A write that answers from the default graph "
+                  f"landed unscoped — this is the exact doc-tools defect (three of four "
+                  f"SPARQL-emitting plugins inserting into the default graph, invisible to the "
+                  f"mesh resolver) that GRAPH-wrapping every write exists to make impossible")

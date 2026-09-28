@@ -84,6 +84,7 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 _EXPORTED = {
     "conformance", "declarations", "discovery", "edge_types", "enumeration",
     "graph_manifest", "interfaces", "results", "rows", "shapes", "task_kinds",
+    "write_results",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a

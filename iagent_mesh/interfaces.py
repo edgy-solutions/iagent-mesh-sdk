@@ -60,6 +60,7 @@ from typing import Literal, Optional, Protocol, Sequence, runtime_checkable
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .results import MeshResult
+from .write_results import MeshWriteResult
 
 __all__ = [
     "Initiator",
@@ -77,6 +78,10 @@ __all__ = [
     "marker_is_stale",  # DEPRECATED alias; removed once in-fleet callers move
     "MARKER_ASSERTS",
     "MARKER_DOES_NOT_ASSERT",
+    "Embedder",
+    "MeshGraphWriter",
+    "MeshVectorsWriter",
+    "MeshOntologyWriter",
 ]
 
 
@@ -204,6 +209,39 @@ class Initiator(BaseModel):
             f"person can be asked about."
         )
 
+    def require_person_or_delegate(self, operation: str) -> "Initiator":
+        """Refuse a bare service; admit a person or a delegate. THE WRITE BOUNDARY, ruled
+        2026-09-27 alongside ``kind`` growing its third value — a WIDER allowlist than
+        :meth:`require_person`, not a replacement for it.
+
+        Reads keep the narrower gate: `require_person` stays person-only, unchanged. Writes admit
+        a delegate too, because the shape ``"delegate"`` was added FOR — a lane worktree, a
+        scheduled job run under someone's own authority — legitimately writes on its own
+        entitlements. What it may never do is inherit a person's grants silently, and it does
+        not: a delegate is admitted here on its OWN ``subject``, exactly as a person is, and
+        ``on_behalf_of`` is recorded, never consulted — the same PROVENANCE-NOT-A-GATE-INPUT
+        discipline the field's own docstring states, now exercised at a real boundary instead of
+        only declared at one.
+
+        A bare SERVICE is refused for the same reason it is refused on the read side, with MORE
+        force rather than less: a write attributed to a service records a state change nobody can
+        be asked about, where a read attributed to one only records a query nobody can be asked
+        about.
+
+        No new exception for "delegate refused" — there is nothing left for a delegate to be
+        refused FOR at this boundary. The line this method draws is person-or-delegate versus
+        service, so a delegate never reaches the branch that would raise
+        ``DelegateIdentityRefused``; that exception stays scoped to `require_person`, where a
+        delegate genuinely is the refused case.
+        """
+        if self.kind in ("person", "delegate"):
+            return self
+        raise ServiceIdentityRefused(
+            f"{operation} requires a person or a delegate and received a service identity "
+            f"({self.subject!r}). A write attributed to a service records a state change no "
+            f"person can be asked about."
+        )
+
 
 # ── the three interfaces ─────────────────────────────────────────────────────────────────
 
@@ -297,15 +335,17 @@ class MeshOntology(Protocol):
     absent. That is almost certainly how "no configured endpoint contains ``/sparql``" got written
     down here originally.
 
-    **So the absence is a choice, not a wall.** The SDK ships no Jena code at all — no caller here
-    wants this write half yet, and nobody has ruled who owns SPARQL ``GRAPH`` scoping for a write:
-    doc-tools' own Jena writer has three of its four SPARQL-emitting plugins inserting into Jena's
-    *default* graph, invisible to the mesh resolver, because nothing at the write call forces
-    scoping (same report, Part 2). A write half is proposed with Jena as the first production
-    caller in
-    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``
-    — it does not exist here because the design has not been ruled on, not because the route does
-    not work.
+    **THE WRITE HALF NOW EXISTS — this paragraph is the second correction the same day forced,
+    and it is being made the same way the first one was: named, not left standing.** Ruled
+    2026-09-27 on
+    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``:
+    see :class:`MeshOntologyWriter` below, and :mod:`iagent_mesh.writers.jena` for the reference
+    implementation that closes the exact defect this docstring used to describe — doc-tools' own
+    Jena writer inserting three of its four SPARQL-emitting plugins into Jena's *default* graph,
+    invisible to the mesh resolver, because nothing at the write call forced scoping. The read
+    Protocol below is UNCHANGED and stays pure: the write half is a sibling class, never a new
+    method here, so this Protocol's own "read-only" framing keeps being true rather than needing
+    a third correction later.
     """
 
     MODES: tuple[str, ...] = ()
@@ -662,4 +702,146 @@ class MeshVectors(Protocol):
         The guard that separates *nothing matched* from *nothing to match against* — two states
         a search alone reports identically, and the reason this is an operation rather than an
         implementation detail.
+        """
+
+
+# ── the write half, ruled 2026-09-27 ────────────────────────────────────────────────────────
+#
+# SIBLING PROTOCOLS, NOT NEW METHODS ON THE READ INTERFACES ABOVE. Every read Protocol in this
+# file stays exactly as pure as its own docstring already claims — `MeshGraph` still has zero
+# writes, `MeshOntology`'s `ask`/`construct` still only ask, `MeshVectors.nominate` still only
+# searches. A write half bolted onto those as new methods would mean re-reading three docstrings
+# that currently say "read-only" and either falsifying them or caveating them into meaninglessness
+# — the exact failure this file corrected twice in one day for other reasons. A new class per
+# store keeps each read Protocol's own claim true without qualification.
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """What a vectors WRITER is handed, never what it constructs. **Embedding is the writer's job,
+    ruled 2026-09-27** — injected so there is exactly ONE place in a running system that probes
+    what model an endpoint actually served, rather than a writer holding its own embedding call
+    and a reader re-deriving an equivalent probe to compare against. The latter is how
+    ``MeshVectors.embedding_model``'s own docstring came to describe the vacuous case this
+    contract exists to avoid: two constants agreeing with each other while both disagree with the
+    vectors already on disk.
+
+    Two methods, not one, because a normal WRITE and a RELOCATION want different inputs at the
+    call site — see :meth:`MeshVectorsWriter.write` and :meth:`MeshVectorsWriter.relocate`. A
+    conforming ``Embedder`` is constructed once and held by the writer; nothing in this Protocol
+    is ever constructed ad hoc inside a write call, which would reopen the one-probe-one-place
+    property this exists to guarantee.
+    """
+
+    def embed(self, text: str) -> Sequence[float]:
+        """The vector for this text, at whatever model/version this Embedder currently serves."""
+
+    def identity(self) -> tuple[str, Optional[str], int]:
+        """``(model, version, dimension)`` — THE SERVED IDENTITY, probed fresh from the endpoint,
+        never a constant the caller supplies. The single source both :class:`CollectionMarker`
+        and any comparison against it draw from, so a constant-stamping writer and a
+        constant-trusting reader cannot agree with each other while both disagree with what an
+        endpoint actually served — the same reasoning ``CollectionMarker.model``'s own docstring
+        states for the reader side, exercised here on the writer side where the value originates.
+        """
+
+
+@runtime_checkable
+class MeshGraphWriter(Protocol):
+    """Named writes over the property graph. **NO DERIVED INVENTORY EXISTS FOR THIS ONE, and that
+    is stated rather than papered over** — the read Protocol's own docstring records "zero Neo4j
+    writes" found in the engine-o census that grounded every read operation here; there is no
+    equivalent write census this Protocol could derive from, because nothing in the fleet writes
+    the property graph today. Declared ahead of a caller anyway, on ruling, matching this file's
+    own precedent: `MeshOntology` was declared and later corrected once Jena became a real writer,
+    rather than waiting for a caller to justify the shape retroactively.
+
+    Kept DELIBERATELY minimal for exactly that reason — one edge, one verb, so the first real
+    caller defines what more is needed rather than this SDK guessing at a shape nothing has
+    exercised yet. Widening this Protocol is a new method with its own manifest and seal, the
+    same "named operations only" discipline the module docstring states for the read side.
+    """
+
+    def write_edge(
+        self, initiator: Initiator, *, subject: str, verb: str, object: str
+    ) -> MeshWriteResult:
+        """Assert one predicate edge. Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`."""
+
+
+@runtime_checkable
+class MeshVectorsWriter(Protocol):
+    """Upsert and relocate within a declared collection. **THE EMBEDDING CONTRACT IS SYMMETRIC
+    WITH THE READ SIDE**: :class:`MeshVectors` states "the vector is computed by the caller today"
+    as the DEFECT — two implementations handed the same text could embed with two different
+    models against one stored index, silently. This Protocol is the fix on the write side: the
+    writer holds an injected :class:`Embedder`, embeds internally, and stamps
+    :class:`CollectionMarker` from the SAME probe — never a constant, never the caller's job.
+
+    **TWO METHODS BECAUSE TWO CALLERS WANT DIFFERENT THINGS, AND CONFLATING THEM IS THE HAZARD
+    RULED AGAINST 2026-09-27.** A normal write hands text; `write` embeds it via this writer's own
+    `Embedder` and nothing else may supply a vector for that path. A RELOCATION — moving an
+    existing object to a vector computed elsewhere, a re-embed migration, a backfill from a batch
+    job — is the only legitimate reason a caller ever holds a precomputed vector, and `relocate`
+    is the one and only door for it. A single `write(..., vector=None)`-shaped method that accepts
+    either would make "supply your own vector" a normal-looking parameter on the everyday path,
+    which is exactly the shortcut this split exists to foreclose.
+    """
+
+    def write(
+        self,
+        initiator: Initiator,
+        *,
+        collection: str,
+        id: str,
+        text: str,
+        domains: Sequence[str] = (),
+        vector_required: bool = True,
+    ) -> MeshWriteResult:
+        """Upsert one object by a caller-supplied deterministic id, embedding ``text`` via this
+        writer's injected :class:`Embedder`.
+
+        ``vector_required`` DEFAULTS ``True``. When the embed fails and the caller has not passed
+        ``vector_required=False``, the write is REFUSED — never silently completed without a
+        vector, which is the sixty-seven-day silent-BM25 defect replayed at write time. Passing
+        ``vector_required=False`` is the caller saying, at this call, that a vectorless write is
+        acceptable; the writer must never decide that on its own.
+        """
+
+    def relocate(
+        self, initiator: Initiator, *, collection: str, id: str, vector: Sequence[float]
+    ) -> MeshWriteResult:
+        """Move an existing object to a PRECOMPUTED vector. RELOCATION ONLY.
+
+        Never a shortcut for `write` — this method does not embed, does not accept ``text``, and
+        an implementation must refuse a vector whose length does not match this writer's declared
+        dimension rather than storing a vector no query at this dimension could ever retrieve.
+        """
+
+
+@runtime_checkable
+class MeshOntologyWriter(Protocol):
+    """Named writes over the RDF store, GRAPH-scoped by construction. Ruled 2026-09-27 to close
+    the defect :class:`MeshOntology`'s own docstring now names: three of doc-tools' four
+    SPARQL-emitting plugins insert into Jena's *default* graph, invisible to the mesh resolver,
+    because nothing at the write call forces scoping. See
+    ``iagent_mesh.writers.jena.JenaOntologyWriter`` for the reference implementation this SDK
+    ships.
+
+    ``graph`` is REQUIRED on `upsert`, never optional. The read side's `graph` is optional because
+    a read can legitimately mean "anywhere within scope"; a write choosing "anywhere" is precisely
+    the unscoped default-graph insert this Protocol exists to make impossible to express, so the
+    asymmetry with the read Protocol's optional `graph` is deliberate, not an inconsistency.
+    """
+
+    def upsert(
+        self, initiator: Initiator, *, graph: str, iri: str, triples: Sequence[str]
+    ) -> MeshWriteResult:
+        """Replace every triple this writer previously wrote for ``iri`` within ``graph`` with
+        ``triples`` — delete-then-insert, both halves GRAPH-scoped to the same graph, in one
+        update so there is no window where the graph holds neither the old state nor the new one.
+
+        Person or delegate only. An implementation must refuse (never silently default) an empty
+        ``graph`` — see :meth:`Initiator.require_person_or_delegate` for the identity boundary and
+        the reference implementation for the refusal shape on an unscoped request.
         """
