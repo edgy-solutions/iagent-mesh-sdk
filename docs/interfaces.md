@@ -295,12 +295,19 @@ types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a gue
 > `iagent_mesh.ontology` is unfilled. `check_ontology_contract` is proven against
 > in-memory fakes, not against a real RDF store.
 
-> **There is no write half, and for a specific reason: there is no verified
-> working path.** The update endpoint is derived by replacing `/sparql` with
-> `/update` in an endpoint spelled `.../ds/query` — no configured endpoint
-> contains `/sparql`, so the substitution is a no-op and the "write" posts
-> `update=` to the *query* endpoint. Promising a write half over an untested route
-> would make the breakage look like an implementation bug rather than an absence.
+> **There is no write half today — but not because the route is broken.** That
+> was the stated reason until it was measured **false**, 2026-09-27, by
+> `doc-tools/lane/7f` against sandbox Fuseki (`doc-tools/sessions/2026-09-27-report-7f-mesh-jena-update-route-and-writer-inventory.md`):
+> `POST update=<sparql>` to `{fusekiUrl}/ds/update` returns 200, and neither
+> engine-o nor doc-tools derives that address by an `endpoint.replace("/sparql",
+> "/update")` substitution — that substitution was removed 2026-09-14 as a latent
+> hazard and exists in no live code. (The GET-404 trap: `GET /ds/sparql` 404s
+> while a *posted* query to the same path returns 200 — a route check done with
+> GET alone concludes the endpoint is absent, which is almost certainly how the
+> false reason above was written down.) The real reason is that the SDK ships no
+> Jena code at all and nobody has ruled who owns SPARQL `GRAPH` scoping for a
+> write — see `iagent_mesh/interfaces.py`'s `MeshOntology` docstring for the full
+> correction and the write-half proposal it cites.
 
 ### `MeshVectors` — semantic lookup within a declared collection and domain
 

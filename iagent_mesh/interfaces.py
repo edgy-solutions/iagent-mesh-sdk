@@ -277,17 +277,35 @@ class MeshGraph(Protocol):
 
 @runtime_checkable
 class MeshOntology(Protocol):
-    """Named reads over the RDF store. **NO WRITE HALF, and for a different reason than MeshGraph.**
+    """Named reads over the RDF store. **NO WRITE HALF TODAY — the earlier blocker stated here was
+    FALSE, corrected 2026-09-27.** Measured by ``doc-tools/lane/7f`` against sandbox Fuseki:
+    ``doc-tools/sessions/2026-09-27-report-7f-mesh-jena-update-route-and-writer-inventory.md``.
 
-    MeshGraph has no write half because there is no caller. This one has none because **there is
-    no verified working path**: the update endpoint is derived by ``endpoint.replace("/sparql",
-    "/update")`` from an endpoint spelled ``.../ds/query`` — no configured endpoint contains
-    ``/sparql``, so the substitution is a NO-OP and the write posts ``update=`` to the QUERY
-    endpoint. It does not derive the wrong address; it derives nothing while reading exactly like
-    a derivation.
+    **The route works.** ``POST update=<sparql>`` to ``{fusekiUrl}/ds/update`` returns 200
+    ("Update succeeded"). Both engine-o (reads a declared ``JENA_UPDATE_ENDPOINT``) and doc-tools
+    (concatenates ``{base_url}/{dataset}/update``) already reach the identical address by two
+    different, non-derived constructions. **No live code performs an ``endpoint.replace("/sparql",
+    "/update")`` substitution** — it was removed 2026-09-14 as a latent hazard, never an observed
+    failure (``agent_fleet/ontology_service/substrate_posture.py:91-107``, "DECLARED, NEVER
+    DERIVED"). This docstring had restated a removed hazard as a present-tense one, which is a
+    worse thing for a docstring to do than say nothing: the next reader spends an evening
+    re-measuring a bug that was fixed two weeks earlier.
 
-    **Promising a write half over an untested route is worse than omitting one**, because the
-    interface would make the breakage look like an implementation bug rather than an absence.
+    **THE GET-404 TRAP, named so nobody re-derives the false conclusion.** ``GET /ds/sparql``
+    404s while a *posted* query against that same path returns 200 — Fuseki's query endpoint
+    answers POST only. A route-existence check done with GET alone concludes the endpoint is
+    absent. That is almost certainly how "no configured endpoint contains ``/sparql``" got written
+    down here originally.
+
+    **So the absence is a choice, not a wall.** The SDK ships no Jena code at all — no caller here
+    wants this write half yet, and nobody has ruled who owns SPARQL ``GRAPH`` scoping for a write:
+    doc-tools' own Jena writer has three of its four SPARQL-emitting plugins inserting into Jena's
+    *default* graph, invisible to the mesh resolver, because nothing at the write call forces
+    scoping (same report, Part 2). A write half is proposed with Jena as the first production
+    caller in
+    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``
+    — it does not exist here because the design has not been ruled on, not because the route does
+    not work.
     """
 
     MODES: tuple[str, ...] = ()

@@ -229,9 +229,11 @@ def test_a_conforming_live_run_passes():
 # ── the interfaces themselves ────────────────────────────────────────────────────────────
 
 def test_the_read_only_interfaces_declare_NO_write_operation():
-    """MeshGraph has no write half because there is no caller; MeshOntology has none because
-    there is no verified working path. Both are rulings, so a later 'for symmetry' addition
-    should have to argue with a test rather than with a comment."""
+    """MeshGraph has no write half because there is no caller; MeshOntology has none because no
+    design has been ruled on yet — NOT because the Jena update route is broken, which was the
+    stated reason until it was measured false 2026-09-27 (see the class docstring). Both are
+    rulings, so a later 'for symmetry' addition should have to argue with a test rather than
+    with a comment."""
     for proto in (MeshGraph, MeshOntology, MeshVectors):
         names = [n for n in dir(proto) if not n.startswith("_")]
         offenders = [n for n in names
