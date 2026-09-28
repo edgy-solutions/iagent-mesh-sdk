@@ -3,6 +3,9 @@
 **Status:** shipped in SDK `0.9.3`. **Both import paths work** — the root one is
 new in `0.9.3`, and the sentence here previously said it would fail.
 
+**The write half** ([§4a](#4a-the-write-half)) is ruled and shipped on `lane/ca`,
+pending `v0.9.5` — no release without explicit sign-off.
+
 ```python
 from iagent_mesh import Initiator, MeshGraph, MeshOntology, MeshVectors, MeshResult
 ```
@@ -295,19 +298,15 @@ types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a gue
 > `iagent_mesh.ontology` is unfilled. `check_ontology_contract` is proven against
 > in-memory fakes, not against a real RDF store.
 
-> **There is no write half today — but not because the route is broken.** That
-> was the stated reason until it was measured **false**, 2026-09-27, by
-> `doc-tools/lane/7f` against sandbox Fuseki (`doc-tools/sessions/2026-09-27-report-7f-mesh-jena-update-route-and-writer-inventory.md`):
-> `POST update=<sparql>` to `{fusekiUrl}/ds/update` returns 200, and neither
-> engine-o nor doc-tools derives that address by an `endpoint.replace("/sparql",
-> "/update")` substitution — that substitution was removed 2026-09-14 as a latent
-> hazard and exists in no live code. (The GET-404 trap: `GET /ds/sparql` 404s
-> while a *posted* query to the same path returns 200 — a route check done with
-> GET alone concludes the endpoint is absent, which is almost certainly how the
-> false reason above was written down.) The real reason is that the SDK ships no
-> Jena code at all and nobody has ruled who owns SPARQL `GRAPH` scoping for a
-> write — see `iagent_mesh/interfaces.py`'s `MeshOntology` docstring for the full
-> correction and the write-half proposal it cites.
+> **The write half now exists — this note is the second correction the same day
+> forced.** The route works (`POST update=<sparql>` to `{fusekiUrl}/ds/update`
+> returns 200, measured by `doc-tools/lane/7f` against sandbox Fuseki, and no live
+> code derives that address by an `endpoint.replace("/sparql", "/update")`
+> substitution — removed 2026-09-14 as a latent hazard). What was genuinely
+> missing was a ruling on who owns SPARQL `GRAPH` scoping for a write, closed
+> 2026-09-27: see [§4a](#4a-the-write-half) below. `MeshOntology` itself is
+> **unchanged and stays pure** — the write half is a sibling class, never a new
+> method here.
 
 ### `MeshVectors` — semantic lookup within a declared collection and domain
 
@@ -371,6 +370,158 @@ absent        → open, and REPORT THE GAP ONCE
 writers, so metadata is missing for a while — swallowing that arrives dressed as
 tolerance and is exactly the vacuous self-comparison the property exists to
 avoid.
+
+---
+
+## 4a. The write half
+
+**Status: shipped, unreleased.** Ruled 2026-09-27 on
+`invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md`,
+ships in the SDK's `lane/ca` branch pending `v0.9.5`. **No release of `v0.9.5`
+without explicit sign-off** — do not treat this section's presence as a release.
+
+The read Protocols above stay exactly as pure as their own docstrings claim.
+Writes are **sibling Protocols**, never new methods bolted onto `MeshGraph`,
+`MeshOntology` or `MeshVectors` — a write half added as new methods there would
+mean re-reading three "read-only" docstrings and either falsifying or caveating
+them, the same failure this file corrected twice in one section above.
+
+```python
+from iagent_mesh import (
+    Embedder, MeshGraphWriter, MeshVectorsWriter, MeshOntologyWriter,
+    MeshWriteResult, WriteOutcome, WRITE_OUTCOMES,
+    AmbiguousWriteResultTruth, WriteNotApplied,
+)
+```
+
+### The write boundary is wider than the read boundary
+
+Every read refuses everything but a person: `initiator.require_person(op)`. A
+write admits a **person or a delegate**, refusing only a bare service:
+
+```python
+initiator.require_person_or_delegate("ontology.upsert")
+```
+
+A delegate — a lane worktree, a scheduled job, acting under its own entitlements
+— is exactly who this boundary exists to admit, and no new exception exists for
+it: a delegate never reaches a branch that would raise `DelegateIdentityRefused`
+here, only `ServiceIdentityRefused`, the same exception the read side raises for
+the same identity.
+
+### `MeshWriteResult` — the write-side sibling of `MeshResult`
+
+```python
+WRITE_OUTCOMES = ("written", "written_without_vector", "refused", "failed", "unreachable")
+```
+
+| Outcome | Meaning |
+| --- | --- |
+| `written` | Landed, clean. |
+| `written_without_vector` | Landed, **without** a vector — see below. Not a success dressed down; a distinct state. |
+| `refused` | Declined before touching the store (a bad input, an identity gate). |
+| `failed` | The store was asked and errored. |
+| `unreachable` | Could not be asked. |
+
+`written_without_vector` sits apart from `written` in every idiom that would
+otherwise fold them together — the same discipline `MeshResult` applies to
+`answered`/`empty`, extended here because a degraded landing wearing a plain "it
+worked" is the sixty-seven-day silent-BM25 defect replayed at write time.
+`detail` is required on every outcome except `written`, `written_without_vector`
+included.
+
+```python
+result.applied     # True for BOTH written and written_without_vector
+result.require("vectors.write")   # raises WriteNotApplied, naming outcome + detail
+bool(result)        # raises AmbiguousWriteResultTruth — always use .outcome or .applied
+```
+
+### `Embedder` — injected, never constructed ad hoc
+
+```python
+class Embedder(Protocol):
+    def embed(self, text: str) -> Sequence[float]: ...
+    def identity(self) -> tuple[str, Optional[str], int]: ...   # (model, version, dimension)
+```
+
+A vectors writer is **handed** an `Embedder`, never builds one inside a write
+call — one identity probe, one place, so the model/version/dimension a
+`CollectionMarker` stamps is the same probe that produced the vector, not a
+constant a reader re-derives to compare against.
+
+### The three writer Protocols
+
+| Protocol | Operation(s) | Notes |
+| --- | --- | --- |
+| `MeshGraphWriter` | `write_edge(initiator, *, subject, verb, object)` | Deliberately minimal — no derived write inventory exists yet; declared ahead of a caller, matching this file's own precedent for `MeshOntology`. |
+| `MeshVectorsWriter` | `write(initiator, *, collection, id, text, domains=(), vector_required=True)`; `relocate(initiator, *, collection, id, vector)` | **Two methods on purpose.** `write` embeds `text` via the injected `Embedder`; `relocate` takes a precomputed vector for migration/backfill only. One method accepting either would make "supply your own vector" a normal-looking parameter on the everyday path. |
+| `MeshOntologyWriter` | `upsert(initiator, *, graph, iri, triples)` | `graph` is **required**, never optional — the read side's optional `graph` can mean "anywhere within scope"; a write choosing "anywhere" is the unscoped-default-graph defect this Protocol exists to make unrepresentable. |
+
+`MeshVectorsWriter.write`'s `vector_required` **defaults `True`**: an embed
+failure refuses the write rather than silently landing without a vector.
+Passing `vector_required=False` is the caller opting into a degraded write at
+*this* call; the writer must never decide that on its own.
+
+### `JenaOntologyWriter` — the reference implementation
+
+```python
+from iagent_mesh.writers.jena import JenaOntologyWriter
+
+writer = JenaOntologyWriter(base_url="http://fuseki:3030", dataset="ds")
+result = writer.upsert(who, graph="http://mesh/g", iri="http://mesh/thing",
+                        triples=["<http://mesh/thing> a <http://mesh/Class> ."])
+```
+
+Not importable from `iagent_mesh` root or from `iagent_mesh.interfaces` — it
+lives in `iagent_mesh.writers`, a separate subpackage, so `interfaces.py`'s own
+"imports no driver" claim (naming `httpx` specifically) stays literally true.
+`httpx` is already a hard SDK dependency; the boundary this split draws is
+*which module may import it*, never whether it may be installed.
+
+Closes the exact defect `doc-tools/lane/7f` measured: three of doc-tools' four
+SPARQL-emitting plugins insert into Jena's **default** graph, invisible to the
+mesh resolver, because nothing at the write call forced scoping.
+`upsert()` has no path that skips the `GRAPH` clause — one request, `DELETE
+WHERE`/`INSERT DATA` **both** wrapped in `GRAPH <graph> { ... }`, so there is no
+window where the graph holds neither the old state nor the new one. `graph` and
+`iri` are validated against `<`, `>` and whitespace before being interpolated
+into a SPARQL IRI reference; `triples` are trusted as already-formed statements,
+the same boundary `MeshOntology.construct` places on a caller reading Turtle
+back. A `502`/`503`/`504` reports `unreachable` (a proxy/deployment problem);
+any other non-`200` reports `failed`; an `httpx.RequestError` reports
+`unreachable`.
+
+### Conformance: two new arms
+
+```python
+from iagent_mesh.conformance import check_writer_offline, check_ontology_writer_contract
+
+check_writer_offline(
+    impl,
+    operations=[("upsert", lambda who: impl.upsert(who, graph=G, iri=IRI, triples=T))],
+)
+```
+
+`check_writer_offline` is `check_offline`'s write-side sibling, drawn **wider on
+purpose**: it asserts a service is refused and **both** a person and a delegate
+are admitted, each call returning `MeshWriteResult`. Reusing `check_offline`
+here would fail every conforming writer, since the read arm's narrower
+person-only gate refuses the exact delegate identity a writer must admit.
+
+```python
+check_ontology_writer_contract(
+    call_upsert=lambda: writer.upsert(who, graph=G, iri=IRI, triples=T),
+    call_ask_within_graph=lambda: reader.ask(who, iri=IRI, graph=G),
+    call_ask_default_graph=lambda: reader.ask(who, iri=IRI, graph=None),
+)
+```
+
+This arm proves scoping **took effect** rather than trusting the upsert's own
+reported outcome: it asks the same IRI back, once scoped to the graph just
+written and once against Jena's default graph, and fails unless the scoped ask
+answers while the default-graph ask stays empty. A writer that reported
+`written` while landing unscoped cannot pass by reporting alone — the lie does
+not survive being asked.
 
 ---
 
@@ -755,7 +906,7 @@ dropped. It records what the producer **says** about its method; nothing in the 
 verifies that the formula is the one that ran or that `producer_sha` is the sha that
 was deployed.
 
-> **Unreleased.** This ships in v0.9.4, which has not been cut.
+> **Shipped in v0.9.4**, cut and published 2026-09-27.
 
 ---
 
@@ -775,8 +926,17 @@ from iagent_mesh.results import (
 from iagent_mesh.conformance import (
     check_offline, check_live, check_embedding_contract, check_writer_marker,
     check_ontology_contract, assert_fixture_discriminates, ConformanceFailure,
+    check_writer_offline, check_ontology_writer_contract,
 )
 from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
+
+# the write half — see §4a. Status: shipped, unreleased (pending v0.9.5).
+from iagent_mesh import (
+    Embedder, MeshGraphWriter, MeshVectorsWriter, MeshOntologyWriter,
+    MeshWriteResult, WriteOutcome, WRITE_OUTCOMES,
+    AmbiguousWriteResultTruth, WriteNotApplied,
+)
+from iagent_mesh.writers.jena import JenaOntologyWriter
 ```
 
 Deprecated, removed after in-fleet callers move: `marker_is_stale`.
