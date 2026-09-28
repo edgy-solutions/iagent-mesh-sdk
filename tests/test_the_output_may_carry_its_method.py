@@ -40,6 +40,34 @@ def test_A_BLANK_FORMULA_OR_PRODUCER_IS_REFUSED(field):
         MethodBlock(**{**_BLOCK, field: "  "})
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(bound=40.0, bound_defaulted=None),
+        dict(bound=None, bound_defaulted=False),
+        dict(bound=None, bound_defaulted=True),
+    ],
+)
+def test_A_BOUND_AND_ITS_DEFAULTED_FLAG_MUST_AGREE_ON_WHETHER_THERE_IS_ONE(kwargs):
+    """A bound with no word on where it came from, or a flag on a measure with no bound, is the
+    half-stated disclosure the pair exists to end — refused, not coerced toward either side."""
+    with pytest.raises(ValidationError, match="disagree"):
+        MethodBlock(**_BLOCK, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(),  # neither stated
+        dict(bound=40.0, bound_defaulted=False),  # caller supplied it
+        dict(bound=40.0, bound_defaulted=True),  # producer defaulted it
+    ],
+)
+def test_A_BOUND_AND_ITS_FLAG_TOGETHER_ARE_ADMITTED(kwargs):
+    """POSITIVE CONTROL. A validator that refused every combination would satisfy the arm above."""
+    MethodBlock(**_BLOCK, **kwargs)
+
+
 @pytest.mark.parametrize("field", ["formula", "inputs", "producer_sha"])
 def test_THE_REQUIRED_FIELDS_ARE_REQUIRED(field):
     without = {k: v for k, v in _BLOCK.items() if k != field}

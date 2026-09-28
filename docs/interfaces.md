@@ -75,11 +75,20 @@ who = Initiator(subject="alice@example.com", kind="person")
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `subject` | `str` | The authorization identity, **opaque**. Whatever claim your deployment keys on — an email, an employee id, a Keycloak name. The SDK never parses it. |
-| `kind` | `"person"` \| `"service"` | **Declared, never sniffed.** |
+| `kind` | `"person"` \| `"service"` \| `"delegate"` | **Declared, never sniffed.** |
+| `on_behalf_of` | `str \| None` | Who a **delegate** is accountable to. Required (non-blank) when `kind == "delegate"`, refused otherwise. **Provenance, never a gate input** — no guard reads it. |
 
 The model is frozen and forbids extra fields. An empty or whitespace `subject` is
 refused at construction: *an anonymous read is not a read with a missing name, it
 is a read nobody can be held to.*
+
+`"delegate"` (added 2026-09-27) is a non-human session acting under its **own**
+entitlements — a lane worktree, a scheduled job — distinct from a `"service"`
+(a deployed workload with no one to ask about it) and from a `"person"` (whose
+grants it must not silently inherit). `on_behalf_of` names who it acts for, for
+the audit trail; it is kept separate from `subject`, the field a gate checks, on
+purpose — the two questions happen to share a value today and must stay free to
+diverge.
 
 ### Why `kind` is declared rather than inferred
 
@@ -99,18 +108,27 @@ it and travels here as a declared field.
 ### Service identities are refused at the boundary
 
 ```python
-from iagent_mesh.interfaces import ServiceIdentityRefused
+from iagent_mesh.interfaces import ServiceIdentityRefused, DelegateIdentityRefused
 
 try:
     graph.registry(service_initiator)
 except ServiceIdentityRefused as exc:
     ...  # names the operation and the subject
+except DelegateIdentityRefused as exc:
+    ...  # a delegate is refused too, but as a SIBLING condition, not this one
 ```
 
-`ServiceIdentityRefused` subclasses `PermissionError` and is deliberately *not* a
-generic authz error: it names the one condition, so reading the raise teaches you
-the rule rather than telling you something was denied. A read attributed to a
-service records provenance no person can be asked about.
+`ServiceIdentityRefused` and `DelegateIdentityRefused` both subclass
+`PermissionError` and are deliberately *not* one generic authz error: each names
+the one condition it means, so reading the raise teaches you the rule rather than
+telling you something was denied. `ServiceIdentityRefused` — a read attributed to
+a service records provenance no person can be asked about. `DelegateIdentityRefused`
+— a delegate acts under its own grants, and this operation is not one of them.
+
+`require_person` is an **allowlist** (`kind == "person"` is admitted; every other
+kind is refused), not a check for `"service"` specifically — a comparison the other
+way round would silently admit any kind declared after it was written, which is
+exactly how `"delegate"` would have slipped through the old body.
 
 Implementations enforce this by calling `initiator.require_person(operation)` as
 their first line — see [§6](#6-implementing-an-interface).
@@ -718,6 +736,13 @@ already declares its own field named `method` keeps it.
 | `bound_defaulted` | `True` if the producer supplied the bound, `False` if the caller did, `None` if the producer did not say. **`None` is not `False`**: an unmade claim is not a claim the caller chose the bound. |
 | `producer_sha` | The code that produced the figure. Required, not blank. |
 
+**`bound` and `bound_defaulted` must agree on whether there is a bound** — enforced
+at construction (added 2026-09-27, reconciling this model with a fleet producer
+that was already checking it): `bound is None` and `bound_defaulted is None` are
+the same state or the block is refused. A bound with no word on where it came from,
+or a flag on a measure that states no bound, is the half-stated disclosure the pair
+exists to end.
+
 `MethodBlock` is `extra="forbid"` and frozen: a misspelt key is refused rather than
 dropped. It records what the producer **says** about its method; nothing in the SDK
 verifies that the formula is the one that ran or that `producer_sha` is the sha that
@@ -731,7 +756,7 @@ was deployed.
 
 ```python
 from iagent_mesh.interfaces import (
-    Initiator, ServiceIdentityRefused,
+    Initiator, ServiceIdentityRefused, DelegateIdentityRefused,
     MeshGraph, MeshOntology, MeshVectors,
     MESH_COLLECTION_META, CollectionMarker, CorruptCollectionMarker,
     collection_marker, read_collection_marker, marker_predates_collection,

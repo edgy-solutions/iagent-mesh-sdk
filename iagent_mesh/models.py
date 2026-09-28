@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing import Optional, Union
 
 class ToolInput(BaseModel):
@@ -46,6 +46,12 @@ class MethodBlock(BaseModel):
     bound the producer filled in read identically as a number, and only the second is something
     the caller never chose. ``bound_defaulted`` is ``None`` when the producer did not say, which
     is not the same as ``False``: an unmade claim is not a claim that the bound was supplied.
+
+    **THE PAIR IS ENFORCED, NOT MERELY DOCUMENTED — ruled 2026-09-27, reconciling this model with
+    the fleet producer that was checking it already.** ``bound is None`` and ``bound_defaulted is
+    None`` must agree: a bound with no word on where it came from, and a defaulted flag on a
+    measure that states no bound, are the two ways of getting this half-stated, and both read as
+    deliberate rather than as an oversight worth coercing quietly.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -62,6 +68,16 @@ class MethodBlock(BaseModel):
         if not v.strip():
             raise ValueError("a method block must name its formula and its producer, not blanks")
         return v
+
+    @model_validator(mode="after")
+    def _bound_and_its_flag_agree(self) -> "MethodBlock":
+        if (self.bound is None) != (self.bound_defaulted is None):
+            raise ValueError(
+                f"bound={self.bound!r} and bound_defaulted={self.bound_defaulted!r} disagree "
+                "about whether this measure has a bound; a flag without a bound, or a bound "
+                "without a flag, is the half-stated disclosure this block exists to end"
+            )
+        return self
 
 
 class ToolOutput(BaseModel):
