@@ -24,6 +24,16 @@ under the OBSERVE posture that admits every caller today (``iagent_mesh/transpor
 a delegate mint path lands, the one change this module needs is replacing these headers with a
 real ``Authorization: Bearer <token>`` from that mint.
 
+THE FIRST REAL CALL FROM A LANE WORKTREE WILL 401, AND THAT IS EXPECTED, NOT A DEFECT HERE (Chris,
+2026-09-27). ``iagent_mesh/transport_auth.py``'s OBSERVE posture describes this SDK's own app-level
+check; it says nothing about the infrastructure this tool's HTTP call actually crosses in a live
+cluster. engine-docs sits behind the BFF's bearer check, and this module sends no ``Authorization``
+header at all (the paragraph above) — so a non-mocked call gets refused one layer earlier than
+``/explain`` itself, by the gateway, not by engine-docs' own logic. The fix is not in this module:
+it is a Keycloak client-credentials client **per delegate** (this lane, a future edge agent), with
+``on_behalf_of`` becoming a claim the gateway *records* and never gates on — the next SDK/fleet
+item, once the write-half proposal is read.
+
 FOUR OUTCOMES, NEVER A BARE STRING. ``mesh_explain()`` returns a ``MeshResult`` — the same
 discipline every mesh read in this SDK follows — so a caller cannot collapse "the corpus has
 nothing to say" (``empty``, engine-docs' normal state) into "the corpus could not be asked"
