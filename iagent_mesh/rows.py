@@ -82,6 +82,21 @@ NON_HOLE_DISPOSITIONS = ("finding", "unsummarised", "empty")
 VERDICT_KEYS = ("headline", "summary", "value", "verdict")
 
 
+#: WHICH DISPOSITIONS EACH DECLARED REFUSAL CLAUSE CAN REACH. A TABLE, NOT A BRANCH, and the
+#: difference is that the accepted clauses become a derivable SET: `reachable_for` refuses
+#: anything outside it, and a third clause added to `graph_manifest.REFUSAL_DISPOSITIONS` is
+#: missing here loudly instead of inheriting the permissive set by falling off an `if`.
+#:
+#: The keys MUST equal `graph_manifest.REFUSAL_DISPOSITIONS`. They are not imported from it —
+#: this module is stdlib-imports-only and that is what let it move repos without changes — so
+#: the agreement is asserted by a seal rather than assumed. Divergence that would otherwise be
+#: silent is what the seal is for.
+_REACHABLE: dict[str, tuple[str, ...]] = {
+    "fail": NON_HOLE_DISPOSITIONS,
+    "named-hole": ROW_DISPOSITIONS,
+}
+
+
 def verdict_of(payload: dict) -> str | None:
     """The payload's own verdict, or None. NONE IS A RESULT, not a failure to find one."""
     for key in VERDICT_KEYS:
@@ -153,9 +168,24 @@ def reachable_for(refusal: str) -> set[str]:
     it never RETURNS a row for one — the hole terms are unreachable for it, and a seal asserting
     all five against it would be asserting an outcome the contract forbids.
     """
-    if refusal == "fail":
-        return set(NON_HOLE_DISPOSITIONS)
-    return set(ROW_DISPOSITIONS)
+    try:
+        return set(_REACHABLE[refusal])
+    except (KeyError, TypeError):
+        # FAILS TO A REFUSAL, NOT TO THE PERMISSIVE SET. Through 0.9.3 this returned all five
+        # for any input but the exact string "fail" — so `Fail`, `failed`, `""`, `None` and a
+        # YAML `refusal: no` (which parses to False) all read as "this graph can emit named
+        # holes". That is the wrong direction to fail in: a seal asking "is every disposition
+        # this graph emitted allowed?" passes trivially against the full vocabulary, so a clause
+        # typo SILENCES the seal instead of tripping it. The exposure is real rather than
+        # theoretical — the fleet's callers read the clause with `yaml.safe_load(...)["refusal"]`
+        # straight off the ratified row, a path `GraphManifest` never validates, so an
+        # unchecked string reaches here directly.
+        raise ValueError(
+            f"reachable_for({refusal!r}): not a declared refusal clause. A graph's reachable "
+            f"dispositions are a function of its clause, and an unrecognised clause has no "
+            f"answer — refusing beats returning the permissive set, which silences the seal "
+            f"that asked. Declared clauses: {sorted(_REACHABLE)}."
+        ) from None
 
 
 def fetch_row(fn: str, label: str, payload: dict[str, Any]) -> dict:

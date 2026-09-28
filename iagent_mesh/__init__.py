@@ -71,6 +71,7 @@ from .conformance import (
     check_embedding_contract,
     check_live,
     check_offline,
+    check_ontology_contract,
     check_writer_marker,
 )
 from .rows import (
@@ -97,6 +98,8 @@ from .enumeration import (
     EnumerateInstancesRequest,
     EnumerateInstancesResponse,
     InstanceOption,
+    over_limit,
+    unhonoured_scoping,
 )
 from .interfaces import (
     MARKER_ASSERTS,
@@ -104,6 +107,7 @@ from .interfaces import (
     MESH_COLLECTION_META,
     CollectionMarker,
     CorruptCollectionMarker,
+    DelegateIdentityRefused,
     Initiator,
     MeshGraph,
     MeshOntology,
@@ -119,6 +123,56 @@ from .results import (
     MeshResult,
     Outcome,
     ResultNotAnswered,
+)
+
+# ── THE THREE MODULES PROMOTED IN 0.9.4, MINUS FOUR NAMES THAT CANNOT COME ──────────────────
+# `declarations`, `discovery` and `task_kinds` were public in their modules and absent from the
+# root, and the reason recorded for the omission was never "these are internal" — it was that
+# FOUR names are exported by two modules each and a root cannot mean both:
+#
+#     compose         graph_manifest   task_kinds
+#     json_schema     graph_manifest   task_kinds
+#     validate_dir    graph_manifest   task_kinds
+#     resolve         discovery        task_kinds
+#
+# RULED (architect, 2026-09-19): those four are NEVER exported bare at the root. They stay
+# module-qualified, on BOTH sides — `from iagent_mesh.task_kinds import compose`, and
+# `from iagent_mesh.discovery import resolve`. The other sixteen names come to the root.
+#
+# `compose`, `json_schema` and `validate_dir` ALREADY resolve at this root, and they are
+# graph_manifest's — imported above, shipped since 0.7.x, and consumed by
+# agent_fleet/graph_host/main.py. Withdrawing them to satisfy the rule literally would be a
+# SUBTRACTION from a published surface, which the same ruling forbids in its last line
+# (additive only). So the rule binds where it can still bind: no NEW colliding name arrives
+# here, and no existing one changes meaning. `resolve` is at the root from neither side,
+# because neither side was ever here to be broken.
+#
+# THIS IS THE ONE PLACE THE SIXTEEN CAN SHADOW SOMETHING, so the seal in
+# `test_every_public_name_is_reachable.py` no longer asks `hasattr` — it asks whether the root's
+# binding IS the module's object. Under `hasattr`, `task_kinds.compose` reads as "reachable"
+# while the root hands the caller graph_manifest's function, which is precisely the silent
+# shadowing that file exists to prevent, wearing a green.
+from .declarations import (
+    DeclarationError,
+    compose_rows,
+    load_rows,
+    read_rows,
+)
+from .discovery import (
+    GROUPS,
+    AmbiguousImplementation,
+    NoImplementation,
+    available,
+)
+from .task_kinds import (
+    ARCHETYPES,
+    KIND_PATTERN,
+    UNDECLARED,
+    RendersAs,
+    Resolution,
+    TaskKind,
+    TaskKindError,
+    load_task_kinds,
 )
 
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
@@ -150,18 +204,22 @@ __all__ = [
     "EnumerateInstancesRequest",
     "EnumerateInstancesResponse",
     "InstanceOption",
+    "over_limit",
+    "unhonoured_scoping",
     # the interface surface (interfaces / results / conformance)
     "ConformanceFailure",
     "assert_fixture_discriminates",
     "check_embedding_contract",
     "check_live",
     "check_offline",
+    "check_ontology_contract",
     "check_writer_marker",
     "MARKER_ASSERTS",
     "MARKER_DOES_NOT_ASSERT",
     "MESH_COLLECTION_META",
     "CollectionMarker",
     "CorruptCollectionMarker",
+    "DelegateIdentityRefused",
     "Initiator",
     "MeshGraph",
     "MeshOntology",
@@ -199,6 +257,25 @@ __all__ = [
     "RefusalViolation",
     "REF_COSMETIC",
     "registration_payload",
-    "ref_basis",
     "register_graph",
+    # ── promoted in 0.9.4 ────────────────────────────────────────────────────────────────
+    # Sixteen names, and the four absent ones are absent BY RULE rather than by oversight —
+    # see the import block above and the _EXEMPT table in
+    # tests/test_every_public_name_is_reachable.py, which names each with its reason.
+    "DeclarationError",
+    "compose_rows",
+    "load_rows",
+    "read_rows",
+    "GROUPS",
+    "AmbiguousImplementation",
+    "NoImplementation",
+    "available",
+    "ARCHETYPES",
+    "KIND_PATTERN",
+    "UNDECLARED",
+    "RendersAs",
+    "Resolution",
+    "TaskKind",
+    "TaskKindError",
+    "load_task_kinds",
 ]

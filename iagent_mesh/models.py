@@ -1,13 +1,103 @@
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from typing import Optional, Union
 
 class ToolInput(BaseModel):
     """Base class for all Data Scientist inputs."""
     pass
 
+
+class MethodInput(BaseModel):
+    """One input to a formula: its name, the value it took, and the unit the value is in.
+
+    ``unit`` is optional because some inputs have none (a count, a flag). ``None`` means "no unit
+    stated", never "dimensionless" — an input the producer did not annotate must not be read as one
+    it asserted to be unitless.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    value: Union[bool, int, float, str]
+    unit: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("a method input must be named")
+        return v
+
+    @field_validator("unit")
+    @classmethod
+    def _unit_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("a blank unit is not 'no unit' — omit it")
+        return v
+
+
+class MethodBlock(BaseModel):
+    """HOW a computed figure was produced: the formula, what went into it, and which code ran.
+
+    A number with no method is a claim nobody can re-derive. ``producer_sha`` names the code that
+    produced it, so a reader can tell "this figure came from that formula" from "this figure came
+    from whatever the producer was at the time".
+
+    ``bound`` and ``bound_defaulted`` are separate on purpose. A bound the CALLER supplied and a
+    bound the producer filled in read identically as a number, and only the second is something
+    the caller never chose. ``bound_defaulted`` is ``None`` when the producer did not say, which
+    is not the same as ``False``: an unmade claim is not a claim that the bound was supplied.
+
+    **THE PAIR IS ENFORCED, NOT MERELY DOCUMENTED — ruled 2026-09-27, reconciling this model with
+    the fleet producer that was checking it already.** ``bound is None`` and ``bound_defaulted is
+    None`` must agree: a bound with no word on where it came from, and a defaulted flag on a
+    measure that states no bound, are the two ways of getting this half-stated, and both read as
+    deliberate rather than as an oversight worth coercing quietly.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formula: str
+    inputs: list[MethodInput]
+    bound: Optional[float] = None
+    bound_defaulted: Optional[bool] = None
+    producer_sha: str
+
+    @field_validator("formula", "producer_sha")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("a method block must name its formula and its producer, not blanks")
+        return v
+
+    @model_validator(mode="after")
+    def _bound_and_its_flag_agree(self) -> "MethodBlock":
+        if (self.bound is None) != (self.bound_defaulted is None):
+            raise ValueError(
+                f"bound={self.bound!r} and bound_defaulted={self.bound_defaulted!r} disagree "
+                "about whether this measure has a bound; a flag without a bound, or a bound "
+                "without a flag, is the half-stated disclosure this block exists to end"
+            )
+        return self
+
+
 class ToolOutput(BaseModel):
-    """Base class for all Data Scientist outputs."""
-    pass
+    """Base class for all Data Scientist outputs.
+
+    ``method`` is OPTIONAL AND ADDITIVE, and additive includes the wire: an output that does not set
+    it DUMPS EXACTLY WHAT IT DUMPED BEFORE — no ``method: null`` key appears in every output in the
+    fleet. A subclass that already declares its own field named ``method`` keeps it, and keeps it
+    when it is ``None``: only this base's own unset block is omitted.
+    """
+    method: Optional[MethodBlock] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_an_unset_method(self, handler):
+        out = handler(self)
+        own = type(self).model_fields["method"].annotation == Optional[MethodBlock]
+        if own and self.method is None:
+            out.pop("method", None)
+        return out
+
 
 class DataPointer(BaseModel):
     """The secure token and URI provided by Engine DA for unstructured/structured data."""

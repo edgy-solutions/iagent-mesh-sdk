@@ -57,13 +57,14 @@ from __future__ import annotations
 
 from typing import Literal, Optional, Protocol, Sequence, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .results import MeshResult
 
 __all__ = [
     "Initiator",
     "ServiceIdentityRefused",
+    "DelegateIdentityRefused",
     "MeshGraph",
     "MeshOntology",
     "MeshVectors",
@@ -84,6 +85,16 @@ class ServiceIdentityRefused(PermissionError):
 
     Not a generic authz error on purpose: this names the ONE condition, so a caller reading the
     raise learns the rule rather than that something was denied.
+    """
+
+
+class DelegateIdentityRefused(PermissionError):
+    """A delegate identity reached an operation that requires a person.
+
+    A delegate acts under ITS OWN grants — ``Initiator.on_behalf_of`` names who it is
+    accountable to, and is never a gate input (see the field's docstring). This names the
+    boundary the same way ``ServiceIdentityRefused`` names its own, rather than making a caller
+    catch the older exception and wonder whether "service" now means both.
     """
 
 
@@ -108,6 +119,13 @@ class Initiator(BaseModel):
     minted elsewhere, and constraining ITS format is asserting a fact about someone else's issuer.
     **Same-looking rule, opposite direction of authority.** Conflating them is how the prefix
     check gets re-implemented on the wrong side.
+
+    **``"delegate"`` (added 2026-09-27) is a THIRD kind, not a spelling of ``"service"``.** It is
+    a non-human session (a lane worktree, a scheduled job run under someone's authority) acting
+    under its OWN entitlements — distinct from a deployed service, which has none it can be asked
+    about, and from a person, whose grants it must not silently inherit. ``on_behalf_of`` carries
+    who it is accountable to; that field is provenance, never a gate input, for the same reason
+    ``authz_id`` and a provenance actor are kept as separate fields elsewhere in this system.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -115,7 +133,20 @@ class Initiator(BaseModel):
     subject: str
     """The authorization identity, opaque. Whatever claim the deployment keys on."""
 
-    kind: Literal["person", "service"]
+    kind: Literal["person", "service", "delegate"]
+
+    on_behalf_of: Optional[str] = None
+    """Who a DELEGATE is accountable to. Opaque, same discipline as ``subject`` — never parsed.
+
+    **PROVENANCE, NOT A GATE INPUT.** No guard in this SDK reads it, and none should: a delegate's
+    admission is decided by its OWN grants (``subject``), and letting ``on_behalf_of`` change an
+    authorization outcome would be the authz-subject/provenance-actor collapse this field exists
+    to avoid — attribution and permission are different questions that happen to share a value.
+
+    Required, non-blank, when ``kind == "delegate"`` — a delegate with nobody accountable is a
+    service wearing a different label. Refused (must be ``None``) otherwise: setting it on a
+    person or a service asserts a relationship neither kind declares.
+    """
 
     @field_validator("subject")
     @classmethod
@@ -127,20 +158,51 @@ class Initiator(BaseModel):
             )
         return v
 
-    def require_person(self, operation: str) -> "Initiator":
-        """Refuse a service identity, naming the operation. The boundary check, in one call.
-
-        Implementations call this FIRST in every operation. It is a method rather than a note in
-        the Protocol docstring because a rule an implementer has to remember is a rule that holds
-        until someone is busy.
-        """
-        if self.kind == "service":
-            raise ServiceIdentityRefused(
-                f"{operation} requires an initiator and received a service identity "
-                f"({self.subject!r}). A read attributed to a service records provenance no "
-                f"person can be asked about."
+    @model_validator(mode="after")
+    def _on_behalf_of_matches_kind(self) -> "Initiator":
+        if self.kind == "delegate":
+            if self.on_behalf_of is None or not self.on_behalf_of.strip():
+                raise ValueError(
+                    "a delegate initiator must name who it acts for in on_behalf_of — a "
+                    "delegate with nobody accountable is a service under another name"
+                )
+        elif self.on_behalf_of is not None:
+            raise ValueError(
+                f"on_behalf_of is set ({self.on_behalf_of!r}) but kind={self.kind!r} is not "
+                "'delegate' — the field exists only to name who a delegate acts for, and "
+                "setting it on a person or a service asserts a relationship that kind never "
+                "declared"
             )
         return self
+
+    def require_person(self, operation: str) -> "Initiator":
+        """Refuse anything that is not a person, naming the operation. The boundary check, one call.
+
+        **AN ALLOWLIST, NOT A DENYLIST — ruled 2026-09-27, the day ``kind`` grew a third value.**
+        The old body read ``if self.kind == "service": raise`` — a comparison that ADMITS
+        anything it does not name. Widening ``kind`` to add ``"delegate"`` without touching that
+        line would have let a delegate straight through every operation this check exists to
+        gate, silently, which is the one failure a boundary check must never have. ``kind !=
+        "person"`` cannot make that mistake again: a fourth kind, whenever one is declared, is
+        refused by construction rather than by whoever remembers to update every call site.
+
+        The same comparison was copied into the fleet twice (``ontology_service/mesh_graph.py``,
+        ``mesh_vectors.py``) — this is the shared import those two copies should become, so the
+        allowlist is written once rather than kept in sync by hand three times.
+        """
+        if self.kind == "person":
+            return self
+        if self.kind == "delegate":
+            raise DelegateIdentityRefused(
+                f"{operation} requires a person and received a delegate identity "
+                f"({self.subject!r}, acting for {self.on_behalf_of!r}). A delegate's own grants "
+                "govern what it may invoke; this operation is not one of them."
+            )
+        raise ServiceIdentityRefused(
+            f"{operation} requires an initiator and received a service identity "
+            f"({self.subject!r}). A read attributed to a service records provenance no "
+            f"person can be asked about."
+        )
 
 
 # ── the three interfaces ─────────────────────────────────────────────────────────────────
@@ -215,17 +277,35 @@ class MeshGraph(Protocol):
 
 @runtime_checkable
 class MeshOntology(Protocol):
-    """Named reads over the RDF store. **NO WRITE HALF, and for a different reason than MeshGraph.**
+    """Named reads over the RDF store. **NO WRITE HALF TODAY — the earlier blocker stated here was
+    FALSE, corrected 2026-09-27.** Measured by ``doc-tools/lane/7f`` against sandbox Fuseki:
+    ``doc-tools/sessions/2026-09-27-report-7f-mesh-jena-update-route-and-writer-inventory.md``.
 
-    MeshGraph has no write half because there is no caller. This one has none because **there is
-    no verified working path**: the update endpoint is derived by ``endpoint.replace("/sparql",
-    "/update")`` from an endpoint spelled ``.../ds/query`` — no configured endpoint contains
-    ``/sparql``, so the substitution is a NO-OP and the write posts ``update=`` to the QUERY
-    endpoint. It does not derive the wrong address; it derives nothing while reading exactly like
-    a derivation.
+    **The route works.** ``POST update=<sparql>`` to ``{fusekiUrl}/ds/update`` returns 200
+    ("Update succeeded"). Both engine-o (reads a declared ``JENA_UPDATE_ENDPOINT``) and doc-tools
+    (concatenates ``{base_url}/{dataset}/update``) already reach the identical address by two
+    different, non-derived constructions. **No live code performs an ``endpoint.replace("/sparql",
+    "/update")`` substitution** — it was removed 2026-09-14 as a latent hazard, never an observed
+    failure (``agent_fleet/ontology_service/substrate_posture.py:91-107``, "DECLARED, NEVER
+    DERIVED"). This docstring had restated a removed hazard as a present-tense one, which is a
+    worse thing for a docstring to do than say nothing: the next reader spends an evening
+    re-measuring a bug that was fixed two weeks earlier.
 
-    **Promising a write half over an untested route is worse than omitting one**, because the
-    interface would make the breakage look like an implementation bug rather than an absence.
+    **THE GET-404 TRAP, named so nobody re-derives the false conclusion.** ``GET /ds/sparql``
+    404s while a *posted* query against that same path returns 200 — Fuseki's query endpoint
+    answers POST only. A route-existence check done with GET alone concludes the endpoint is
+    absent. That is almost certainly how "no configured endpoint contains ``/sparql``" got written
+    down here originally.
+
+    **So the absence is a choice, not a wall.** The SDK ships no Jena code at all — no caller here
+    wants this write half yet, and nobody has ruled who owns SPARQL ``GRAPH`` scoping for a write:
+    doc-tools' own Jena writer has three of its four SPARQL-emitting plugins inserting into Jena's
+    *default* graph, invisible to the mesh resolver, because nothing at the write call forces
+    scoping (same report, Part 2). A write half is proposed with Jena as the first production
+    caller in
+    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``
+    — it does not exist here because the design has not been ruled on, not because the route does
+    not work.
     """
 
     MODES: tuple[str, ...] = ()

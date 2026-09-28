@@ -19,6 +19,7 @@ from iagent_mesh.conformance import (
     check_offline,
 )
 from iagent_mesh.interfaces import (
+    DelegateIdentityRefused,
     Initiator,
     MeshGraph,
     MeshOntology,
@@ -62,6 +63,61 @@ def test_kind_is_DECLARED_not_sniffed_from_the_subject():
 def test_an_empty_subject_is_refused():
     with pytest.raises(Exception, match="empty|anonymous"):
         Initiator(subject="   ", kind="person")
+
+
+# ── the delegate kind ────────────────────────────────────────────────────────────────────
+
+def test_a_delegate_identity_is_refused_and_the_raise_names_the_operation():
+    """A delegate is refused by `require_person` — but as its OWN condition, not relabelled as a
+    service. A caller catching only `ServiceIdentityRefused` must not silently swallow this too."""
+    delegate = Initiator(subject="lane:ca", kind="delegate", on_behalf_of="chris")
+    with pytest.raises(DelegateIdentityRefused, match="registry"):
+        delegate.require_person("registry")
+
+
+def test_a_delegate_identity_does_NOT_raise_the_SERVICE_exception():
+    """The two refusal types are siblings, not a hierarchy — `except ServiceIdentityRefused`
+    alone must not catch a delegate refusal, or the two conditions collapse into one again."""
+    delegate = Initiator(subject="lane:ca", kind="delegate", on_behalf_of="chris")
+    try:
+        delegate.require_person("registry")
+    except ServiceIdentityRefused:
+        pytest.fail("a delegate refusal must not be catchable as ServiceIdentityRefused")
+    except DelegateIdentityRefused:
+        pass
+
+
+def test_require_person_is_an_ALLOWLIST_a_service_is_still_refused():
+    """POSITIVE-FOR-THE-RULE control: widening `kind` must not have loosened the existing refusal.
+    (The allowlist rewrite is exactly the change that could get this backwards.)"""
+    svc = Initiator(subject="svc:anything", kind="service")
+    with pytest.raises(ServiceIdentityRefused):
+        svc.require_person("registry")
+
+
+def test_a_delegate_must_name_who_it_acts_for():
+    with pytest.raises(Exception, match="on_behalf_of|accountable"):
+        Initiator(subject="lane:ca", kind="delegate")
+    with pytest.raises(Exception, match="on_behalf_of|accountable"):
+        Initiator(subject="lane:ca", kind="delegate", on_behalf_of="   ")
+
+
+@pytest.mark.parametrize("kind", ["person", "service"])
+def test_on_behalf_of_IS_REFUSED_on_a_non_delegate(kind):
+    """Setting `on_behalf_of` on a person or a service asserts a relationship that kind never
+    declared — refused rather than silently carried as an unused field."""
+    with pytest.raises(Exception, match="on_behalf_of"):
+        Initiator(subject="someone", kind=kind, on_behalf_of="chris")
+
+
+def test_on_behalf_of_IS_NEVER_A_GATE_INPUT():
+    """PROVENANCE, NOT AUTHORIZATION. Two delegates that differ only in who they act for must be
+    admitted or refused identically — `require_person` refuses BOTH the same way regardless."""
+    a = Initiator(subject="lane:ca", kind="delegate", on_behalf_of="chris")
+    b = Initiator(subject="lane:ca", kind="delegate", on_behalf_of="someone-else")
+    for i in (a, b):
+        with pytest.raises(DelegateIdentityRefused):
+            i.require_person("registry")
 
 
 # ── the fixture rule ─────────────────────────────────────────────────────────────────────
@@ -173,9 +229,11 @@ def test_a_conforming_live_run_passes():
 # ── the interfaces themselves ────────────────────────────────────────────────────────────
 
 def test_the_read_only_interfaces_declare_NO_write_operation():
-    """MeshGraph has no write half because there is no caller; MeshOntology has none because
-    there is no verified working path. Both are rulings, so a later 'for symmetry' addition
-    should have to argue with a test rather than with a comment."""
+    """MeshGraph has no write half because there is no caller; MeshOntology has none because no
+    design has been ruled on yet — NOT because the Jena update route is broken, which was the
+    stated reason until it was measured false 2026-09-27 (see the class docstring). Both are
+    rulings, so a later 'for symmetry' addition should have to argue with a test rather than
+    with a comment."""
     for proto in (MeshGraph, MeshOntology, MeshVectors):
         names = [n for n in dir(proto) if not n.startswith("_")]
         offenders = [n for n in names

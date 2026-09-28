@@ -16,6 +16,7 @@ import os
 os.environ.setdefault("GIT_PROVISION_API_URL", "https://mock-api/v1/git/provision")
 os.environ.setdefault("GIT_SERVER_HOST", "mock-git-server")
 os.environ.setdefault("ARTIFACTORY_BASE_URL", "https://mock-artifactory")
+os.environ.setdefault("ENGINE_DOCS_URL", "https://mock-engine-docs")
 
 # Optional settings — left unset by default to mirror local-dev posture.
 os.environ.setdefault("PLATFORM_GIT_TOKEN", "mock_token")
