@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     PLATFORM_GIT_TOKEN: Optional[str] = None
     MESH_DEV_TOKEN: Optional[str] = None
 
+    # engine-docs `/explain`, consumed only by `mcp_server.mesh_explain` (the first outside
+    # consumer of a MeshOntology-adjacent read). Optional here for the same reason as the git
+    # trio above — nothing in `MeshTool` calls this — and demanded by `require()` at the one
+    # call site that does.
+    ENGINE_DOCS_URL: Optional[str] = None
+
     def require(self, name: str) -> str:
         """Return a setting that the CALLER genuinely cannot proceed without, or fail naming it.
 

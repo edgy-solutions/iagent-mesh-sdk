@@ -14,7 +14,7 @@ This Hub leverages the **Inception Pattern** to dynamically scaffold new agent t
 - **Substrate Interfaces** (`iagent_mesh.interfaces`): Three `Protocol`s — `MeshGraph`, `MeshOntology`, `MeshVectors` — giving an engine *named reads* over the property graph, the RDF store and the vector store instead of a driver handle or a query-language slot. Every operation carries the `Initiator` (who is asking) and returns a `MeshResult` that distinguishes *answered* / *empty* / *failed* / *unreachable*. Implementations are admitted by passing `iagent_mesh.conformance`, never by being named in the SDK. See [docs/interfaces.md](docs/interfaces.md).
 - **Templates**: Standardized data scientist environments (Pure Math, Instructor + Polars, BAML + Pandas).
 - **Interactive Scaffolding**: Use `scripts/scaffold.sh` to locally generate a new agent from a template.
-- **MCP Server**: The `mcp_server/server.py` exposes tools (`scaffold_local_workspace`, `publish_local_to_mesh`) for intelligent IDE-based agent creation.
+- **MCP Server**: The `mcp_server/server.py` exposes tools (`scaffold_local_workspace`, `publish_local_to_mesh`, `mesh_explain`) for intelligent IDE-based agent creation. `mesh_explain` is the SDK's first outside consumer of a mesh read (engine-docs `/explain`): it connects as a `delegate` `Initiator` — never a person, and refused by `Initiator.require_person` like any other non-person identity — and returns the full `MeshResult` outcome rather than a bare success/failure string. **Registration in `.mcp.json` is a proposal, not yet enabled** — see `sessions/` for the reachability report a lane worktree needs before turning it on.
 - **Cloud Endpoints**: `app.py` exposes REST APIs (`scaffold_generator`, `mesh_publisher`) for the central orchestrator to provision workspaces dynamically.
 
 ## Environment Configuration
@@ -33,6 +33,11 @@ This SDK relies on centralized environment variables for all integrations to ens
 **Required Tokens (Depending on deployment):**
 - `PLATFORM_GIT_TOKEN`: Used by the cloud pod (`app.py`) for live git publishing.
 - `MESH_DEV_TOKEN`: Used by the local `mcp_server` to authenticate against provisioning APIs.
+
+**`mesh_explain` (mcp_server only):**
+- `ENGINE_DOCS_URL`: Base URL of the engine-docs deployment `mesh_explain` calls `/explain` on. Required at call time; unset raises naming it, rather than a request to `https://None/explain`.
+- `MESH_EXPLAIN_ON_BEHALF_OF`: Who this tool's delegate `Initiator` is accountable to. **Required, no default** — a delegate with nobody accountable is a service under another name, and `mesh_explain` refuses to invent one.
+- `MESH_EXPLAIN_SUBJECT`: Optional; defaults to `mcp:mesh_explain`. The delegate's own opaque subject — not yet a minted credential (no `kind="delegate"` mint path exists), so it travels as an informational header, never an `Authorization` bearer token.
 
 ## Installation & Testing
 
