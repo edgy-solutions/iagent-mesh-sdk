@@ -51,6 +51,8 @@ __all__ = [
     "check_ontology_contract",
     "check_writer_offline",
     "check_ontology_writer_contract",
+    "check_graph_writer_contract",
+    "check_vectors_writer_contract",
 ]
 
 
@@ -530,3 +532,138 @@ def check_ontology_writer_contract(
                   f"landed unscoped — this is the exact doc-tools defect (three of four "
                   f"SPARQL-emitting plugins inserting into the default graph, invisible to the "
                   f"mesh resolver) that GRAPH-wrapping every write exists to make impossible")
+
+
+# ── the graph-writer arm, ruled 2026-09-28 overnight ────────────────────────────────────────
+
+
+def check_graph_writer_contract(
+    *,
+    call_write_edge: Callable[[], MeshWriteResult],
+    call_read_written_edge: Callable[[], MeshResult],
+    call_read_unwritten_edge: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshGraphWriter`` contract: an edge reported as written must be PROVEN reachable by
+    a read, not merely trusted from the write's own outcome — the same "verify the mutation
+    applied" discipline as :func:`check_ontology_writer_contract`.
+
+    ``call_write_edge`` writes one edge for a ``(subject, verb)`` pair the caller has already
+    bound. ``call_read_written_edge`` is a :class:`iagent_mesh.interfaces.MeshGraph` ``edge()``
+    call for that SAME pair, run AFTER the write, bound to a PERSON initiator by the caller.
+    ``call_read_unwritten_edge`` is an ``edge()`` call for a DIFFERENT ``(subject, verb)`` pair the
+    caller never wrote — the fixture's negative case. ``MeshGraph.edge`` has no scope parameter to
+    exploit the way ``MeshOntology.ask(graph=...)`` does, so the discriminating pair here is
+    written-vs-never-written rather than within-graph-vs-default-graph; the property proven is
+    narrower (the write actually took effect, full stop) rather than the ontology arm's stronger
+    scoping claim.
+    """
+    op = "graph.write_edge"
+
+    written = call_write_edge()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify against a read")
+
+    found = call_read_written_edge()
+    absent = call_read_unwritten_edge()
+
+    # THE FIXTURE MUST DISCRIMINATE: a read that answers regardless of what was actually written
+    # cannot tell a real write from a writer that only ever reports success.
+    assert_fixture_discriminates(
+        f"{op} written vs never-written edge", found, absent, describe=lambda r: r.outcome
+    )
+
+    if found.outcome != "answered":
+        _fail(op, f"asking for the edge just written produced {found.outcome!r}, not 'answered'. "
+                  f"The write reported success and a read cannot find what it claims to have "
+                  f"landed")
+    if absent.outcome != "empty":
+        _fail(op, f"asking for a DIFFERENT edge that was never written produced "
+                  f"{absent.outcome!r}, not 'empty'. A read that answers regardless of what was "
+                  f"actually written cannot prove the write above took effect at all")
+
+
+# ── the vectors-writer arm, ruled 2026-09-28 overnight ──────────────────────────────────────
+
+
+def check_vectors_writer_contract(
+    *,
+    call_write_with_failing_embedder: Callable[[], MeshWriteResult],
+    call_write_with_failing_embedder_opted_out: Callable[[], MeshWriteResult],
+    call_relocate_matching_dimension: Callable[[], MeshWriteResult],
+    call_relocate_wrong_dimension: Callable[[], MeshWriteResult],
+    embed_call_count: Callable[[], int],
+) -> None:
+    """The ``MeshVectorsWriter`` contract: ``vector_required`` defaults ``True`` and a failed
+    embed must actually be REFUSED, not silently completed without a vector — the sixty-seven-day
+    silent-BM25 defect (``write_results.py``), replayed at write time. ``written_without_vector``
+    must be reachable ONLY through the caller's own ``vector_required=False`` opt-out, never a
+    writer's own fallback. ``relocate`` must refuse a dimension mismatch, and must NEVER call the
+    Embedder — it takes a precomputed vector, and a relocate that quietly re-embeds has turned a
+    move into an unannounced write.
+
+    ``MeshVectors.nominate`` (semantic search) is fuzzy and ranked, not a deterministic oracle for
+    "did this exact write land" — so unlike the ontology and graph arms above, this one proves
+    STRUCTURAL properties the implementer's own fixture exposes directly, rather than a read-side
+    round trip: two ``write`` calls against a deliberately-failing ``Embedder`` fixture (default
+    vs. opted-out), a ``relocate`` pair (matching vs. mismatched dimension), and
+    ``embed_call_count`` — the caller's own counter on their injected Embedder — to prove
+    ``relocate`` never embeds, by measuring an effect rather than trusting a report.
+    """
+    op_write = "vectors.write"
+    op_relocate = "vectors.relocate"
+
+    # ── vector_required defaults True: a failing embed with no opt-out must REFUSE ──
+    default_result = call_write_with_failing_embedder()
+    opted_out_result = call_write_with_failing_embedder_opted_out()
+
+    assert_fixture_discriminates(
+        f"{op_write} default vs opted-out vector_required, both against a failing embedder",
+        default_result, opted_out_result, describe=lambda r: r.outcome,
+    )
+
+    if default_result.applied:
+        _fail(op_write, f"a failing embedder with vector_required at its DEFAULT (True) produced "
+                        f"outcome={default_result.outcome!r}, which reports the write applied. "
+                        f"The default must REFUSE when no vector could be produced, never complete "
+                        f"one silently without it")
+    if default_result.outcome != "refused":
+        _fail(op_write, f"a failing embedder with vector_required at its default produced "
+                        f"outcome={default_result.outcome!r}, not 'refused'. This is a caller-input "
+                        f"decision the writer made on its own — the exact defect "
+                        f"'written_without_vector' exists to require an explicit opt-out for")
+
+    if opted_out_result.outcome != "written_without_vector":
+        _fail(op_write, f"a failing embedder with vector_required=False produced "
+                        f"outcome={opted_out_result.outcome!r}, not 'written_without_vector'. The "
+                        f"caller explicitly opted into a vectorless write and the writer must name "
+                        f"that state, not silently report a clean 'written' or refuse a write the "
+                        f"caller asked to allow")
+
+    # ── relocate: dimension mismatch is refused, and never touches the Embedder ──
+    before = embed_call_count()
+
+    matching = call_relocate_matching_dimension()
+    wrong = call_relocate_wrong_dimension()
+
+    assert_fixture_discriminates(
+        f"{op_relocate} matching vs mismatched dimension", matching, wrong,
+        describe=lambda r: r.outcome,
+    )
+
+    if not matching.applied:
+        _fail(op_relocate, f"a precomputed vector at the writer's own declared dimension produced "
+                           f"outcome={matching.outcome!r} detail={matching.detail!r} — relocate "
+                           f"must accept a vector that actually matches")
+    if wrong.applied:
+        _fail(op_relocate, f"a precomputed vector at the WRONG dimension produced "
+                           f"outcome={wrong.outcome!r}, which reports it applied. A vector at the "
+                           f"wrong dimension is not retrievable by any query at the writer's "
+                           f"declared dimension and must be refused, not stored")
+
+    after = embed_call_count()
+    if after != before:
+        _fail(op_relocate, f"the Embedder was called {after - before} time(s) during relocate. "
+                           f"relocate takes a PRECOMPUTED vector and must never embed — a relocate "
+                           f"that embeds has silently turned a move into a write the caller never "
+                           f"asked for")

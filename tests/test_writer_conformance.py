@@ -1,6 +1,7 @@
 """The write-side conformance arms must go red on the implementations they exist to reject —
 the same discipline as `test_the_ontology_conformance_arm_bites.py`, applied to the write half
-ruled 2026-09-27.
+ruled 2026-09-27, and to the two arms ruled 2026-09-28 overnight (`check_graph_writer_contract`,
+`check_vectors_writer_contract`).
 
 THE DEFECT `check_ontology_writer_contract` EXISTS TO CATCH: a writer that reports `written`
 while having inserted into Jena's DEFAULT graph, invisible to the mesh resolver — the exact
@@ -15,7 +16,9 @@ import pytest
 
 from iagent_mesh.conformance import (
     ConformanceFailure,
+    check_graph_writer_contract,
     check_ontology_writer_contract,
+    check_vectors_writer_contract,
     check_writer_offline,
 )
 from iagent_mesh.interfaces import Initiator
@@ -186,3 +189,328 @@ def test_A_CONFORMING_VECTORS_WRITER_PASSES_BOTH_OPERATIONS():
             ("relocate", lambda i: w.relocate(i, collection="c", id="1", vector=[0.1, 0.2])),
         ],
     )
+
+
+# ── check_graph_writer_contract, ruled 2026-09-28 overnight ─────────────────────────────────
+#
+# THE DEFECT THIS ARM EXISTS TO CATCH: a `write_edge` that reports `written` without the edge
+# actually being reachable by a read — the write-side lie this arm proves does not survive being
+# asked, the same discipline as the ontology arm above, adapted to a Protocol with no scope
+# parameter to exploit.
+
+class _EdgeStore:
+    """The reference pair: a dict keyed by (subject, verb). Broken variants below override
+    `edge` to answer independently of what was actually written."""
+
+    def __init__(self) -> None:
+        self._by_pair: dict[tuple[str, str], str] = {}
+
+    def write_edge(self, initiator: Initiator, *, subject: str, verb: str, object: str) -> MeshWriteResult:
+        initiator.require_person_or_delegate("graph.write_edge")
+        if not subject.strip() or not verb.strip() or not object.strip():
+            return MeshWriteResult.refused("empty subject, verb, or object")
+        self._by_pair[(subject, verb)] = object
+        return MeshWriteResult.written()
+
+    def edge(self, initiator: Initiator, subject: str, verb: str) -> MeshResult:
+        initiator.require_person("edge")
+        key = (subject, verb)
+        if key in self._by_pair:
+            return MeshResult.answered([self._by_pair[key]])
+        return MeshResult.empty()
+
+
+WRITTEN_SUBJECT, WRITTEN_VERB, WRITTEN_OBJECT = "ex:alice", "ex:knows", "ex:bob"
+UNWRITTEN_SUBJECT, UNWRITTEN_VERB = "ex:carol", "ex:dislikes"
+
+
+def _run_graph(store) -> None:
+    check_graph_writer_contract(
+        call_write_edge=lambda: store.write_edge(
+            PERSON, subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, object=WRITTEN_OBJECT
+        ),
+        call_read_written_edge=lambda: store.edge(PERSON, WRITTEN_SUBJECT, WRITTEN_VERB),
+        call_read_unwritten_edge=lambda: store.edge(PERSON, UNWRITTEN_SUBJECT, UNWRITTEN_VERB),
+    )
+
+
+def test_G_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_graph(_EdgeStore())
+
+
+def test_G_A_WRITER_WHOSE_WRITE_DID_NOT_APPLY_IS_REFUSED_BEFORE_READING():
+    class Refuses(_EdgeStore):
+        def write_edge(self, initiator, *, subject, verb, object):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_edge.*did not apply"):
+        _run_graph(Refuses())
+
+
+def test_G_A_WRITER_THAT_STORES_NOTHING_IS_CAUGHT_BY_THE_FIXTURE_CHECK():
+    """`written` reported, nothing persisted anywhere — both reads come back `empty`, which the
+    fixture-discrimination check catches before either outcome is even read."""
+
+    class Lost(_EdgeStore):
+        def write_edge(self, initiator, *, subject, verb, object):
+            initiator.require_person_or_delegate("graph.write_edge")
+            return MeshWriteResult.written()  # never actually stores anything
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate.*'empty'"):
+        _run_graph(Lost())
+
+
+def test_G_A_STORE_WHERE_EDGE_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_EdgeStore):
+        def edge(self, initiator, subject, verb):
+            initiator.require_person("edge")
+            return MeshResult.answered([WRITTEN_OBJECT])
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_graph(AlwaysAnswers())
+
+
+def test_G_A_READ_THAT_CANNOT_FIND_THE_WRITTEN_EDGE_IS_CAUGHT():
+    """The written pair reads back something other than 'answered', discriminating from the
+    unwritten pair's genuine 'empty' — the write reported success and the read disagrees."""
+
+    class CannotFindWhatWasWritten(_EdgeStore):
+        def edge(self, initiator, subject, verb):
+            initiator.require_person("edge")
+            if (subject, verb) == (WRITTEN_SUBJECT, WRITTEN_VERB):
+                return MeshResult.failed("simulated: the written edge is not actually readable")
+            return super().edge(initiator, subject, verb)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_edge.*just written.*not 'answered'"):
+        _run_graph(CannotFindWhatWasWritten())
+
+
+def test_G_A_READ_THAT_ANSWERS_FOR_AN_UNWRITTEN_EDGE_TOO_IS_CAUGHT():
+    """The written pair reads back correctly, but the unwritten pair does NOT read back 'empty' —
+    a read that cannot tell 'never written' from an error cannot prove the write above landed."""
+
+    class UnwrittenReadErrorsInsteadOfEmpty(_EdgeStore):
+        def edge(self, initiator, subject, verb):
+            initiator.require_person("edge")
+            if (subject, verb) == (UNWRITTEN_SUBJECT, UNWRITTEN_VERB):
+                return MeshResult.failed("simulated: the store errors on this pair instead of "
+                                          "answering empty")
+            return super().edge(initiator, subject, verb)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_edge.*never written.*not 'empty'"):
+        _run_graph(UnwrittenReadErrorsInsteadOfEmpty())
+
+
+# ── check_vectors_writer_contract, ruled 2026-09-28 overnight ───────────────────────────────
+#
+# THE DEFECT THIS ARM EXISTS TO CATCH: `vector_required`'s default (`True`) silently completing a
+# write with no vector when the embed fails — the sixty-seven-day silent-BM25 defect replayed at
+# write time — and a `relocate` that either accepts a dimension it cannot serve or quietly
+# re-embeds instead of storing the precomputed vector it was given.
+
+class _CountingEmbedder:
+    """`should_fail` controls whether `embed` raises. `calls` increments before any raise, so a
+    broken `relocate` that calls `embed` and swallows the exception is still caught."""
+
+    def __init__(self, *, should_fail: bool, dimension: int = 3) -> None:
+        self.calls = 0
+        self.should_fail = should_fail
+        self._dimension = dimension
+
+    def embed(self, text: str):
+        self.calls += 1
+        if self.should_fail:
+            raise RuntimeError("embed endpoint down")
+        return [0.1] * self._dimension
+
+    def identity(self):
+        return ("test-model", "v1", self._dimension)
+
+
+class _VectorsStore:
+    """The reference pair: `write` refuses on a failed embed unless opted out; `relocate` refuses
+    a dimension mismatch and never touches the Embedder."""
+
+    def __init__(self, embedder: _CountingEmbedder) -> None:
+        self._embedder = embedder
+        self._store: dict[tuple[str, str], object] = {}
+
+    def write(self, initiator: Initiator, *, collection, id, text, domains=(), vector_required=True) -> MeshWriteResult:
+        initiator.require_person_or_delegate("vectors.write")
+        try:
+            vector = self._embedder.embed(text)
+        except Exception as exc:
+            if vector_required:
+                return MeshWriteResult.refused(f"embed failed: {exc}")
+            self._store[(collection, id)] = None
+            return MeshWriteResult.written_without_vector(f"embed failed: {exc}")
+        self._store[(collection, id)] = vector
+        return MeshWriteResult.written()
+
+    def relocate(self, initiator: Initiator, *, collection, id, vector) -> MeshWriteResult:
+        initiator.require_person_or_delegate("vectors.relocate")
+        _, _, dimension = self._embedder.identity()
+        if len(vector) != dimension:
+            return MeshWriteResult.refused(f"vector has {len(vector)} dims, writer is {dimension}")
+        self._store[(collection, id)] = list(vector)
+        return MeshWriteResult.written()
+
+
+GOOD_VECTOR = [0.1, 0.2, 0.3]
+WRONG_VECTOR = [0.1, 0.2]
+
+
+def _run_vectors(store, embedder) -> None:
+    check_vectors_writer_contract(
+        call_write_with_failing_embedder=lambda: store.write(PERSON, collection="c", id="1", text="t"),
+        call_write_with_failing_embedder_opted_out=lambda: store.write(
+            PERSON, collection="c", id="2", text="t", vector_required=False
+        ),
+        call_relocate_matching_dimension=lambda: store.relocate(
+            PERSON, collection="c", id="3", vector=GOOD_VECTOR
+        ),
+        call_relocate_wrong_dimension=lambda: store.relocate(
+            PERSON, collection="c", id="4", vector=WRONG_VECTOR
+        ),
+        embed_call_count=lambda: embedder.calls,
+    )
+
+
+def test_V_A_CONFORMING_VECTORS_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    embedder = _CountingEmbedder(should_fail=True)
+    _run_vectors(_VectorsStore(embedder), embedder)
+
+
+def test_V_A_WRITER_THAT_SILENTLY_COMPLETES_WITHOUT_A_VECTOR_BY_DEFAULT_IS_CAUGHT():
+    """THE DEFECT ITSELF: `vector_required`'s default is `True`, and this writer ignores it,
+    reporting a clean `written` for a text that never embedded."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class IgnoresVectorRequired(_VectorsStore):
+        def write(self, initiator, *, collection, id, text, domains=(), vector_required=True):
+            initiator.require_person_or_delegate("vectors.write")
+            try:
+                self._embedder.embed(text)
+            except Exception as exc:
+                if vector_required:
+                    return MeshWriteResult.written()  # BUG: ignores the failed embed on default
+                return MeshWriteResult.written_without_vector(f"embed failed: {exc}")
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"vectors\.write.*DEFAULT.*applied"):
+        _run_vectors(IgnoresVectorRequired(embedder), embedder)
+
+
+def test_V_A_WRITER_THAT_IGNORES_THE_OPT_OUT_IS_CAUGHT_BY_THE_FIXTURE_CHECK():
+    """The opt-out is never honoured — both calls refuse, indistinguishably."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class IgnoresOptOut(_VectorsStore):
+        def write(self, initiator, *, collection, id, text, domains=(), vector_required=True):
+            initiator.require_person_or_delegate("vectors.write")
+            try:
+                self._embedder.embed(text)
+            except Exception as exc:
+                return MeshWriteResult.refused(f"embed failed: {exc}")  # ignores vector_required
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_vectors(IgnoresOptOut(embedder), embedder)
+
+
+def test_V_A_WRITER_THAT_LIES_ABOUT_VECTOR_PRESENCE_ON_OPT_OUT_IS_CAUGHT():
+    """The opted-out write lands but reports a clean `written` instead of naming the vectorless
+    state — the caller can no longer tell this write apart from one that actually embedded."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class LiesAboutVectorPresence(_VectorsStore):
+        def write(self, initiator, *, collection, id, text, domains=(), vector_required=True):
+            initiator.require_person_or_delegate("vectors.write")
+            try:
+                self._embedder.embed(text)
+            except Exception as exc:
+                if vector_required:
+                    return MeshWriteResult.refused(f"embed failed: {exc}")
+                return MeshWriteResult.written()  # BUG: should be written_without_vector
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"vectors\.write.*not 'written_without_vector'"):
+        _run_vectors(LiesAboutVectorPresence(embedder), embedder)
+
+
+def test_V_A_RELOCATE_THAT_ACCEPTS_ANY_DIMENSION_IS_CAUGHT_BY_THE_FIXTURE_CHECK():
+    """Both a matching and a mismatched vector are stored and report `written`, indistinguishably —
+    the fixture cannot discriminate, which is itself the defect: dimension is never checked."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class AcceptsAnyDimension(_VectorsStore):
+        def relocate(self, initiator, *, collection, id, vector):
+            initiator.require_person_or_delegate("vectors.relocate")
+            self._store[(collection, id)] = list(vector)
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_vectors(AcceptsAnyDimension(embedder), embedder)
+
+
+def test_V_A_RELOCATE_THAT_FLAGS_A_MISMATCH_BUT_STILL_APPLIES_IT_IS_CAUGHT():
+    """The mismatch is at least reported differently (`written_without_vector`) — enough to
+    discriminate — but the vector is stored anyway, which is still wrong: it is not retrievable
+    at the writer's declared dimension."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class StillStoresTheMismatch(_VectorsStore):
+        def relocate(self, initiator, *, collection, id, vector):
+            initiator.require_person_or_delegate("vectors.relocate")
+            _, _, dimension = self._embedder.identity()
+            self._store[(collection, id)] = list(vector)
+            if len(vector) != dimension:
+                return MeshWriteResult.written_without_vector("dimension mismatch but stored anyway")
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"vectors\.relocate.*WRONG dimension.*applied"):
+        _run_vectors(StillStoresTheMismatch(embedder), embedder)
+
+
+def test_V_A_RELOCATE_THAT_ERRORS_EVEN_ON_A_MATCHING_DIMENSION_IS_CAUGHT():
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class ErrorsOnMatchingDimension(_VectorsStore):
+        def relocate(self, initiator, *, collection, id, vector):
+            initiator.require_person_or_delegate("vectors.relocate")
+            _, _, dimension = self._embedder.identity()
+            if len(vector) == dimension:
+                return MeshWriteResult.failed("simulated store error even on a matching dimension")
+            return MeshWriteResult.refused(f"vector has {len(vector)} dims, writer is {dimension}")
+
+    with pytest.raises(ConformanceFailure, match=r"vectors\.relocate.*must accept a vector"):
+        _run_vectors(ErrorsOnMatchingDimension(embedder), embedder)
+
+
+def test_V_A_RELOCATE_THAT_RE_EMBEDS_IS_CAUGHT():
+    """Outcomes are all correct — the defect is only visible by counting Embedder calls."""
+
+    embedder = _CountingEmbedder(should_fail=True)
+
+    class ReEmbeds(_VectorsStore):
+        def relocate(self, initiator, *, collection, id, vector):
+            initiator.require_person_or_delegate("vectors.relocate")
+            try:
+                self._embedder.embed("relocate should never call this")  # BUG
+            except Exception:
+                pass
+            _, _, dimension = self._embedder.identity()
+            if len(vector) != dimension:
+                return MeshWriteResult.refused(f"vector has {len(vector)} dims, writer is {dimension}")
+            self._store[(collection, id)] = list(vector)
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"vectors\.relocate.*Embedder was called"):
+        _run_vectors(ReEmbeds(embedder), embedder)
