@@ -1,7 +1,8 @@
 """The write-side conformance arms must go red on the implementations they exist to reject —
 the same discipline as `test_the_ontology_conformance_arm_bites.py`, applied to the write half
-ruled 2026-09-27, and to the two arms ruled 2026-09-28 overnight (`check_graph_writer_contract`,
-`check_vectors_writer_contract`).
+ruled 2026-09-27, to the two arms ruled 2026-09-28 overnight (`check_graph_writer_contract`,
+`check_vectors_writer_contract`), and to the graph writer's amended identity/key shape ruled
+2026-09-29 on the worker's own packet back.
 
 THE DEFECT `check_ontology_writer_contract` EXISTS TO CATCH: a writer that reports `written`
 while having inserted into Jena's DEFAULT graph, invisible to the mesh resolver — the exact
@@ -21,7 +22,7 @@ from iagent_mesh.conformance import (
     check_vectors_writer_contract,
     check_writer_offline,
 )
-from iagent_mesh.interfaces import Initiator
+from iagent_mesh.interfaces import EdgeIdentity, EdgeIdentityFilter, Initiator
 from iagent_mesh.results import MeshResult
 from iagent_mesh.write_results import MeshWriteResult
 
@@ -191,46 +192,83 @@ def test_A_CONFORMING_VECTORS_WRITER_PASSES_BOTH_OPERATIONS():
     )
 
 
-# ── check_graph_writer_contract, ruled 2026-09-28 overnight ─────────────────────────────────
+# ── check_graph_writer_contract, ruled 2026-09-28 overnight, amended 2026-09-29 ─────────────
 #
 # THE DEFECT THIS ARM EXISTS TO CATCH: a `write_edge` that reports `written` without the edge
 # actually being reachable by a read — the write-side lie this arm proves does not survive being
 # asked, the same discipline as the ontology arm above, adapted to a Protocol with no scope
-# parameter to exploit.
+# parameter to exploit. THE KEY ARM (added 2026-09-29, on the worker's own packet back) exists to
+# catch a SECOND defect: a store that keys an edge on (subject, verb) alone, so a second write of
+# the same triple under a different caller-supplied `key` silently overwrites the first instead of
+# landing as a second edge.
 
 class _EdgeStore:
-    """The reference pair: a dict keyed by (subject, verb). Broken variants below override
-    `edge` to answer independently of what was actually written."""
+    """The reference pair: a dict keyed by (subject, verb), holding every `key` written for that
+    pair. Broken variants below override `write_edge` or `edge` to answer independently of what
+    was actually written."""
 
     def __init__(self) -> None:
-        self._by_pair: dict[tuple[str, str], str] = {}
+        self._by_pair: dict[tuple[str, str], dict[str, str]] = {}
 
-    def write_edge(self, initiator: Initiator, *, subject: str, verb: str, object: str) -> MeshWriteResult:
+    def write_edge(
+        self, initiator: Initiator, *, identity: EdgeIdentity, payload=None
+    ) -> MeshWriteResult:
         initiator.require_person_or_delegate("graph.write_edge")
-        if not subject.strip() or not verb.strip() or not object.strip():
-            return MeshWriteResult.refused("empty subject, verb, or object")
-        self._by_pair[(subject, verb)] = object
+        self._by_pair.setdefault((identity.subject, identity.verb), {})[identity.key] = (
+            identity.object
+        )
+        return MeshWriteResult.written()
+
+    def delete_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshWriteResult:
+        initiator.require_person_or_delegate("graph.delete_edges")
+        for pair, keyed in list(self._by_pair.items()):
+            subject, verb = pair
+            if identity_filter.subject not in (None, subject):
+                continue
+            if identity_filter.verb not in (None, verb):
+                continue
+            for key, obj in list(keyed.items()):
+                if identity_filter.key not in (None, key):
+                    continue
+                if identity_filter.object not in (None, obj):
+                    continue
+                del keyed[key]
+            if not keyed:
+                del self._by_pair[pair]
         return MeshWriteResult.written()
 
     def edge(self, initiator: Initiator, subject: str, verb: str) -> MeshResult:
         initiator.require_person("edge")
-        key = (subject, verb)
-        if key in self._by_pair:
-            return MeshResult.answered([self._by_pair[key]])
-        return MeshResult.empty()
+        keyed = self._by_pair.get((subject, verb))
+        if not keyed:
+            return MeshResult.empty()
+        return MeshResult.answered(list(keyed.values()))
 
 
 WRITTEN_SUBJECT, WRITTEN_VERB, WRITTEN_OBJECT = "ex:alice", "ex:knows", "ex:bob"
 UNWRITTEN_SUBJECT, UNWRITTEN_VERB = "ex:carol", "ex:dislikes"
+FIRST_KEY, SECOND_KEY = "_tool_urn:call-1", "_tool_urn:call-2"
 
 
 def _run_graph(store) -> None:
     check_graph_writer_contract(
         call_write_edge=lambda: store.write_edge(
-            PERSON, subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, object=WRITTEN_OBJECT
+            PERSON,
+            identity=EdgeIdentity(
+                subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, object=WRITTEN_OBJECT, key=FIRST_KEY
+            ),
         ),
         call_read_written_edge=lambda: store.edge(PERSON, WRITTEN_SUBJECT, WRITTEN_VERB),
         call_read_unwritten_edge=lambda: store.edge(PERSON, UNWRITTEN_SUBJECT, UNWRITTEN_VERB),
+        call_write_edge_same_verb_different_key=lambda: store.write_edge(
+            PERSON,
+            identity=EdgeIdentity(
+                subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, object=WRITTEN_OBJECT, key=SECOND_KEY
+            ),
+        ),
+        call_read_edge_after_both_keys=lambda: store.edge(PERSON, WRITTEN_SUBJECT, WRITTEN_VERB),
     )
 
 
@@ -241,7 +279,7 @@ def test_G_A_CONFORMING_GRAPH_WRITER_PASSES():
 
 def test_G_A_WRITER_WHOSE_WRITE_DID_NOT_APPLY_IS_REFUSED_BEFORE_READING():
     class Refuses(_EdgeStore):
-        def write_edge(self, initiator, *, subject, verb, object):
+        def write_edge(self, initiator, *, identity, payload=None):
             return MeshWriteResult.refused("pretend the store is down")
 
     with pytest.raises(ConformanceFailure, match=r"graph\.write_edge.*did not apply"):
@@ -253,12 +291,58 @@ def test_G_A_WRITER_THAT_STORES_NOTHING_IS_CAUGHT_BY_THE_FIXTURE_CHECK():
     fixture-discrimination check catches before either outcome is even read."""
 
     class Lost(_EdgeStore):
-        def write_edge(self, initiator, *, subject, verb, object):
+        def write_edge(self, initiator, *, identity, payload=None):
             initiator.require_person_or_delegate("graph.write_edge")
             return MeshWriteResult.written()  # never actually stores anything
 
     with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate.*'empty'"):
         _run_graph(Lost())
+
+
+def test_G_A_SECOND_KEY_WRITE_THAT_DID_NOT_APPLY_IS_CAUGHT():
+    """The first write and both reads pass; the SECOND key's write is refused — caught by name,
+    before the row-count check that follows it is ever reached."""
+
+    class RefusesSecondWrite(_EdgeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self._writes = 0
+
+        def write_edge(self, initiator, *, identity, payload=None):
+            self._writes += 1
+            if self._writes == 2:
+                return MeshWriteResult.refused("pretend the second write is refused")
+            return super().write_edge(initiator, identity=identity, payload=payload)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_edge.*second write.*did not apply"):
+        _run_graph(RefusesSecondWrite())
+
+
+def test_G_A_WRITER_THAT_LETS_A_SECOND_KEY_OVERWRITE_THE_FIRST_IS_CAUGHT():
+    """THE DEFECT THE WORKER'S PACKET NAMED: a store that keys an edge on (subject, verb) alone,
+    ignoring `key` entirely, so the second write of the same triple silently overwrites the first
+    instead of landing as a second edge. A read after both writes finds one row, not two."""
+
+    class KeylessStore(_EdgeStore):
+        def __init__(self) -> None:
+            self._by_pair_single: dict[tuple[str, str], str] = {}
+
+        def write_edge(self, initiator, *, identity, payload=None):
+            initiator.require_person_or_delegate("graph.write_edge")
+            self._by_pair_single[(identity.subject, identity.verb)] = identity.object
+            return MeshWriteResult.written()
+
+        def edge(self, initiator, subject, verb):
+            initiator.require_person("edge")
+            pair = (subject, verb)
+            if pair in self._by_pair_single:
+                return MeshResult.answered([self._by_pair_single[pair]])
+            return MeshResult.empty()
+
+    with pytest.raises(
+        ConformanceFailure, match=r"one verb, two keys must yield two edges.*returned 1 row"
+    ):
+        _run_graph(KeylessStore())
 
 
 def test_G_A_STORE_WHERE_EDGE_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():

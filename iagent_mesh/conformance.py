@@ -542,6 +542,8 @@ def check_graph_writer_contract(
     call_write_edge: Callable[[], MeshWriteResult],
     call_read_written_edge: Callable[[], MeshResult],
     call_read_unwritten_edge: Callable[[], MeshResult],
+    call_write_edge_same_verb_different_key: Callable[[], MeshWriteResult],
+    call_read_edge_after_both_keys: Callable[[], MeshResult],
 ) -> None:
     """The ``MeshGraphWriter`` contract: an edge reported as written must be PROVEN reachable by
     a read, not merely trusted from the write's own outcome — the same "verify the mutation
@@ -556,6 +558,17 @@ def check_graph_writer_contract(
     written-vs-never-written rather than within-graph-vs-default-graph; the property proven is
     narrower (the write actually took effect, full stop) rather than the ontology arm's stronger
     scoping claim.
+
+    ── THE KEY ARM, RULED 2026-09-29 ON THE WORKER'S OWN PACKET BACK ───────────────────────────
+    ``write_edge`` now takes an :class:`iagent_mesh.interfaces.EdgeIdentity` — subject, verb,
+    object, and a caller-supplied ``key`` — as identity separate from payload. The property this
+    arm proves: **the same triple, written twice under two different keys, is two edges, not one
+    write overwriting the other.** ``call_write_edge_same_verb_different_key`` writes the SAME
+    ``(subject, verb, object)`` as ``call_write_edge`` above, with only ``key`` changed.
+    ``call_read_edge_after_both_keys`` is an ``edge()`` call for that ``(subject, verb)`` pair, run
+    AFTER both writes, whose ``.rows`` a conforming store answers with length 2 — a writer that
+    lets the second key's write collapse onto the first would answer with length 1, indistinguish-
+    able from having never accepted the key as part of identity at all.
     """
     op = "graph.write_edge"
 
@@ -581,6 +594,19 @@ def check_graph_writer_contract(
         _fail(op, f"asking for a DIFFERENT edge that was never written produced "
                   f"{absent.outcome!r}, not 'empty'. A read that answers regardless of what was "
                   f"actually written cannot prove the write above took effect at all")
+
+    second = call_write_edge_same_verb_different_key()
+    if not second.applied:
+        _fail(op, f"the second write (same subject/verb/object, a different key) did not apply: "
+                  f"outcome={second.outcome!r} detail={second.detail!r} — nothing to verify the "
+                  f"key arm against")
+
+    both = call_read_edge_after_both_keys()
+    if len(both.rows) != 2:
+        _fail(op, f"one verb, two keys must yield two edges; a read after both writes returned "
+                  f"{len(both.rows)} row(s), not 2. A writer that lets the second key's write "
+                  f"overwrite the first has collapsed the key out of identity — exactly the "
+                  f"defect this arm exists to catch")
 
 
 # ── the vectors-writer arm, ruled 2026-09-28 overnight ──────────────────────────────────────

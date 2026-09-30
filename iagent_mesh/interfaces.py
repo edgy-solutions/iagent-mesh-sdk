@@ -55,7 +55,8 @@ Only the first is checkable offline. The second needs a real write and lives in 
 
 from __future__ import annotations
 
-from typing import Literal, Optional, Protocol, Sequence, runtime_checkable
+from types import MappingProxyType
+from typing import Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -79,6 +80,8 @@ __all__ = [
     "MARKER_ASSERTS",
     "MARKER_DOES_NOT_ASSERT",
     "Embedder",
+    "EdgeIdentity",
+    "EdgeIdentityFilter",
     "MeshGraphWriter",
     "MeshVectorsWriter",
     "MeshOntologyWriter",
@@ -746,6 +749,90 @@ class Embedder(Protocol):
         """
 
 
+class EdgeIdentity(BaseModel):
+    """What makes one edge a DIFFERENT edge from another. Four fields, all required, all opaque —
+    ``subject``, ``verb`` and ``object`` name the triple; ``key`` is the fourth field, **ruled
+    2026-09-29**, and it is what lets two writes of the same triple coexist as two edges rather
+    than one write silently overwriting the other.
+
+    ``key`` IS CALLER-SUPPLIED AND THIS SDK NEVER NAMES ONE. The fleet that prompted this field
+    passes its own tool-invocation URN (``_tool_urn``); a different caller might pass a batch id,
+    a provenance hash, or a session id. This module has no opinion on what a key IS, only that one
+    IS the fourth axis of identity — the same "opaque, never parsed" discipline
+    :class:`Initiator.subject` states, applied here to what distinguishes an edge rather than who
+    is asking for one.
+
+    **IDENTITY IS SEPARATE FROM PAYLOAD, and that is the point of this being its own type rather
+    than four more keyword arguments on :meth:`MeshGraphWriter.write_edge`.** Everything in this
+    object is what the STORE keys on — two writes whose ``EdgeIdentity`` compares equal are the
+    same edge; two whose ``key`` differs are two edges, even with an identical subject, verb and
+    object. Whatever a write attaches BEYOND identity (see ``payload`` on ``write_edge``) never
+    participates in that comparison.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: str
+    verb: str
+    object: str
+    key: str
+    """Caller-supplied. Two edges sharing every other field but this one are still two edges —
+    this is the field that makes that true, not an incidental tag alongside identity."""
+
+    @field_validator("subject", "verb", "object", "key")
+    @classmethod
+    def _field_is_present(cls, v: str, info) -> str:
+        if not v.strip():
+            raise ValueError(
+                f"EdgeIdentity.{info.field_name}='' — every field of identity is required; a "
+                f"blank one is not a narrower identity, it is a missing one"
+            )
+        return v
+
+
+class EdgeIdentityFilter(BaseModel):
+    """What :meth:`MeshGraphWriter.delete_edges` scopes a deletion by — the SAME four fields as
+    :class:`EdgeIdentity`, **ruled 2026-09-29** alongside it, each one optional here where none
+    were on the write side: an unset field is a wildcard, so a caller can delete one exact edge
+    (all four fields bound, matching one ``EdgeIdentity``) or a whole family of them (fewer fields
+    bound — every edge for a subject regardless of verb, object or key).
+
+    **REFUSES THE EMPTY FILTER, ON CONSTRUCTION, ALWAYS.** All four fields unset would match every
+    edge the store holds — "delete everything" wearing the shape of a scoped call. Three of the
+    registrar's four graph paths delete (the reason this method exists at all, ruled alongside
+    :meth:`MeshGraphWriter.write_edge`'s amended signature), and none of them means "delete the
+    graph"; a filter that could accidentally mean that is refused here rather than trusted to a
+    caller who never intended it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: Optional[str] = None
+    verb: Optional[str] = None
+    object: Optional[str] = None
+    key: Optional[str] = None
+
+    @field_validator("subject", "verb", "object", "key")
+    @classmethod
+    def _bound_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"EdgeIdentityFilter.{info.field_name}='' — omit the field to mean 'any', rather "
+                f"than binding it to nothing"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _at_least_one_field_bound(self) -> "EdgeIdentityFilter":
+        if self.subject is None and self.verb is None and self.object is None and self.key is None:
+            raise ValueError(
+                "EdgeIdentityFilter with every field unset matches every edge in the store — "
+                "refused rather than honoured, because 'delete everything' should never be "
+                "reachable by omission"
+            )
+        return self
+
+
 @runtime_checkable
 class MeshGraphWriter(Protocol):
     """Named writes over the property graph. **NO DERIVED INVENTORY EXISTS FOR THIS ONE, and that
@@ -756,17 +843,52 @@ class MeshGraphWriter(Protocol):
     own precedent: `MeshOntology` was declared and later corrected once Jena became a real writer,
     rather than waiting for a caller to justify the shape retroactively.
 
-    Kept DELIBERATELY minimal for exactly that reason — one edge, one verb, so the first real
-    caller defines what more is needed rather than this SDK guessing at a shape nothing has
-    exercised yet. Widening this Protocol is a new method with its own manifest and seal, the
-    same "named operations only" discipline the module docstring states for the read side.
+    **AMENDED IN PLACE, RULED 2026-09-29, ON THE WORKER'S OWN PACKET BACK.** The original ruling
+    (2026-09-27) shipped `write_edge(initiator, *, subject, verb, object)` and stated "widening
+    this Protocol is a new method with its own manifest and seal." That sentence governs a
+    RELEASED contract; nothing tagged has ever carried `MeshGraphWriter` — it has existed only on
+    `lane/ca`, uncut — so the correction the worker's packet asked for lands as a signature change
+    in place, not a second method beside a wrong first one. Once this Protocol ships in a tagged
+    release, the widening-is-a-new-method rule applies again, starting from THIS shape.
+
+    ``write_edge`` now takes **identity separate from payload** — :class:`EdgeIdentity` (subject,
+    verb, object, and a caller-supplied ``key``) is what the store keys on; ``payload`` is
+    whatever else a write attaches, and never participates in that comparison. The key is what two
+    writes of an identical triple need to land as two edges rather than one overwriting the other
+    — the defect that sent the worker back with a packet in the first place.
+
+    ``delete_edges`` ships in the SAME ruling, not as a later addition: three of the registrar's
+    four graph paths delete, and a writer that cannot express the same identity its own cleanup
+    needs would leave the registrar's adoption partial — worse than not adopting the writer at
+    all. It is scoped by :class:`EdgeIdentityFilter`, the same four fields, optional, so a caller
+    names exactly as much as it means to delete.
     """
 
     def write_edge(
-        self, initiator: Initiator, *, subject: str, verb: str, object: str
+        self,
+        initiator: Initiator,
+        *,
+        identity: EdgeIdentity,
+        payload: Mapping[str, str] = MappingProxyType({}),
     ) -> MeshWriteResult:
-        """Assert one predicate edge. Person or delegate only — see
-        :meth:`Initiator.require_person_or_delegate`."""
+        """Assert one edge at ``identity``. Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        Two calls whose ``identity`` differs only in ``key`` land as TWO edges, not one write
+        overwriting the other — that is the property ``key`` exists to guarantee, and the
+        conformance suite proves it (``one verb, two keys, two edges``) rather than trusting it.
+        """
+
+    def delete_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshWriteResult:
+        """Remove every edge matching ``identity_filter``. Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        A filter matching zero edges still reports ``written`` — the store now satisfies "no edge
+        matches this filter", which may already have been true; deletion is idempotent by the same
+        reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds.
+        """
 
 
 @runtime_checkable

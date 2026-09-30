@@ -389,6 +389,7 @@ them, the same failure this file corrected twice in one section above.
 ```python
 from iagent_mesh import (
     Embedder, MeshGraphWriter, MeshVectorsWriter, MeshOntologyWriter,
+    EdgeIdentity, EdgeIdentityFilter,
     MeshWriteResult, WriteOutcome, WRITE_OUTCOMES,
     AmbiguousWriteResultTruth, WriteNotApplied,
 )
@@ -453,9 +454,60 @@ constant a reader re-derives to compare against.
 
 | Protocol | Operation(s) | Notes |
 | --- | --- | --- |
-| `MeshGraphWriter` | `write_edge(initiator, *, subject, verb, object)` | Deliberately minimal — no derived write inventory exists yet; declared ahead of a caller, matching this file's own precedent for `MeshOntology`. |
+| `MeshGraphWriter` | `write_edge(initiator, *, identity, payload={})`; `delete_edges(initiator, *, identity_filter)` | **Amended in place, ruled 2026-09-29**, on the worker's own packet back — see below. |
 | `MeshVectorsWriter` | `write(initiator, *, collection, id, text, domains=(), vector_required=True)`; `relocate(initiator, *, collection, id, vector)` | **Two methods on purpose.** `write` embeds `text` via the injected `Embedder`; `relocate` takes a precomputed vector for migration/backfill only. One method accepting either would make "supply your own vector" a normal-looking parameter on the everyday path. |
 | `MeshOntologyWriter` | `upsert(initiator, *, graph, iri, triples)` | `graph` is **required**, never optional — the read side's optional `graph` can mean "anywhere within scope"; a write choosing "anywhere" is the unscoped-default-graph defect this Protocol exists to make unrepresentable. |
+
+#### `MeshGraphWriter` — identity separate from payload, ruled 2026-09-29
+
+The original declaration (`write_edge(initiator, *, subject, verb, object)`) was
+minimal on purpose but flattened two different things into one argument list:
+what edge this is, and what it carries. The worker's own packet back on the
+first conformance arm found the seam. Amended, **in place** — not as a new
+method — because nothing tagged has ever carried `MeshGraphWriter`; it exists
+only on the uncut `lane/ca`. The "widening is a new method with its own
+manifest and seal" rule in this Protocol's docstring applies to *released*
+contracts; once `v0.9.5` is tagged, this shape is what it applies to.
+
+```python
+class EdgeIdentity(BaseModel):        # frozen, extra="forbid"
+    subject: str
+    verb: str
+    object: str
+    key: str   # caller-supplied; the SDK never names one — e.g. this fleet passes `_tool_urn`
+
+class EdgeIdentityFilter(BaseModel):  # frozen, extra="forbid"
+    subject: Optional[str] = None
+    verb: Optional[str] = None
+    object: Optional[str] = None
+    key: Optional[str] = None
+    # refuses construction if ALL FOUR are None — an unscoped filter would delete every edge
+
+def write_edge(initiator, *, identity: EdgeIdentity, payload: Mapping[str, str] = {}) -> MeshWriteResult: ...
+def delete_edges(initiator, *, identity_filter: EdgeIdentityFilter) -> MeshWriteResult: ...
+```
+
+The caller-supplied `key` is what makes two writes of the same
+`(subject, verb, object)` under two different keys land as **two edges**, not
+one overwriting the other — the conformance arm below exists specifically to
+catch a writer that collapses `key` out of identity. `delete_edges` was ruled
+part of the write half, not a later addition: three of the registrar's four
+graph paths delete, and the writer and the cleanup must agree on identity or a
+partial adoption of this contract is worse than none — hence `identity_filter`
+sharing `EdgeIdentity`'s four fields, each optional, to scope a deletion as
+narrowly or as broadly as the caller can name.
+
+`delete_edges` is proven today only by the generic `check_writer_offline` arm
+(identity gate, return type) — it does not yet have its own dedicated "verify
+the mutation applied" conformance arm the way `write_edge` does below. That is
+a disclosed gap, not an implied proof.
+
+**Conformance arm — one verb, two keys, two edges** (`check_graph_writer_contract`,
+extended 2026-09-29): writes the same `(subject, verb, object)` twice under two
+different keys, then reads back edges for that `(subject, verb)` and requires
+**exactly two rows**. A writer that keys storage on `(subject, verb)` alone,
+ignoring `key`, returns one row here and the arm fails by name — this is the
+defect the worker's packet named, made unable to pass silently.
 
 `MeshVectorsWriter.write`'s `vector_required` **defaults `True`**: an embed
 failure refuses the write rather than silently landing without a vector.

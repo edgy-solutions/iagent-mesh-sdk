@@ -12,6 +12,7 @@ import pytest
 
 from iagent_mesh.interfaces import (
     DelegateIdentityRefused,
+    EdgeIdentity,
     Embedder,
     Initiator,
     MeshGraph,
@@ -86,8 +87,11 @@ def test_the_read_interfaces_gained_NO_new_method():
 
 # ── the writer protocols exist with the ruled shape ───────────────────────────────────────
 
-def test_MeshGraphWriter_declares_one_minimal_operation():
-    assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {"write_edge"}
+def test_MeshGraphWriter_declares_write_and_delete_as_the_write_half():
+    """AMENDED 2026-09-29, on the worker's own packet back: `delete_edges` joined `write_edge` as
+    part of the write half, not a later addition — three of the registrar's four graph paths
+    delete, and the writer and the cleanup must agree on identity."""
+    assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {"write_edge", "delete_edges"}
 
 
 def test_MeshOntologyWriter_requires_graph_not_optional():
@@ -133,8 +137,11 @@ def test_Embedder_declares_embed_and_identity():
 from iagent_mesh.conformance import ConformanceFailure, check_writer_offline  # noqa: E402
 
 
+_IDENTITY = EdgeIdentity(subject="s", verb="v", object="o", key="k")
+
+
 class _ConformingGraphWriter:
-    def write_edge(self, initiator: Initiator, *, subject: str, verb: str, object: str) -> MeshWriteResult:
+    def write_edge(self, initiator: Initiator, *, identity: EdgeIdentity, payload=None) -> MeshWriteResult:
         initiator.require_person_or_delegate("graph.write_edge")
         return MeshWriteResult.written()
 
@@ -142,7 +149,7 @@ class _ConformingGraphWriter:
 def _run_offline(writer) -> None:
     check_writer_offline(
         writer,
-        operations=[("write_edge", lambda i: writer.write_edge(i, subject="s", verb="v", object="o"))],
+        operations=[("write_edge", lambda i: writer.write_edge(i, identity=_IDENTITY))],
     )
 
 
@@ -153,7 +160,7 @@ def test_A_CONFORMING_WRITER_PASSES():
 
 def test_A_WRITER_THAT_ACCEPTS_A_SERVICE_IDENTITY_IS_CAUGHT():
     class Broken(_ConformingGraphWriter):
-        def write_edge(self, initiator, *, subject, verb, object):
+        def write_edge(self, initiator, *, identity, payload=None):
             return MeshWriteResult.written()  # no identity gate at all
 
     with pytest.raises(ConformanceFailure, match="accepted a SERVICE identity"):
@@ -166,7 +173,7 @@ def test_A_WRITER_THAT_REFUSES_A_DELEGATE_IS_CAUGHT():
     instead of `require_person_or_delegate` would refuse the exact identity ruling item 4 admits,
     and this is the arm that catches that mistake."""
     class Broken(_ConformingGraphWriter):
-        def write_edge(self, initiator, *, subject, verb, object):
+        def write_edge(self, initiator, *, identity, payload=None):
             initiator.require_person("graph.write_edge")  # the READ gate, wrong one for a write
             return MeshWriteResult.written()
 
@@ -176,7 +183,7 @@ def test_A_WRITER_THAT_REFUSES_A_DELEGATE_IS_CAUGHT():
 
 def test_A_WRITER_RETURNING_A_BARE_BOOL_IS_CAUGHT():
     class Broken(_ConformingGraphWriter):
-        def write_edge(self, initiator, *, subject, verb, object):
+        def write_edge(self, initiator, *, identity, payload=None):
             initiator.require_person_or_delegate("graph.write_edge")
             return True  # not a MeshWriteResult
 
