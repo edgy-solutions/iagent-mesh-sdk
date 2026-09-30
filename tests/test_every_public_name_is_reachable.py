@@ -12,13 +12,18 @@ and every module is classified as exported or declined WITH A REASON. A new modu
 `__all__` and no classification fails, which is the only way this survives contact with growth.
 
 ── WHY NOT SIMPLY RE-EXPORT EVERYTHING ─────────────────────────────────────────────────────
-Because four names are exported by two modules each, and a blanket re-export would let one
-silently shadow the other:
+Because four names are exported by two-or-more modules each, and a blanket re-export would let
+one silently shadow the other:
 
-    compose         graph_manifest.py  task_kinds.py
+    compose         graph_manifest.py  task_kinds.py  ingest.py (joined 2026-09-30)
     json_schema     graph_manifest.py  task_kinds.py
-    validate_dir    graph_manifest.py  task_kinds.py
+    validate_dir    graph_manifest.py  task_kinds.py  ingest.py (joined 2026-09-30)
     resolve         discovery.py       task_kinds.py
+
+`ingest` did not invent a new collision — its `ContentKindRegistration` composes with the exact
+same `declarations.compose_rows`/`load_rows` mechanism `task_kinds.TaskKind` does, so it inherits
+`compose` and `validate_dir` for the same reason `task_kinds` did. The ruling below already
+covers a third module sharing a name; `_EXEMPT` just says so per name.
 
 `compose` IS THE ONE WITH BOTH CONSUMERS ALREADY SHIPPED, which makes it the better example:
 
@@ -83,8 +88,8 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: from `import iagent_mesh`.
 _EXPORTED = {
     "conformance", "declarations", "discovery", "edge_types", "enumeration",
-    "graph_manifest", "interfaces", "results", "rows", "shapes", "task_kinds",
-    "write_results",
+    "graph_manifest", "ingest", "interfaces", "provenance", "results", "rows", "shapes",
+    "task_kinds", "write_results",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a
@@ -134,6 +139,20 @@ _EXEMPT = {
         "the deprecated alias for marker_predates_collection. Promoting a deprecated name into a "
         "NEW namespace extends its life rather than ending it — it stays importable from "
         "iagent_mesh.interfaces for the consumers the interval owes, and no wider",
+    # ── 2026-09-30: `ingest` joins the collision, applying the SAME 0.9.4 ruling to a third
+    # module rather than a new one — `compose`/`validate_dir` are the two names the ruling
+    # already names, and `ingest.ContentKindRegistration` composes with the identical
+    # `declarations.compose_rows`/`load_rows` mechanism `task_kinds.TaskKind` does, so it
+    # inherits the same two colliding names for the same reason.
+    ("ingest", "compose"):
+        "collides with graph_manifest.compose (at the root, shipped since 0.7.x) and "
+        "task_kinds.compose (already exempt). RULED: ingest's stays module-qualified too — "
+        "`from iagent_mesh.ingest import compose` composes a CONTENT KIND REGISTRATION, a third "
+        "unrelated job sharing the name",
+    ("ingest", "validate_dir"):
+        "collides with graph_manifest.validate_dir (at the root, what the policy repo's PR gate "
+        "imports) and task_kinds.validate_dir (already exempt). RULED: ingest's stays "
+        "module-qualified too, same reason as `compose`",
 }
 
 

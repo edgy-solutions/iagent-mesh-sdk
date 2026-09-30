@@ -142,6 +142,47 @@ from .write_results import (
     WriteOutcome,
 )
 
+# THE PROVENANCE BLOCK, RE-EXPORTED AT ROOT — ordered 2026-09-30, unlike `delegate_identity` and
+# `service_identity` which stay module-qualified. Those two are internal to the SDK's own
+# identity machinery; this module is explicitly a cross-repo import surface — "a builder
+# doc-tools can import" only reads as one import line (`from iagent_mesh import make_provenance`)
+# if it resolves here, at the root, the same reason `EdgeIdentity` and `MeshGraphWriter` do.
+from .provenance import (
+    AS_OF_UNKNOWN,
+    DIRECT,
+    ETL,
+    MANUAL_EXPORT,
+    OBTAINED_VIA,
+    PROV_DERIVED_FROM,
+    PROV_GENERATED_AT,
+    USER_DROP,
+    WAREHOUSE,
+    ObtainedVia,
+    ProvenanceBlock,
+    ProvenanceIncomplete,
+    is_stale,
+    make_provenance,
+    require_provenance,
+    validate_provenance,
+)
+
+# THE INGEST WIRE SHAPES, RE-EXPORTED AT ROOT for the same reason `provenance` is — `IngestRequest`
+# is meant to be one wire shape two repos agree on, which only holds if it resolves from one
+# import path. `compose`/`validate_dir` here are NOT promoted bare (they would collide with
+# `graph_manifest`'s and `task_kinds`'s own same-named functions — see the 0.9.4 ruling comment
+# above); `load_content_kind_registrations` is unambiguous and comes to the root instead.
+from .ingest import (
+    INGEST_STAGES,
+    ContentKindRegistration,
+    ContentKindUnregistered,
+    IngestRequest,
+    IngestStage,
+    IngestStatus,
+    load_content_kind_registrations,
+    registered_kinds,
+    resolve_content_kind,
+)
+
 # ── THE THREE MODULES PROMOTED IN 0.9.4, MINUS FOUR NAMES THAT CANNOT COME ──────────────────
 # `declarations`, `discovery` and `task_kinds` were public in their modules and absent from the
 # root, and the reason recorded for the omission was never "these are internal" — it was that
@@ -265,6 +306,33 @@ __all__ = [
     "MeshWriteResult",
     "WriteNotApplied",
     "WriteOutcome",
+    # the provenance block (ADR-0035 / ADR-0041 §2 — `user-drop`, the fifth `obtained_via` rung)
+    "AS_OF_UNKNOWN",
+    "DIRECT",
+    "ETL",
+    "MANUAL_EXPORT",
+    "OBTAINED_VIA",
+    "PROV_DERIVED_FROM",
+    "PROV_GENERATED_AT",
+    "USER_DROP",
+    "WAREHOUSE",
+    "ObtainedVia",
+    "ProvenanceBlock",
+    "ProvenanceIncomplete",
+    "is_stale",
+    "make_provenance",
+    "require_provenance",
+    "validate_provenance",
+    # the ingest wire shapes (ADR-0021 content-kind selection / ADR-0041 user-drop ingest)
+    "INGEST_STAGES",
+    "ContentKindRegistration",
+    "ContentKindUnregistered",
+    "IngestRequest",
+    "IngestStage",
+    "IngestStatus",
+    "load_content_kind_registrations",
+    "registered_kinds",
+    "resolve_content_kind",
     "MeshClient",
     "MeshResponse",
     "CallerIdentity",
