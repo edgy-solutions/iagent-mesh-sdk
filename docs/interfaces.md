@@ -497,17 +497,25 @@ partial adoption of this contract is worse than none — hence `identity_filter`
 sharing `EdgeIdentity`'s four fields, each optional, to scope a deletion as
 narrowly or as broadly as the caller can name.
 
-`delete_edges` is proven today only by the generic `check_writer_offline` arm
-(identity gate, return type) — it does not yet have its own dedicated "verify
-the mutation applied" conformance arm the way `write_edge` does below. That is
-a disclosed gap, not an implied proof.
-
 **Conformance arm — one verb, two keys, two edges** (`check_graph_writer_contract`,
 extended 2026-09-29): writes the same `(subject, verb, object)` twice under two
 different keys, then reads back edges for that `(subject, verb)` and requires
 **exactly two rows**. A writer that keys storage on `(subject, verb)` alone,
 ignoring `key`, returns one row here and the arm fails by name — this is the
 defect the worker's packet named, made unable to pass silently.
+
+**Conformance arm — delete by identity** (`check_graph_writer_contract`,
+extended 2026-09-29 overnight, closing the gap disclosed the same day): reuses
+the two-key state above rather than standing up a third write. Deletes by an
+`EdgeIdentityFilter` scoped to the FIRST key only, then reads back and requires
+**exactly one row** — the second key's edge, untouched. Two wrong counts are
+two different defects, named separately: **zero rows** means the delete
+over-matched and removed the second key's edge too, the writer and the cleanup
+no longer agreeing on identity; **two rows** means the delete reported
+`written` and removed nothing — the same write-side lie this suite refuses to
+trust from a reported outcome alone, now caught on the delete path. No gap
+remains disclosed here: `delete_edges` now has its own "verify the mutation
+applied" arm, the same discipline `write_edge` has above it.
 
 `MeshVectorsWriter.write`'s `vector_required` **defaults `True`**: an embed
 failure refuses the write rather than silently landing without a vector.

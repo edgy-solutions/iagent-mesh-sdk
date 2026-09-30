@@ -269,6 +269,13 @@ def _run_graph(store) -> None:
             ),
         ),
         call_read_edge_after_both_keys=lambda: store.edge(PERSON, WRITTEN_SUBJECT, WRITTEN_VERB),
+        call_delete_edge_by_identity=lambda: store.delete_edges(
+            PERSON,
+            identity_filter=EdgeIdentityFilter(
+                subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, key=FIRST_KEY
+            ),
+        ),
+        call_read_edge_after_delete=lambda: store.edge(PERSON, WRITTEN_SUBJECT, WRITTEN_VERB),
     )
 
 
@@ -343,6 +350,47 @@ def test_G_A_WRITER_THAT_LETS_A_SECOND_KEY_OVERWRITE_THE_FIRST_IS_CAUGHT():
         ConformanceFailure, match=r"one verb, two keys must yield two edges.*returned 1 row"
     ):
         _run_graph(KeylessStore())
+
+
+def test_G_A_DELETE_THAT_DID_NOT_APPLY_IS_CAUGHT_BEFORE_READING():
+    """Everything up to the delete passes; `delete_edges` itself is refused — caught by name,
+    before the read-after-delete check that follows it is ever reached."""
+
+    class RefusesDelete(_EdgeStore):
+        def delete_edges(self, initiator, *, identity_filter):
+            return MeshWriteResult.refused("pretend the delete is refused")
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_edges.*did not apply"):
+        _run_graph(RefusesDelete())
+
+
+def test_G_A_DELETE_THAT_OVER_MATCHES_AND_REMOVES_BOTH_EDGES_IS_CAUGHT():
+    """THE FAILURE ITEM 2 OF THE RULING EXISTS TO PREVENT: a `delete_edges` that ignores `key`
+    (or any other bound field of the filter) and deletes every edge for the (subject, verb) pair
+    regardless — the writer and the cleanup no longer agree on identity. A read after the delete
+    finds zero rows, not the one that should have survived."""
+
+    class DeleteIgnoresKey(_EdgeStore):
+        def delete_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.delete_edges")
+            self._by_pair.pop((identity_filter.subject, identity_filter.verb), None)
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_edges.*over-matched"):
+        _run_graph(DeleteIgnoresKey())
+
+
+def test_G_A_DELETE_THAT_REPORTS_WRITTEN_BUT_DELETES_NOTHING_IS_CAUGHT():
+    """The write-side lie, replayed on the delete path: `delete_edges` reports `written` and a
+    read afterward proves nothing was actually removed — both edges are still there."""
+
+    class DeleteIsANoOp(_EdgeStore):
+        def delete_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.delete_edges")
+            return MeshWriteResult.written()  # never actually deletes anything
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_edges.*nothing was actually removed"):
+        _run_graph(DeleteIsANoOp())
 
 
 def test_G_A_STORE_WHERE_EDGE_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():

@@ -544,6 +544,8 @@ def check_graph_writer_contract(
     call_read_unwritten_edge: Callable[[], MeshResult],
     call_write_edge_same_verb_different_key: Callable[[], MeshWriteResult],
     call_read_edge_after_both_keys: Callable[[], MeshResult],
+    call_delete_edge_by_identity: Callable[[], MeshWriteResult],
+    call_read_edge_after_delete: Callable[[], MeshResult],
 ) -> None:
     """The ``MeshGraphWriter`` contract: an edge reported as written must be PROVEN reachable by
     a read, not merely trusted from the write's own outcome — the same "verify the mutation
@@ -569,6 +571,23 @@ def check_graph_writer_contract(
     AFTER both writes, whose ``.rows`` a conforming store answers with length 2 — a writer that
     lets the second key's write collapse onto the first would answer with length 1, indistinguish-
     able from having never accepted the key as part of identity at all.
+
+    ── THE DELETE ARM, RULED 2026-09-29 ON THE WORKER'S OWN PACKET BACK, BUILT OVERNIGHT ───────
+    Disclosed as missing when the key arm above shipped: ``delete_edges`` had no dedicated
+    "verify the mutation applied" arm of its own, only the generic identity/return-type checks in
+    ``check_writer_offline``. This closes that gap, and reuses the two-key state the arm above
+    already built rather than standing up a third independent write: ``call_delete_edge_by_identity``
+    deletes using an :class:`iagent_mesh.interfaces.EdgeIdentityFilter` scoped to the FIRST key
+    only (the one ``call_write_edge`` used) — never the second. ``call_read_edge_after_delete`` is
+    an ``edge()`` call for that same ``(subject, verb)`` pair, run AFTER the delete.
+
+    A conforming store answers that read with exactly ONE row — the second key's edge, untouched.
+    Two readings of a wrong count are named separately because they are different defects, not one:
+    **zero rows** means the delete over-matched and removed the second key's edge too — the
+    writer and the cleanup have stopped agreeing on identity, the exact failure item 2 of the
+    ruling exists to prevent. **two rows** means the delete reported ``written`` but nothing was
+    actually removed — the same write-side lie this whole file refuses to trust from a reported
+    outcome alone, now caught on the delete path instead of the write path.
     """
     op = "graph.write_edge"
 
@@ -607,6 +626,31 @@ def check_graph_writer_contract(
                   f"{len(both.rows)} row(s), not 2. A writer that lets the second key's write "
                   f"overwrite the first has collapsed the key out of identity — exactly the "
                   f"defect this arm exists to catch")
+
+    delete_op = "graph.delete_edges"
+
+    deleted = call_delete_edge_by_identity()
+    if not deleted.applied:
+        _fail(delete_op, f"the delete itself did not apply: outcome={deleted.outcome!r} "
+                          f"detail={deleted.detail!r} — nothing to verify against a read")
+
+    after_delete = call_read_edge_after_delete()
+    remaining = len(after_delete.rows)
+    if remaining != 1:
+        if remaining == 0:
+            _fail(delete_op, "deleting by identity scoped to the FIRST key only removed BOTH "
+                              "edges, not just the one it named. The delete's identity_filter "
+                              "over-matched — the writer and the cleanup have stopped agreeing "
+                              "on identity")
+        elif remaining == 2:
+            _fail(delete_op, "deleting by identity scoped to the FIRST key reported 'written' but "
+                              "a read after the delete still finds both edges — nothing was "
+                              "actually removed. The same write-side lie this suite refuses to "
+                              "trust from a reported outcome alone, now on the delete path")
+        else:
+            _fail(delete_op, f"deleting by identity scoped to the FIRST key must leave exactly "
+                              f"one edge (the second key's); a read after the delete returned "
+                              f"{remaining} row(s)")
 
 
 # ── the vectors-writer arm, ruled 2026-09-28 overnight ──────────────────────────────────────
