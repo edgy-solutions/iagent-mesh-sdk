@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional, Sequence
 from .interfaces import (
     MESH_COLLECTION_META,
     CorruptCollectionMarker,
+    DelegateIdentityRefused,
     Initiator,
     ServiceIdentityRefused,
     collection_marker,
@@ -38,6 +39,7 @@ from .interfaces import (
     read_collection_marker,
 )
 from .results import MeshResult
+from .write_results import MeshWriteResult
 
 __all__ = [
     "check_embedding_contract",
@@ -47,6 +49,13 @@ __all__ = [
     "check_offline",
     "check_live",
     "check_ontology_contract",
+    "check_writer_offline",
+    "check_ontology_writer_contract",
+    "check_graph_writer_contract",
+    "check_vectors_writer_contract",
+    "check_graph_writer_has_edges_contract",
+    "check_graph_writer_key_only_delete_contract",
+    "check_vectors_writer_delete_contract",
 ]
 
 
@@ -128,6 +137,81 @@ def check_offline(
             _fail(name, f"emitted mode {out.mode!r}, which this interface does not declare "
                         f"({list(declared_modes)}). A mode a consumer cannot anticipate is a "
                         f"mode nobody can match")
+
+
+# ── the write-half offline arm, ruled 2026-09-27 ────────────────────────────────────────────
+
+
+def check_writer_offline(
+    impl: Any,
+    *,
+    operations: Sequence[tuple[str, Callable[[Initiator], MeshWriteResult]]],
+) -> None:
+    """Properties every writer Protocol shares, provable with no substrate. ALWAYS RUN THIS.
+
+    The write-side sibling of :func:`check_offline`, and it draws the boundary WIDER on purpose —
+    ruling item 4, 2026-09-27: a write admits a person OR a delegate, refusing only a bare
+    service. `check_offline` on the read side never had to draw this line because reads keep the
+    narrower `require_person` gate; a writer that reused `check_offline` here would refuse a
+    delegate the write boundary was ruled to admit, and this suite would then fail every
+    conforming writer rather than a defective one.
+
+    ``operations`` is a list of ``(name, call)`` pairs, the implementer's own — only they know the
+    keyword arguments their write operations need.
+    """
+    if not operations:
+        _fail("check_writer_offline", "no operations supplied — a conformance run over zero "
+                                       "operations is a green that proves nothing")
+
+    person = Initiator(subject="conformance-person", kind="person")
+    service = Initiator(subject="conformance-service", kind="service")
+    delegate = Initiator(subject="conformance-delegate", kind="delegate", on_behalf_of="conformance-person")
+
+    # THE FIXTURE MUST DISCRIMINATE, three ways: a suite that cannot tell the three kinds apart
+    # cannot tell an admission from a refusal either.
+    assert_fixture_discriminates("initiator kinds (person/service)", person, service,
+                                  describe=lambda i: i.kind)
+    assert_fixture_discriminates("initiator kinds (delegate/service)", delegate, service,
+                                  describe=lambda i: i.kind)
+
+    for name, call in operations:
+        # ── a bare service is refused; a person AND a delegate are admitted ──
+        try:
+            call(service)
+        except ServiceIdentityRefused:
+            pass
+        except DelegateIdentityRefused:
+            _fail(name, "refused a SERVICE identity by raising DelegateIdentityRefused — that "
+                        "exception names 'a delegate reached a person-only operation', which is "
+                        "not what happened here. A write boundary refuses a service with "
+                        "ServiceIdentityRefused, the same exception the read side raises for the "
+                        "same identity")
+        except NotImplementedError:
+            _fail(name, "not implemented — a write operation on a declared interface must apply "
+                        "or refuse, never be absent")
+        else:
+            _fail(name, "accepted a SERVICE identity. A write attributed to a service records a "
+                        "state change no person can be asked about — refuse it the same way the "
+                        "read boundary refuses one, only for a stronger reason")
+
+        try:
+            delegate_out = call(delegate)
+        except (ServiceIdentityRefused, DelegateIdentityRefused):
+            _fail(name, "refused a DELEGATE identity carrying on_behalf_of. Ruling item 4, "
+                        "2026-09-27: the write boundary is require_person_or_delegate, not "
+                        "require_person — a delegate acting on its own entitlements is exactly "
+                        "who this boundary exists to admit")
+        else:
+            if not isinstance(delegate_out, MeshWriteResult):
+                _fail(name, f"returned {type(delegate_out).__name__} for a delegate initiator, "
+                            f"not MeshWriteResult")
+
+        # ── every operation returns the shared write-result type for an admitted identity ──
+        out = call(person)
+        if not isinstance(out, MeshWriteResult):
+            _fail(name, f"returned {type(out).__name__}, not MeshWriteResult. A bare bool or "
+                        f"None cannot say WHETHER a write landed and WITH WHAT, which is the "
+                        f"defect this type exists to end on the write side")
 
 
 # ── the live arm ─────────────────────────────────────────────────────────────────────────
@@ -396,3 +480,413 @@ def check_ontology_contract(
             _fail(op_construct, f"the Turtle does not contain {term!r}. Term types were DROPPED "
                                 f"(a typed literal came back untyped or the term is missing): "
                                 f"types intact is the point of CONSTRUCT over SELECT")
+
+
+# ── the ontology WRITER arm, ruled 2026-09-27 ───────────────────────────────────────────────
+
+
+def check_ontology_writer_contract(
+    *,
+    call_upsert: Callable[[], MeshWriteResult],
+    call_ask_within_graph: Callable[[], MeshResult],
+    call_ask_default_graph: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshOntologyWriter`` contract: a write claiming to be GRAPH-scoped must be PROVEN
+    scoped, not merely asserted — the same "verify the mutation applied" discipline as
+    :func:`check_writer_marker`, aimed at the defect this Protocol exists to end.
+
+    ``call_upsert`` performs one upsert into a known graph for a known ``iri``, already bound by
+    the caller. ``call_ask_within_graph`` and ``call_ask_default_graph`` are both zero-argument
+    :class:`iagent_mesh.interfaces.MeshOntology` ``ask()`` calls for that SAME ``iri`` — one
+    scoped to the graph just written, one scoped to Jena's default graph (``graph=None``) — bound
+    to a PERSON initiator by the caller, run AFTER the upsert.
+
+    A writer that inserted unscoped (the exact doc-tools defect this Protocol exists to close)
+    would make both calls agree: the IRI is answerable both inside its graph and in the default
+    graph, because it is really only ever in the one place Jena treats as "no graph at all". This
+    arm fails on that agreement, not merely on the upsert's own reported outcome — a writer could
+    report ``written`` while having inserted in the wrong place, and the point of this arm is that
+    that lie does not survive being asked.
+    """
+    op = "ontology.upsert"
+
+    written = call_upsert()
+    if not written.applied:
+        _fail(op, f"the upsert itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify scoping against")
+
+    within = call_ask_within_graph()
+    default = call_ask_default_graph()
+
+    # THE FIXTURE MUST DISCRIMINATE: if a write into the default graph would make both asks
+    # answer identically regardless of scoping, this arm cannot tell a scoped writer from an
+    # unscoped one — which is precisely the doc-tools defect this Protocol exists to catch.
+    assert_fixture_discriminates(
+        f"{op} scoped vs default-graph ask", within, default, describe=lambda r: r.outcome
+    )
+
+    if within.outcome != "answered":
+        _fail(op, f"asking for the written iri WITHIN the graph it was upserted into produced "
+                  f"{within.outcome!r}, not 'answered'. The write claimed to land in that graph "
+                  f"and a scoped read cannot find it there")
+    if default.outcome != "empty":
+        _fail(op, f"asking for the written iri in Jena's DEFAULT graph produced "
+                  f"{default.outcome!r}, not 'empty'. A write that answers from the default graph "
+                  f"landed unscoped — this is the exact doc-tools defect (three of four "
+                  f"SPARQL-emitting plugins inserting into the default graph, invisible to the "
+                  f"mesh resolver) that GRAPH-wrapping every write exists to make impossible")
+
+
+# ── the graph-writer arm, ruled 2026-09-28 overnight ────────────────────────────────────────
+
+
+def check_graph_writer_contract(
+    *,
+    call_write_edge: Callable[[], MeshWriteResult],
+    call_read_written_edge: Callable[[], MeshResult],
+    call_read_unwritten_edge: Callable[[], MeshResult],
+    call_write_edge_same_verb_different_key: Callable[[], MeshWriteResult],
+    call_read_edge_after_both_keys: Callable[[], MeshResult],
+    call_delete_edge_by_identity: Callable[[], MeshWriteResult],
+    call_read_edge_after_delete: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshGraphWriter`` contract: an edge reported as written must be PROVEN reachable by
+    a read, not merely trusted from the write's own outcome — the same "verify the mutation
+    applied" discipline as :func:`check_ontology_writer_contract`.
+
+    ``call_write_edge`` writes one edge for a ``(subject, verb)`` pair the caller has already
+    bound. ``call_read_written_edge`` is a :class:`iagent_mesh.interfaces.MeshGraph` ``edge()``
+    call for that SAME pair, run AFTER the write, bound to a PERSON initiator by the caller.
+    ``call_read_unwritten_edge`` is an ``edge()`` call for a DIFFERENT ``(subject, verb)`` pair the
+    caller never wrote — the fixture's negative case. ``MeshGraph.edge`` has no scope parameter to
+    exploit the way ``MeshOntology.ask(graph=...)`` does, so the discriminating pair here is
+    written-vs-never-written rather than within-graph-vs-default-graph; the property proven is
+    narrower (the write actually took effect, full stop) rather than the ontology arm's stronger
+    scoping claim.
+
+    ── THE KEY ARM, RULED 2026-09-29 ON THE WORKER'S OWN PACKET BACK ───────────────────────────
+    ``write_edge`` now takes an :class:`iagent_mesh.interfaces.EdgeIdentity` — subject, verb,
+    object, and a caller-supplied ``key`` — as identity separate from payload. The property this
+    arm proves: **the same triple, written twice under two different keys, is two edges, not one
+    write overwriting the other.** ``call_write_edge_same_verb_different_key`` writes the SAME
+    ``(subject, verb, object)`` as ``call_write_edge`` above, with only ``key`` changed.
+    ``call_read_edge_after_both_keys`` is an ``edge()`` call for that ``(subject, verb)`` pair, run
+    AFTER both writes, whose ``.rows`` a conforming store answers with length 2 — a writer that
+    lets the second key's write collapse onto the first would answer with length 1, indistinguish-
+    able from having never accepted the key as part of identity at all.
+
+    ── THE DELETE ARM, RULED 2026-09-29 ON THE WORKER'S OWN PACKET BACK, BUILT OVERNIGHT ───────
+    Disclosed as missing when the key arm above shipped: ``delete_edges`` had no dedicated
+    "verify the mutation applied" arm of its own, only the generic identity/return-type checks in
+    ``check_writer_offline``. This closes that gap, and reuses the two-key state the arm above
+    already built rather than standing up a third independent write: ``call_delete_edge_by_identity``
+    deletes using an :class:`iagent_mesh.interfaces.EdgeIdentityFilter` scoped to the FIRST key
+    only (the one ``call_write_edge`` used) — never the second. ``call_read_edge_after_delete`` is
+    an ``edge()`` call for that same ``(subject, verb)`` pair, run AFTER the delete.
+
+    A conforming store answers that read with exactly ONE row — the second key's edge, untouched.
+    Two readings of a wrong count are named separately because they are different defects, not one:
+    **zero rows** means the delete over-matched and removed the second key's edge too — the
+    writer and the cleanup have stopped agreeing on identity, the exact failure item 2 of the
+    ruling exists to prevent. **two rows** means the delete reported ``written`` but nothing was
+    actually removed — the same write-side lie this whole file refuses to trust from a reported
+    outcome alone, now caught on the delete path instead of the write path.
+    """
+    op = "graph.write_edge"
+
+    written = call_write_edge()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify against a read")
+
+    found = call_read_written_edge()
+    absent = call_read_unwritten_edge()
+
+    # THE FIXTURE MUST DISCRIMINATE: a read that answers regardless of what was actually written
+    # cannot tell a real write from a writer that only ever reports success.
+    assert_fixture_discriminates(
+        f"{op} written vs never-written edge", found, absent, describe=lambda r: r.outcome
+    )
+
+    if found.outcome != "answered":
+        _fail(op, f"asking for the edge just written produced {found.outcome!r}, not 'answered'. "
+                  f"The write reported success and a read cannot find what it claims to have "
+                  f"landed")
+    if absent.outcome != "empty":
+        _fail(op, f"asking for a DIFFERENT edge that was never written produced "
+                  f"{absent.outcome!r}, not 'empty'. A read that answers regardless of what was "
+                  f"actually written cannot prove the write above took effect at all")
+
+    second = call_write_edge_same_verb_different_key()
+    if not second.applied:
+        _fail(op, f"the second write (same subject/verb/object, a different key) did not apply: "
+                  f"outcome={second.outcome!r} detail={second.detail!r} — nothing to verify the "
+                  f"key arm against")
+
+    both = call_read_edge_after_both_keys()
+    if len(both.rows) != 2:
+        _fail(op, f"one verb, two keys must yield two edges; a read after both writes returned "
+                  f"{len(both.rows)} row(s), not 2. A writer that lets the second key's write "
+                  f"overwrite the first has collapsed the key out of identity — exactly the "
+                  f"defect this arm exists to catch")
+
+    delete_op = "graph.delete_edges"
+
+    deleted = call_delete_edge_by_identity()
+    if not deleted.applied:
+        _fail(delete_op, f"the delete itself did not apply: outcome={deleted.outcome!r} "
+                          f"detail={deleted.detail!r} — nothing to verify against a read")
+
+    after_delete = call_read_edge_after_delete()
+    remaining = len(after_delete.rows)
+    if remaining != 1:
+        if remaining == 0:
+            _fail(delete_op, "deleting by identity scoped to the FIRST key only removed BOTH "
+                              "edges, not just the one it named. The delete's identity_filter "
+                              "over-matched — the writer and the cleanup have stopped agreeing "
+                              "on identity")
+        elif remaining == 2:
+            _fail(delete_op, "deleting by identity scoped to the FIRST key reported 'written' but "
+                              "a read after the delete still finds both edges — nothing was "
+                              "actually removed. The same write-side lie this suite refuses to "
+                              "trust from a reported outcome alone, now on the delete path")
+        else:
+            _fail(delete_op, f"deleting by identity scoped to the FIRST key must leave exactly "
+                              f"one edge (the second key's); a read after the delete returned "
+                              f"{remaining} row(s)")
+
+
+# ── the vectors-writer arm, ruled 2026-09-28 overnight ──────────────────────────────────────
+
+
+def check_vectors_writer_contract(
+    *,
+    call_write_with_failing_embedder: Callable[[], MeshWriteResult],
+    call_write_with_failing_embedder_opted_out: Callable[[], MeshWriteResult],
+    call_relocate_matching_dimension: Callable[[], MeshWriteResult],
+    call_relocate_wrong_dimension: Callable[[], MeshWriteResult],
+    embed_call_count: Callable[[], int],
+) -> None:
+    """The ``MeshVectorsWriter`` contract: ``vector_required`` defaults ``True`` and a failed
+    embed must actually be REFUSED, not silently completed without a vector — the sixty-seven-day
+    silent-BM25 defect (``write_results.py``), replayed at write time. ``written_without_vector``
+    must be reachable ONLY through the caller's own ``vector_required=False`` opt-out, never a
+    writer's own fallback. ``relocate`` must refuse a dimension mismatch, and must NEVER call the
+    Embedder — it takes a precomputed vector, and a relocate that quietly re-embeds has turned a
+    move into an unannounced write.
+
+    ``MeshVectors.nominate`` (semantic search) is fuzzy and ranked, not a deterministic oracle for
+    "did this exact write land" — so unlike the ontology and graph arms above, this one proves
+    STRUCTURAL properties the implementer's own fixture exposes directly, rather than a read-side
+    round trip: two ``write`` calls against a deliberately-failing ``Embedder`` fixture (default
+    vs. opted-out), a ``relocate`` pair (matching vs. mismatched dimension), and
+    ``embed_call_count`` — the caller's own counter on their injected Embedder — to prove
+    ``relocate`` never embeds, by measuring an effect rather than trusting a report.
+    """
+    op_write = "vectors.write"
+    op_relocate = "vectors.relocate"
+
+    # ── vector_required defaults True: a failing embed with no opt-out must REFUSE ──
+    default_result = call_write_with_failing_embedder()
+    opted_out_result = call_write_with_failing_embedder_opted_out()
+
+    assert_fixture_discriminates(
+        f"{op_write} default vs opted-out vector_required, both against a failing embedder",
+        default_result, opted_out_result, describe=lambda r: r.outcome,
+    )
+
+    if default_result.applied:
+        _fail(op_write, f"a failing embedder with vector_required at its DEFAULT (True) produced "
+                        f"outcome={default_result.outcome!r}, which reports the write applied. "
+                        f"The default must REFUSE when no vector could be produced, never complete "
+                        f"one silently without it")
+    if default_result.outcome != "refused":
+        _fail(op_write, f"a failing embedder with vector_required at its default produced "
+                        f"outcome={default_result.outcome!r}, not 'refused'. This is a caller-input "
+                        f"decision the writer made on its own — the exact defect "
+                        f"'written_without_vector' exists to require an explicit opt-out for")
+
+    if opted_out_result.outcome != "written_without_vector":
+        _fail(op_write, f"a failing embedder with vector_required=False produced "
+                        f"outcome={opted_out_result.outcome!r}, not 'written_without_vector'. The "
+                        f"caller explicitly opted into a vectorless write and the writer must name "
+                        f"that state, not silently report a clean 'written' or refuse a write the "
+                        f"caller asked to allow")
+
+    # ── relocate: dimension mismatch is refused, and never touches the Embedder ──
+    before = embed_call_count()
+
+    matching = call_relocate_matching_dimension()
+    wrong = call_relocate_wrong_dimension()
+
+    assert_fixture_discriminates(
+        f"{op_relocate} matching vs mismatched dimension", matching, wrong,
+        describe=lambda r: r.outcome,
+    )
+
+    if not matching.applied:
+        _fail(op_relocate, f"a precomputed vector at the writer's own declared dimension produced "
+                           f"outcome={matching.outcome!r} detail={matching.detail!r} — relocate "
+                           f"must accept a vector that actually matches")
+    if wrong.applied:
+        _fail(op_relocate, f"a precomputed vector at the WRONG dimension produced "
+                           f"outcome={wrong.outcome!r}, which reports it applied. A vector at the "
+                           f"wrong dimension is not retrievable by any query at the writer's "
+                           f"declared dimension and must be refused, not stored")
+
+    after = embed_call_count()
+    if after != before:
+        _fail(op_relocate, f"the Embedder was called {after - before} time(s) during relocate. "
+                           f"relocate takes a PRECOMPUTED vector and must never embed — a relocate "
+                           f"that embeds has silently turned a move into a write the caller never "
+                           f"asked for")
+
+
+# ── the three arms added 2026-09-30, on the promotion adapter's rejection packet back ───────
+#
+# `MeshGraphWriter` gained `has_edges`; `MeshVectorsWriter` gained `delete`; and the convention
+# that lets `delete_edges` serve as "delete everything carrying this ingest_id" — a key-only
+# filter spanning edges that differ in subject, verb AND object — had never been proven. All
+# three close an item from `ia-74/lane/74`'s packet naming what its promotion adapter lacked.
+
+
+def check_graph_writer_has_edges_contract(
+    *,
+    call_write_edge: Callable[[], MeshWriteResult],
+    call_has_edges_matching: Callable[[], MeshResult],
+    call_has_edges_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has_edges` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline as every other arm in this module.
+
+    `call_write_edge` writes one edge the caller has already bound. `call_has_edges_matching` is a
+    `has_edges` call whose `identity_filter` matches that edge, run AFTER the write.
+    `call_has_edges_not_matching` is a `has_edges` call for a filter that matches nothing the
+    fixture ever wrote — the negative case.
+    """
+    op = "graph.has_edges"
+
+    written = call_write_edge()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has_edges against")
+
+    present = call_has_edges_matching()
+    absent = call_has_edges_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching filter", present, absent, describe=lambda r: r.outcome
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a filter matching the edge just written produced {present.outcome!r}, not "
+                  f"'answered'. The write reported success and has_edges disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a filter matching nothing the fixture ever wrote produced "
+                  f"{absent.outcome!r}, not 'empty'. A check that answers regardless of what "
+                  f"was actually written cannot prove presence OR absence")
+
+
+def check_graph_writer_key_only_delete_contract(
+    *,
+    call_write_edge_a: Callable[[], MeshWriteResult],
+    call_write_edge_b_same_key_different_triple: Callable[[], MeshWriteResult],
+    call_delete_by_key_only: Callable[[], MeshWriteResult],
+    call_read_edge_a_after_delete: Callable[[], MeshResult],
+    call_read_edge_b_after_delete: Callable[[], MeshResult],
+) -> None:
+    """THE PROPERTY THE `ingest_id` CLEANUP CONVENTION DEPENDS ON, PROVEN HERE FOR THE FIRST TIME.
+    `iagent_mesh.provenance.ProvenanceBlock.ingest_id` exists so a caller can scope
+    `delete_edges(identity_filter=EdgeIdentityFilter(key=ingest_id))` to "everything whose block
+    carries this id" — which only works if a filter bound on `key` ALONE (subject, verb and object
+    all left as wildcards) reaches every edge sharing that key, even edges that differ from each
+    other in subject, verb AND object. The 2026-09-29 key arm (`check_graph_writer_contract`) never
+    exercised this: its delete filter was always bound to subject AND verb too, scoped to one
+    (subject, verb) pair throughout. A store that happens to index deletes by (subject, verb) and
+    treats `key` as a secondary filter WITHIN that pair would pass that arm and still fail this
+    one — exactly the gap a promotion/rejection cleanup would hit silently in production.
+
+    `call_write_edge_a` and `call_write_edge_b_same_key_different_triple` write two edges sharing
+    one `key` but differing in subject, verb and object. `call_delete_by_key_only` deletes using an
+    `EdgeIdentityFilter` with ONLY `key` bound. `call_read_edge_a_after_delete` and
+    `call_read_edge_b_after_delete` each read back one of the two written triples, run AFTER the
+    delete.
+    """
+    op = "graph.delete_edges (key-only)"
+
+    a = call_write_edge_a()
+    if not a.applied:
+        _fail(op, f"writing edge A did not apply: outcome={a.outcome!r} detail={a.detail!r} — "
+                  f"nothing to verify the key-only delete against")
+
+    b = call_write_edge_b_same_key_different_triple()
+    if not b.applied:
+        _fail(op, f"writing edge B (same key, a DIFFERENT subject/verb/object) did not apply: "
+                  f"outcome={b.outcome!r} detail={b.detail!r} — nothing to verify the key-only "
+                  f"delete against")
+
+    deleted = call_delete_by_key_only()
+    if not deleted.applied:
+        _fail(op, f"the key-only delete itself did not apply: outcome={deleted.outcome!r} "
+                  f"detail={deleted.detail!r} — nothing to verify against a read")
+
+    after_a = call_read_edge_a_after_delete()
+    after_b = call_read_edge_b_after_delete()
+
+    if after_a.outcome != "empty":
+        _fail(op, f"edge A still reads back {after_a.outcome!r} after a delete scoped to its own "
+                  f"key, not 'empty'")
+    if after_b.outcome != "empty":
+        _fail(op, f"edge B — a DIFFERENT subject/verb/object sharing the SAME key as edge A — "
+                  f"still reads back {after_b.outcome!r} after the key-only delete, not 'empty'. "
+                  f"The delete reached edge A but not edge B: this store scopes a key-only filter "
+                  f"to one triple rather than to every edge sharing the key, which is exactly the "
+                  f"property an ingest_id-scoped cleanup depends on and would silently leave "
+                  f"orphaned edges behind on a real promotion/rejection")
+
+
+def check_vectors_writer_delete_contract(
+    *,
+    call_write: Callable[[], MeshWriteResult],
+    call_delete_written: Callable[[], MeshWriteResult],
+    call_delete_never_written: Callable[[], MeshWriteResult],
+    contains_after_delete: Callable[[], bool],
+) -> None:
+    """The `delete` contract. `MeshVectors.nominate` is fuzzy and ranked, not a deterministic
+    oracle for presence — the same limit `check_vectors_writer_contract` names for `write`/
+    `relocate` — so this arm proves a STRUCTURAL property the implementer's own fixture exposes
+    directly (`contains_after_delete`, the same pattern as that arm's `embed_call_count`), rather
+    than a read-side round trip through semantic search.
+
+    `call_write` writes one object the caller has already bound. `call_delete_written` deletes
+    that SAME id, run after the write. `contains_after_delete` is the fixture's own introspection
+    on its backing store, called after that delete. `call_delete_never_written` deletes a
+    DIFFERENT id the fixture never wrote — the idempotency case `MeshGraphWriter.delete_edges`
+    already states ("a filter matching nothing still reports written").
+    """
+    write_op = "vectors.write"
+    delete_op = "vectors.delete"
+
+    written = call_write()
+    if not written.applied:
+        _fail(write_op, f"the write itself did not apply: outcome={written.outcome!r} "
+                        f"detail={written.detail!r} — nothing to verify delete against")
+
+    deleted = call_delete_written()
+    if not deleted.applied:
+        _fail(delete_op, f"deleting the id just written did not apply: outcome={deleted.outcome!r} "
+                         f"detail={deleted.detail!r}")
+
+    if contains_after_delete():
+        _fail(delete_op, "the id written above is STILL present after delete reported applied — "
+                         "the same write-side lie this suite refuses to trust from a reported "
+                         "outcome alone, now on the delete path")
+
+    idempotent = call_delete_never_written()
+    if not idempotent.applied:
+        _fail(delete_op, f"deleting an id that was never written produced "
+                         f"outcome={idempotent.outcome!r}, not an applied state. Deletion must be "
+                         f"idempotent — the store now satisfies 'this id is absent', which may "
+                         f"already have been true, the same reasoning "
+                         f"MeshGraphWriter.delete_edges applies to a filter matching zero edges")

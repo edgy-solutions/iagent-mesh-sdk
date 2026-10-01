@@ -55,11 +55,13 @@ Only the first is checkable offline. The second needs a real write and lives in 
 
 from __future__ import annotations
 
-from typing import Literal, Optional, Protocol, Sequence, runtime_checkable
+from types import MappingProxyType
+from typing import Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .results import MeshResult
+from .write_results import MeshWriteResult
 
 __all__ = [
     "Initiator",
@@ -77,6 +79,12 @@ __all__ = [
     "marker_is_stale",  # DEPRECATED alias; removed once in-fleet callers move
     "MARKER_ASSERTS",
     "MARKER_DOES_NOT_ASSERT",
+    "Embedder",
+    "EdgeIdentity",
+    "EdgeIdentityFilter",
+    "MeshGraphWriter",
+    "MeshVectorsWriter",
+    "MeshOntologyWriter",
 ]
 
 
@@ -204,6 +212,39 @@ class Initiator(BaseModel):
             f"person can be asked about."
         )
 
+    def require_person_or_delegate(self, operation: str) -> "Initiator":
+        """Refuse a bare service; admit a person or a delegate. THE WRITE BOUNDARY, ruled
+        2026-09-27 alongside ``kind`` growing its third value — a WIDER allowlist than
+        :meth:`require_person`, not a replacement for it.
+
+        Reads keep the narrower gate: `require_person` stays person-only, unchanged. Writes admit
+        a delegate too, because the shape ``"delegate"`` was added FOR — a lane worktree, a
+        scheduled job run under someone's own authority — legitimately writes on its own
+        entitlements. What it may never do is inherit a person's grants silently, and it does
+        not: a delegate is admitted here on its OWN ``subject``, exactly as a person is, and
+        ``on_behalf_of`` is recorded, never consulted — the same PROVENANCE-NOT-A-GATE-INPUT
+        discipline the field's own docstring states, now exercised at a real boundary instead of
+        only declared at one.
+
+        A bare SERVICE is refused for the same reason it is refused on the read side, with MORE
+        force rather than less: a write attributed to a service records a state change nobody can
+        be asked about, where a read attributed to one only records a query nobody can be asked
+        about.
+
+        No new exception for "delegate refused" — there is nothing left for a delegate to be
+        refused FOR at this boundary. The line this method draws is person-or-delegate versus
+        service, so a delegate never reaches the branch that would raise
+        ``DelegateIdentityRefused``; that exception stays scoped to `require_person`, where a
+        delegate genuinely is the refused case.
+        """
+        if self.kind in ("person", "delegate"):
+            return self
+        raise ServiceIdentityRefused(
+            f"{operation} requires a person or a delegate and received a service identity "
+            f"({self.subject!r}). A write attributed to a service records a state change no "
+            f"person can be asked about."
+        )
+
 
 # ── the three interfaces ─────────────────────────────────────────────────────────────────
 
@@ -297,15 +338,17 @@ class MeshOntology(Protocol):
     absent. That is almost certainly how "no configured endpoint contains ``/sparql``" got written
     down here originally.
 
-    **So the absence is a choice, not a wall.** The SDK ships no Jena code at all — no caller here
-    wants this write half yet, and nobody has ruled who owns SPARQL ``GRAPH`` scoping for a write:
-    doc-tools' own Jena writer has three of its four SPARQL-emitting plugins inserting into Jena's
-    *default* graph, invisible to the mesh resolver, because nothing at the write call forces
-    scoping (same report, Part 2). A write half is proposed with Jena as the first production
-    caller in
-    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``
-    — it does not exist here because the design has not been ruled on, not because the route does
-    not work.
+    **THE WRITE HALF NOW EXISTS — this paragraph is the second correction the same day forced,
+    and it is being made the same way the first one was: named, not left standing.** Ruled
+    2026-09-27 on
+    ``invincible-agent/sessions/2026-09-27-proposal-from-ca-a-write-half-for-meshgraph-and-meshvectors.md``:
+    see :class:`MeshOntologyWriter` below, and :mod:`iagent_mesh.writers.jena` for the reference
+    implementation that closes the exact defect this docstring used to describe — doc-tools' own
+    Jena writer inserting three of its four SPARQL-emitting plugins into Jena's *default* graph,
+    invisible to the mesh resolver, because nothing at the write call forced scoping. The read
+    Protocol below is UNCHANGED and stays pure: the write half is a sibling class, never a new
+    method here, so this Protocol's own "read-only" framing keeps being true rather than needing
+    a third correction later.
     """
 
     MODES: tuple[str, ...] = ()
@@ -662,4 +705,329 @@ class MeshVectors(Protocol):
         The guard that separates *nothing matched* from *nothing to match against* — two states
         a search alone reports identically, and the reason this is an operation rather than an
         implementation detail.
+        """
+
+
+# ── the write half, ruled 2026-09-27 ────────────────────────────────────────────────────────
+#
+# SIBLING PROTOCOLS, NOT NEW METHODS ON THE READ INTERFACES ABOVE. Every read Protocol in this
+# file stays exactly as pure as its own docstring already claims — `MeshGraph` still has zero
+# writes, `MeshOntology`'s `ask`/`construct` still only ask, `MeshVectors.nominate` still only
+# searches. A write half bolted onto those as new methods would mean re-reading three docstrings
+# that currently say "read-only" and either falsifying them or caveating them into meaninglessness
+# — the exact failure this file corrected twice in one day for other reasons. A new class per
+# store keeps each read Protocol's own claim true without qualification.
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """What a vectors WRITER is handed, never what it constructs. **Embedding is the writer's job,
+    ruled 2026-09-27** — injected so there is exactly ONE place in a running system that probes
+    what model an endpoint actually served, rather than a writer holding its own embedding call
+    and a reader re-deriving an equivalent probe to compare against. The latter is how
+    ``MeshVectors.embedding_model``'s own docstring came to describe the vacuous case this
+    contract exists to avoid: two constants agreeing with each other while both disagree with the
+    vectors already on disk.
+
+    Two methods, not one, because a normal WRITE and a RELOCATION want different inputs at the
+    call site — see :meth:`MeshVectorsWriter.write` and :meth:`MeshVectorsWriter.relocate`. A
+    conforming ``Embedder`` is constructed once and held by the writer; nothing in this Protocol
+    is ever constructed ad hoc inside a write call, which would reopen the one-probe-one-place
+    property this exists to guarantee.
+    """
+
+    def embed(self, text: str) -> Sequence[float]:
+        """The vector for this text, at whatever model/version this Embedder currently serves."""
+
+    def identity(self) -> tuple[str, Optional[str], int]:
+        """``(model, version, dimension)`` — THE SERVED IDENTITY, probed fresh from the endpoint,
+        never a constant the caller supplies. The single source both :class:`CollectionMarker`
+        and any comparison against it draw from, so a constant-stamping writer and a
+        constant-trusting reader cannot agree with each other while both disagree with what an
+        endpoint actually served — the same reasoning ``CollectionMarker.model``'s own docstring
+        states for the reader side, exercised here on the writer side where the value originates.
+        """
+
+
+class EdgeIdentity(BaseModel):
+    """What makes one edge a DIFFERENT edge from another. Four fields, all required, all opaque —
+    ``subject``, ``verb`` and ``object`` name the triple; ``key`` is the fourth field, **ruled
+    2026-09-29**, and it is what lets two writes of the same triple coexist as two edges rather
+    than one write silently overwriting the other.
+
+    ``key`` IS CALLER-SUPPLIED AND THIS SDK NEVER NAMES ONE. The fleet that prompted this field
+    passes its own tool-invocation URN (``_tool_urn``); a different caller might pass a batch id,
+    a provenance hash, or a session id. This module has no opinion on what a key IS, only that one
+    IS the fourth axis of identity — the same "opaque, never parsed" discipline
+    :class:`Initiator.subject` states, applied here to what distinguishes an edge rather than who
+    is asking for one.
+
+    **IDENTITY IS SEPARATE FROM PAYLOAD, and that is the point of this being its own type rather
+    than four more keyword arguments on :meth:`MeshGraphWriter.write_edge`.** Everything in this
+    object is what the STORE keys on — two writes whose ``EdgeIdentity`` compares equal are the
+    same edge; two whose ``key`` differs are two edges, even with an identical subject, verb and
+    object. Whatever a write attaches BEYOND identity (see ``payload`` on ``write_edge``) never
+    participates in that comparison.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: str
+    verb: str
+    object: str
+    key: str
+    """Caller-supplied. Two edges sharing every other field but this one are still two edges —
+    this is the field that makes that true, not an incidental tag alongside identity."""
+
+    @field_validator("subject", "verb", "object", "key")
+    @classmethod
+    def _field_is_present(cls, v: str, info) -> str:
+        if not v.strip():
+            raise ValueError(
+                f"EdgeIdentity.{info.field_name}='' — every field of identity is required; a "
+                f"blank one is not a narrower identity, it is a missing one"
+            )
+        return v
+
+
+class EdgeIdentityFilter(BaseModel):
+    """What :meth:`MeshGraphWriter.delete_edges` scopes a deletion by — the SAME four fields as
+    :class:`EdgeIdentity`, **ruled 2026-09-29** alongside it, each one optional here where none
+    were on the write side: an unset field is a wildcard, so a caller can delete one exact edge
+    (all four fields bound, matching one ``EdgeIdentity``) or a whole family of them (fewer fields
+    bound — every edge for a subject regardless of verb, object or key).
+
+    **REFUSES THE EMPTY FILTER, ON CONSTRUCTION, ALWAYS.** All four fields unset would match every
+    edge the store holds — "delete everything" wearing the shape of a scoped call. Three of the
+    registrar's four graph paths delete (the reason this method exists at all, ruled alongside
+    :meth:`MeshGraphWriter.write_edge`'s amended signature), and none of them means "delete the
+    graph"; a filter that could accidentally mean that is refused here rather than trusted to a
+    caller who never intended it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: Optional[str] = None
+    verb: Optional[str] = None
+    object: Optional[str] = None
+    key: Optional[str] = None
+
+    @field_validator("subject", "verb", "object", "key")
+    @classmethod
+    def _bound_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"EdgeIdentityFilter.{info.field_name}='' — omit the field to mean 'any', rather "
+                f"than binding it to nothing"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _at_least_one_field_bound(self) -> "EdgeIdentityFilter":
+        if self.subject is None and self.verb is None and self.object is None and self.key is None:
+            raise ValueError(
+                "EdgeIdentityFilter with every field unset matches every edge in the store — "
+                "refused rather than honoured, because 'delete everything' should never be "
+                "reachable by omission"
+            )
+        return self
+
+
+@runtime_checkable
+class MeshGraphWriter(Protocol):
+    """Named writes over the property graph. **NO DERIVED INVENTORY EXISTS FOR THIS ONE, and that
+    is stated rather than papered over** — the read Protocol's own docstring records "zero Neo4j
+    writes" found in the engine-o census that grounded every read operation here; there is no
+    equivalent write census this Protocol could derive from, because nothing in the fleet writes
+    the property graph today. Declared ahead of a caller anyway, on ruling, matching this file's
+    own precedent: `MeshOntology` was declared and later corrected once Jena became a real writer,
+    rather than waiting for a caller to justify the shape retroactively.
+
+    **AMENDED IN PLACE, RULED 2026-09-29, ON THE WORKER'S OWN PACKET BACK.** The original ruling
+    (2026-09-27) shipped `write_edge(initiator, *, subject, verb, object)` and stated "widening
+    this Protocol is a new method with its own manifest and seal." That sentence governs a
+    RELEASED contract; nothing tagged has ever carried `MeshGraphWriter` — it has existed only on
+    `lane/ca`, uncut — so the correction the worker's packet asked for lands as a signature change
+    in place, not a second method beside a wrong first one. Once this Protocol ships in a tagged
+    release, the widening-is-a-new-method rule applies again, starting from THIS shape.
+
+    ``write_edge`` now takes **identity separate from payload** — :class:`EdgeIdentity` (subject,
+    verb, object, and a caller-supplied ``key``) is what the store keys on; ``payload`` is
+    whatever else a write attaches, and never participates in that comparison. The key is what two
+    writes of an identical triple need to land as two edges rather than one overwriting the other
+    — the defect that sent the worker back with a packet in the first place.
+
+    ``delete_edges`` ships in the SAME ruling, not as a later addition: three of the registrar's
+    four graph paths delete, and a writer that cannot express the same identity its own cleanup
+    needs would leave the registrar's adoption partial — worse than not adopting the writer at
+    all. It is scoped by :class:`EdgeIdentityFilter`, the same four fields, optional, so a caller
+    names exactly as much as it means to delete.
+
+    **AMENDED AGAIN, 2026-09-30, ON THE PROMOTION ADAPTER'S OWN REJECTION PACKET BACK**
+    (``ia-74/lane/74``, ``IngestGraph``/``IngestIndexes`` in its ``src/iagent/promotion.py``). The
+    adapter named three things it lacked; this Protocol gains ``has_edges``, the one of the three
+    that is genuinely new here (the other two are satisfied without a new method — see below).
+    This still lands IN PLACE rather than as a second ruling, for the same reason the 2026-09-29
+    amendment did: nothing tagged has ever carried `MeshGraphWriter`, so the "widening is a new
+    method with its own manifest and seal" rule has not started governing it yet — it starts
+    the moment v0.9.5 ships this shape.
+
+    ``has_edges`` answers the adapter's "a node-exists read" — reusing :class:`EdgeIdentityFilter`
+    rather than inventing a bespoke existence parameter, and :class:`MeshResult` rather than a bare
+    ``bool``, the same discipline :meth:`iagent_mesh.interfaces.MeshOntology.ask` already applies:
+    ``empty`` means *asked, and nothing matches*, which is a different fact from *could not ask*,
+    and collapsing the two into one boolean is exactly the ambiguity this SDK's result types exist
+    to refuse.
+
+    The adapter's other two needs are **not** new methods. "A delete-by-block-``ingest_id`` on the
+    graph" is already expressible as ``delete_edges(identity_filter=EdgeIdentityFilter(key=
+    ingest_id))`` — PROVIDED every fact-triple written for one ingest's provenance shares
+    ``EdgeIdentity.key = ingest_id`` as a convention (see
+    :attr:`iagent_mesh.provenance.ProvenanceBlock.ingest_id`); ``EdgeIdentity.key``'s own docstring
+    already names "a provenance hash" as a legitimate key value, so this is a convention on an
+    existing field, not a gap. That a KEY-ONLY filter correctly spans edges differing in subject,
+    verb and object was unproven until this same release — see
+    ``check_graph_writer_key_only_delete_contract`` in ``iagent_mesh.conformance``, the new arm
+    added alongside this amendment. "Any delete on the vectors writer" is answered on
+    :class:`MeshVectorsWriter` below, not here.
+    """
+
+    def write_edge(
+        self,
+        initiator: Initiator,
+        *,
+        identity: EdgeIdentity,
+        payload: Mapping[str, str] = MappingProxyType({}),
+    ) -> MeshWriteResult:
+        """Assert one edge at ``identity``. Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        Two calls whose ``identity`` differs only in ``key`` land as TWO edges, not one write
+        overwriting the other — that is the property ``key`` exists to guarantee, and the
+        conformance suite proves it (``one verb, two keys, two edges``) rather than trusting it.
+        """
+
+    def delete_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshWriteResult:
+        """Remove every edge matching ``identity_filter``. Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        A filter matching zero edges still reports ``written`` — the store now satisfies "no edge
+        matches this filter", which may already have been true; deletion is idempotent by the same
+        reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds.
+        """
+
+    def has_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshResult:
+        """Does any edge matching ``identity_filter`` exist? Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-09-30**, for a caller (the promotion adapter) that needs to check an edge's
+        presence before deciding whether to write or delete it — idempotency, not routing, which
+        is why this lives here rather than on the read-only :class:`MeshGraph` (whose reads may be
+        served from a cached or derived projection, and would not guarantee read-your-own-write
+        consistency for this writer's own prior writes).
+
+        Returns ``MeshResult`` with ``outcome="answered"`` and ``rows`` non-empty when at least one
+        edge matches, ``outcome="empty"`` when none do — never a bare ``bool``, so "determined
+        absent" stays distinguishable from "could not determine" the same way every other read in
+        this SDK keeps that distinction.
+        """
+
+
+@runtime_checkable
+class MeshVectorsWriter(Protocol):
+    """Upsert and relocate within a declared collection. **THE EMBEDDING CONTRACT IS SYMMETRIC
+    WITH THE READ SIDE**: :class:`MeshVectors` states "the vector is computed by the caller today"
+    as the DEFECT — two implementations handed the same text could embed with two different
+    models against one stored index, silently. This Protocol is the fix on the write side: the
+    writer holds an injected :class:`Embedder`, embeds internally, and stamps
+    :class:`CollectionMarker` from the SAME probe — never a constant, never the caller's job.
+
+    **TWO METHODS BECAUSE TWO CALLERS WANT DIFFERENT THINGS, AND CONFLATING THEM IS THE HAZARD
+    RULED AGAINST 2026-09-27.** A normal write hands text; `write` embeds it via this writer's own
+    `Embedder` and nothing else may supply a vector for that path. A RELOCATION — moving an
+    existing object to a vector computed elsewhere, a re-embed migration, a backfill from a batch
+    job — is the only legitimate reason a caller ever holds a precomputed vector, and `relocate`
+    is the one and only door for it. A single `write(..., vector=None)`-shaped method that accepts
+    either would make "supply your own vector" a normal-looking parameter on the everyday path,
+    which is exactly the shortcut this split exists to foreclose.
+
+    **AMENDED 2026-09-30, ON THE PROMOTION ADAPTER'S OWN REJECTION PACKET BACK** (``ia-74/lane/74``
+    — see :class:`MeshGraphWriter`'s own 2026-09-30 amendment note for the full context). The
+    adapter's third need, "any delete on the vectors writer," had no existing path here at all —
+    unlike the graph writer's two needs, this one is genuinely new capability, cleanly additive
+    because ``id`` is already first-class identity on this Protocol (unlike the graph writer's
+    payload/identity split, nothing here is walled off from being addressed directly).
+    """
+
+    def write(
+        self,
+        initiator: Initiator,
+        *,
+        collection: str,
+        id: str,
+        text: str,
+        domains: Sequence[str] = (),
+        vector_required: bool = True,
+    ) -> MeshWriteResult:
+        """Upsert one object by a caller-supplied deterministic id, embedding ``text`` via this
+        writer's injected :class:`Embedder`.
+
+        ``vector_required`` DEFAULTS ``True``. When the embed fails and the caller has not passed
+        ``vector_required=False``, the write is REFUSED — never silently completed without a
+        vector, which is the sixty-seven-day silent-BM25 defect replayed at write time. Passing
+        ``vector_required=False`` is the caller saying, at this call, that a vectorless write is
+        acceptable; the writer must never decide that on its own.
+        """
+
+    def relocate(
+        self, initiator: Initiator, *, collection: str, id: str, vector: Sequence[float]
+    ) -> MeshWriteResult:
+        """Move an existing object to a PRECOMPUTED vector. RELOCATION ONLY.
+
+        Never a shortcut for `write` — this method does not embed, does not accept ``text``, and
+        an implementation must refuse a vector whose length does not match this writer's declared
+        dimension rather than storing a vector no query at this dimension could ever retrieve.
+        """
+
+    def delete(self, initiator: Initiator, *, collection: str, id: str) -> MeshWriteResult:
+        """Remove one object by its caller-supplied ``id`` within ``collection``. Person or
+        delegate only — see :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-09-30**, symmetric with `write`/`relocate`: ``id`` is the same first-class
+        identity those two already address by. Idempotent, the same reasoning
+        :meth:`MeshGraphWriter.delete_edges` states for its own filter — an ``id`` that matches
+        nothing still reports ``written``, because the store now satisfies "this id is absent",
+        which may already have been true.
+        """
+
+
+@runtime_checkable
+class MeshOntologyWriter(Protocol):
+    """Named writes over the RDF store, GRAPH-scoped by construction. Ruled 2026-09-27 to close
+    the defect :class:`MeshOntology`'s own docstring now names: three of doc-tools' four
+    SPARQL-emitting plugins insert into Jena's *default* graph, invisible to the mesh resolver,
+    because nothing at the write call forces scoping. See
+    ``iagent_mesh.writers.jena.JenaOntologyWriter`` for the reference implementation this SDK
+    ships.
+
+    ``graph`` is REQUIRED on `upsert`, never optional. The read side's `graph` is optional because
+    a read can legitimately mean "anywhere within scope"; a write choosing "anywhere" is precisely
+    the unscoped default-graph insert this Protocol exists to make impossible to express, so the
+    asymmetry with the read Protocol's optional `graph` is deliberate, not an inconsistency.
+    """
+
+    def upsert(
+        self, initiator: Initiator, *, graph: str, iri: str, triples: Sequence[str]
+    ) -> MeshWriteResult:
+        """Replace every triple this writer previously wrote for ``iri`` within ``graph`` with
+        ``triples`` — delete-then-insert, both halves GRAPH-scoped to the same graph, in one
+        update so there is no window where the graph holds neither the old state nor the new one.
+
+        Person or delegate only. An implementation must refuse (never silently default) an empty
+        ``graph`` — see :meth:`Initiator.require_person_or_delegate` for the identity boundary and
+        the reference implementation for the refusal shape on an unscoped request.
         """
