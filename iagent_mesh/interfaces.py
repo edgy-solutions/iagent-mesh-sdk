@@ -862,6 +862,34 @@ class MeshGraphWriter(Protocol):
     needs would leave the registrar's adoption partial — worse than not adopting the writer at
     all. It is scoped by :class:`EdgeIdentityFilter`, the same four fields, optional, so a caller
     names exactly as much as it means to delete.
+
+    **AMENDED AGAIN, 2026-09-30, ON THE PROMOTION ADAPTER'S OWN REJECTION PACKET BACK**
+    (``ia-74/lane/74``, ``IngestGraph``/``IngestIndexes`` in its ``src/iagent/promotion.py``). The
+    adapter named three things it lacked; this Protocol gains ``has_edges``, the one of the three
+    that is genuinely new here (the other two are satisfied without a new method — see below).
+    This still lands IN PLACE rather than as a second ruling, for the same reason the 2026-09-29
+    amendment did: nothing tagged has ever carried `MeshGraphWriter`, so the "widening is a new
+    method with its own manifest and seal" rule has not started governing it yet — it starts
+    the moment v0.9.5 ships this shape.
+
+    ``has_edges`` answers the adapter's "a node-exists read" — reusing :class:`EdgeIdentityFilter`
+    rather than inventing a bespoke existence parameter, and :class:`MeshResult` rather than a bare
+    ``bool``, the same discipline :meth:`iagent_mesh.interfaces.MeshOntology.ask` already applies:
+    ``empty`` means *asked, and nothing matches*, which is a different fact from *could not ask*,
+    and collapsing the two into one boolean is exactly the ambiguity this SDK's result types exist
+    to refuse.
+
+    The adapter's other two needs are **not** new methods. "A delete-by-block-``ingest_id`` on the
+    graph" is already expressible as ``delete_edges(identity_filter=EdgeIdentityFilter(key=
+    ingest_id))`` — PROVIDED every fact-triple written for one ingest's provenance shares
+    ``EdgeIdentity.key = ingest_id`` as a convention (see
+    :attr:`iagent_mesh.provenance.ProvenanceBlock.ingest_id`); ``EdgeIdentity.key``'s own docstring
+    already names "a provenance hash" as a legitimate key value, so this is a convention on an
+    existing field, not a gap. That a KEY-ONLY filter correctly spans edges differing in subject,
+    verb and object was unproven until this same release — see
+    ``check_graph_writer_key_only_delete_contract`` in ``iagent_mesh.conformance``, the new arm
+    added alongside this amendment. "Any delete on the vectors writer" is answered on
+    :class:`MeshVectorsWriter` below, not here.
     """
 
     def write_edge(
@@ -890,6 +918,24 @@ class MeshGraphWriter(Protocol):
         reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds.
         """
 
+    def has_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshResult:
+        """Does any edge matching ``identity_filter`` exist? Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-09-30**, for a caller (the promotion adapter) that needs to check an edge's
+        presence before deciding whether to write or delete it — idempotency, not routing, which
+        is why this lives here rather than on the read-only :class:`MeshGraph` (whose reads may be
+        served from a cached or derived projection, and would not guarantee read-your-own-write
+        consistency for this writer's own prior writes).
+
+        Returns ``MeshResult`` with ``outcome="answered"`` and ``rows`` non-empty when at least one
+        edge matches, ``outcome="empty"`` when none do — never a bare ``bool``, so "determined
+        absent" stays distinguishable from "could not determine" the same way every other read in
+        this SDK keeps that distinction.
+        """
+
 
 @runtime_checkable
 class MeshVectorsWriter(Protocol):
@@ -908,6 +954,13 @@ class MeshVectorsWriter(Protocol):
     is the one and only door for it. A single `write(..., vector=None)`-shaped method that accepts
     either would make "supply your own vector" a normal-looking parameter on the everyday path,
     which is exactly the shortcut this split exists to foreclose.
+
+    **AMENDED 2026-09-30, ON THE PROMOTION ADAPTER'S OWN REJECTION PACKET BACK** (``ia-74/lane/74``
+    — see :class:`MeshGraphWriter`'s own 2026-09-30 amendment note for the full context). The
+    adapter's third need, "any delete on the vectors writer," had no existing path here at all —
+    unlike the graph writer's two needs, this one is genuinely new capability, cleanly additive
+    because ``id`` is already first-class identity on this Protocol (unlike the graph writer's
+    payload/identity split, nothing here is walled off from being addressed directly).
     """
 
     def write(
@@ -938,6 +991,17 @@ class MeshVectorsWriter(Protocol):
         Never a shortcut for `write` — this method does not embed, does not accept ``text``, and
         an implementation must refuse a vector whose length does not match this writer's declared
         dimension rather than storing a vector no query at this dimension could ever retrieve.
+        """
+
+    def delete(self, initiator: Initiator, *, collection: str, id: str) -> MeshWriteResult:
+        """Remove one object by its caller-supplied ``id`` within ``collection``. Person or
+        delegate only — see :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-09-30**, symmetric with `write`/`relocate`: ``id`` is the same first-class
+        identity those two already address by. Idempotent, the same reasoning
+        :meth:`MeshGraphWriter.delete_edges` states for its own filter — an ``id`` that matches
+        nothing still reports ``written``, because the store now satisfies "this id is absent",
+        which may already have been true.
         """
 
 

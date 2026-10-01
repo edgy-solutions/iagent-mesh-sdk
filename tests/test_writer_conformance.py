@@ -18,8 +18,11 @@ import pytest
 from iagent_mesh.conformance import (
     ConformanceFailure,
     check_graph_writer_contract,
+    check_graph_writer_has_edges_contract,
+    check_graph_writer_key_only_delete_contract,
     check_ontology_writer_contract,
     check_vectors_writer_contract,
+    check_vectors_writer_delete_contract,
     check_writer_offline,
 )
 from iagent_mesh.interfaces import EdgeIdentity, EdgeIdentityFilter, Initiator
@@ -246,6 +249,26 @@ class _EdgeStore:
             return MeshResult.empty()
         return MeshResult.answered(list(keyed.values()))
 
+    def has_edges(
+        self, initiator: Initiator, *, identity_filter: EdgeIdentityFilter
+    ) -> MeshResult:
+        initiator.require_person_or_delegate("graph.has_edges")
+        matches = []
+        for (subject, verb), keyed in self._by_pair.items():
+            if identity_filter.subject not in (None, subject):
+                continue
+            if identity_filter.verb not in (None, verb):
+                continue
+            for key, obj in keyed.items():
+                if identity_filter.key not in (None, key):
+                    continue
+                if identity_filter.object not in (None, obj):
+                    continue
+                matches.append(obj)
+        if not matches:
+            return MeshResult.empty()
+        return MeshResult.answered(matches)
+
 
 WRITTEN_SUBJECT, WRITTEN_VERB, WRITTEN_OBJECT = "ex:alice", "ex:knows", "ex:bob"
 UNWRITTEN_SUBJECT, UNWRITTEN_VERB = "ex:carol", "ex:dislikes"
@@ -434,6 +457,142 @@ def test_G_A_READ_THAT_ANSWERS_FOR_AN_UNWRITTEN_EDGE_TOO_IS_CAUGHT():
         _run_graph(UnwrittenReadErrorsInsteadOfEmpty())
 
 
+# ── check_graph_writer_has_edges_contract, added 2026-09-30 on the promotion adapter's
+# rejection packet back (ia-74/lane/74) ─────────────────────────────────────────────────────
+
+def _run_has_edges(store) -> None:
+    check_graph_writer_has_edges_contract(
+        call_write_edge=lambda: store.write_edge(
+            PERSON,
+            identity=EdgeIdentity(
+                subject=WRITTEN_SUBJECT, verb=WRITTEN_VERB, object=WRITTEN_OBJECT, key=FIRST_KEY
+            ),
+        ),
+        call_has_edges_matching=lambda: store.has_edges(
+            PERSON, identity_filter=EdgeIdentityFilter(key=FIRST_KEY)
+        ),
+        call_has_edges_not_matching=lambda: store.has_edges(
+            PERSON, identity_filter=EdgeIdentityFilter(key="_tool_urn:never-written")
+        ),
+    )
+
+
+def test_G_HAS_EDGES_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL."""
+    _run_has_edges(_EdgeStore())
+
+
+def test_G_HAS_EDGES_THAT_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_EdgeStore):
+        def has_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.has_edges")
+            return MeshResult.answered([WRITTEN_OBJECT])
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_has_edges(AlwaysAnswers())
+
+
+def test_G_HAS_EDGES_THAT_CANNOT_FIND_THE_WRITTEN_EDGE_IS_CAUGHT():
+    class CannotFind(_EdgeStore):
+        def has_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.has_edges")
+            if identity_filter.key == FIRST_KEY:
+                return MeshResult.failed("simulated: the written edge is not actually findable")
+            return super().has_edges(initiator, identity_filter=identity_filter)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.has_edges.*not 'answered'"):
+        _run_has_edges(CannotFind())
+
+
+def test_G_HAS_EDGES_THAT_ANSWERS_FOR_AN_UNWRITTEN_KEY_TOO_IS_CAUGHT():
+    class AnswersForUnwritten(_EdgeStore):
+        def has_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.has_edges")
+            if identity_filter.key == "_tool_urn:never-written":
+                return MeshResult.failed("simulated: errors instead of answering empty")
+            return super().has_edges(initiator, identity_filter=identity_filter)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.has_edges.*not 'empty'"):
+        _run_has_edges(AnswersForUnwritten())
+
+
+# ── check_graph_writer_key_only_delete_contract, added 2026-09-30 — the property the
+# ingest_id cleanup convention depends on ──────────────────────────────────────────────────
+
+SHARED_KEY = "ingest:2026-09-30-001"
+TRIPLE_A = ("ex:fact-a-subject", "ex:fact-a-verb", "ex:fact-a-object")
+TRIPLE_B = ("ex:fact-b-subject", "ex:fact-b-verb", "ex:fact-b-object")
+
+
+def _run_key_only_delete(store) -> None:
+    check_graph_writer_key_only_delete_contract(
+        call_write_edge_a=lambda: store.write_edge(
+            PERSON,
+            identity=EdgeIdentity(
+                subject=TRIPLE_A[0], verb=TRIPLE_A[1], object=TRIPLE_A[2], key=SHARED_KEY
+            ),
+        ),
+        call_write_edge_b_same_key_different_triple=lambda: store.write_edge(
+            PERSON,
+            identity=EdgeIdentity(
+                subject=TRIPLE_B[0], verb=TRIPLE_B[1], object=TRIPLE_B[2], key=SHARED_KEY
+            ),
+        ),
+        call_delete_by_key_only=lambda: store.delete_edges(
+            PERSON, identity_filter=EdgeIdentityFilter(key=SHARED_KEY)
+        ),
+        call_read_edge_a_after_delete=lambda: store.edge(PERSON, TRIPLE_A[0], TRIPLE_A[1]),
+        call_read_edge_b_after_delete=lambda: store.edge(PERSON, TRIPLE_B[0], TRIPLE_B[1]),
+    )
+
+
+def test_G_KEY_ONLY_DELETE_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL. `_EdgeStore.delete_edges` already treats an unbound subject/verb as a
+    wildcard, so a key-only filter already reaches both triples here — this is the proof."""
+    _run_key_only_delete(_EdgeStore())
+
+
+def test_G_KEY_ONLY_DELETE_THAT_SCOPES_TO_ONE_PAIR_IS_CAUGHT():
+    """THE EXACT GAP THIS ARM EXISTS TO CATCH: a store that indexes deletes by (subject, verb)
+    first and treats `key` as a secondary filter WITHIN that pair, so a key-only filter (no
+    subject/verb bound) silently matches nothing because no (subject, verb) pair was named."""
+
+    class ScopesDeleteToNamedPairOnly(_EdgeStore):
+        def delete_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.delete_edges")
+            if identity_filter.subject is None or identity_filter.verb is None:
+                return MeshWriteResult.written()  # BUG: silently matches nothing
+            return super().delete_edges(initiator, identity_filter=identity_filter)
+
+    with pytest.raises(
+        ConformanceFailure, match=r"graph\.delete_edges \(key-only\).*edge A.*not 'empty'"
+    ):
+        _run_key_only_delete(ScopesDeleteToNamedPairOnly())
+
+
+def test_G_KEY_ONLY_DELETE_THAT_REACHES_ONLY_THE_FIRST_MATCHING_PAIR_IS_CAUGHT():
+    """A delete that reaches edge A (the first pair it iterates to) but stops there instead of
+    continuing to every edge sharing the key — edge B is left behind."""
+
+    class StopsAfterFirstMatch(_EdgeStore):
+        def delete_edges(self, initiator, *, identity_filter):
+            initiator.require_person_or_delegate("graph.delete_edges")
+            for pair, keyed in list(self._by_pair.items()):
+                for key in list(keyed.keys()):
+                    if identity_filter.key not in (None, key):
+                        continue
+                    del keyed[key]
+                    if not keyed:
+                        del self._by_pair[pair]
+                    return MeshWriteResult.written()  # BUG: returns after the first match
+            return MeshWriteResult.written()
+
+    with pytest.raises(
+        ConformanceFailure, match=r"graph\.delete_edges \(key-only\).*edge B.*not 'empty'"
+    ):
+        _run_key_only_delete(StopsAfterFirstMatch())
+
+
 # ── check_vectors_writer_contract, ruled 2026-09-28 overnight ───────────────────────────────
 #
 # THE DEFECT THIS ARM EXISTS TO CATCH: `vector_required`'s default (`True`) silently completing a
@@ -486,6 +645,11 @@ class _VectorsStore:
         if len(vector) != dimension:
             return MeshWriteResult.refused(f"vector has {len(vector)} dims, writer is {dimension}")
         self._store[(collection, id)] = list(vector)
+        return MeshWriteResult.written()
+
+    def delete(self, initiator: Initiator, *, collection, id) -> MeshWriteResult:
+        initiator.require_person_or_delegate("vectors.delete")
+        self._store.pop((collection, id), None)
         return MeshWriteResult.written()
 
 
@@ -646,3 +810,73 @@ def test_V_A_RELOCATE_THAT_RE_EMBEDS_IS_CAUGHT():
 
     with pytest.raises(ConformanceFailure, match=r"vectors\.relocate.*Embedder was called"):
         _run_vectors(ReEmbeds(embedder), embedder)
+
+
+# ── check_vectors_writer_delete_contract, added 2026-09-30 on the promotion adapter's
+# rejection packet back (ia-74/lane/74) ─────────────────────────────────────────────────────
+
+DELETE_COLLECTION = "c"
+WRITTEN_ID, NEVER_WRITTEN_ID = "written-id", "never-written-id"
+
+
+def _run_vectors_delete(store, embedder) -> None:
+    check_vectors_writer_delete_contract(
+        call_write=lambda: store.write(
+            PERSON, collection=DELETE_COLLECTION, id=WRITTEN_ID, text="t"
+        ),
+        call_delete_written=lambda: store.delete(
+            PERSON, collection=DELETE_COLLECTION, id=WRITTEN_ID
+        ),
+        call_delete_never_written=lambda: store.delete(
+            PERSON, collection=DELETE_COLLECTION, id=NEVER_WRITTEN_ID
+        ),
+        contains_after_delete=lambda: (DELETE_COLLECTION, WRITTEN_ID) in store._store,
+    )
+
+
+def test_V_DELETE_A_CONFORMING_VECTORS_WRITER_PASSES():
+    """POSITIVE CONTROL."""
+    embedder = _CountingEmbedder(should_fail=False)
+    _run_vectors_delete(_VectorsStore(embedder), embedder)
+
+
+def test_V_DELETE_THAT_DID_NOT_APPLY_IS_CAUGHT_BEFORE_CHECKING_PRESENCE():
+    class RefusesDelete(_VectorsStore):
+        def delete(self, initiator, *, collection, id):
+            return MeshWriteResult.refused("pretend the delete is refused")
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*did not apply"):
+        _run_vectors_delete(RefusesDelete(embedder), embedder)
+
+
+def test_V_DELETE_THAT_REPORTS_WRITTEN_BUT_LEAVES_THE_OBJECT_IS_CAUGHT():
+    """THE WRITE-SIDE LIE, REPLAYED ON THE DELETE PATH: `delete` reports `written` and the
+    fixture's own store still holds the id afterward — never actually removed."""
+
+    class DeleteIsANoOp(_VectorsStore):
+        def delete(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.delete")
+            return MeshWriteResult.written()  # never actually deletes anything
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*STILL present"):
+        _run_vectors_delete(DeleteIsANoOp(embedder), embedder)
+
+
+def test_V_DELETE_OF_A_NEVER_WRITTEN_ID_THAT_REFUSES_IS_CAUGHT():
+    """Deletion must be idempotent — a delete of an id that was never written must still report
+    an applied state, the same reasoning `MeshGraphWriter.delete_edges` states for its own
+    filter. A writer that refuses here is treating absence as an error."""
+
+    class RefusesOnUnknownId(_VectorsStore):
+        def delete(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.delete")
+            if (collection, id) not in self._store:
+                return MeshWriteResult.refused(f"no such id: {id}")
+            self._store.pop((collection, id), None)
+            return MeshWriteResult.written()
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*never written.*not an applied"):
+        _run_vectors_delete(RefusesOnUnknownId(embedder), embedder)

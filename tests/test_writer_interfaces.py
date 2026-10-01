@@ -90,8 +90,12 @@ def test_the_read_interfaces_gained_NO_new_method():
 def test_MeshGraphWriter_declares_write_and_delete_as_the_write_half():
     """AMENDED 2026-09-29, on the worker's own packet back: `delete_edges` joined `write_edge` as
     part of the write half, not a later addition — three of the registrar's four graph paths
-    delete, and the writer and the cleanup must agree on identity."""
-    assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {"write_edge", "delete_edges"}
+    delete, and the writer and the cleanup must agree on identity. AMENDED AGAIN 2026-09-30, on
+    the promotion adapter's own rejection packet back: `has_edges` joined as the existence check
+    that adapter named as missing."""
+    assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {
+        "write_edge", "delete_edges", "has_edges",
+    }
 
 
 def test_MeshOntologyWriter_requires_graph_not_optional():
@@ -107,9 +111,11 @@ def test_MeshOntologyWriter_requires_graph_not_optional():
 
 def test_MeshVectorsWriter_declares_write_and_relocate_as_SEPARATE_methods():
     """The hazard ruled against 2026-09-27: one method taking an optional vector would make
-    'supply your own vector' look like a normal parameter on the everyday write path."""
+    'supply your own vector' look like a normal parameter on the everyday write path. AMENDED
+    2026-09-30, on the promotion adapter's own rejection packet back: `delete` joined as genuinely
+    new capability — unlike the graph writer's two needs, nothing here answered it beforehand."""
     names = {n for n in dir(MeshVectorsWriter) if not n.startswith("_")}
-    assert names == {"write", "relocate"}
+    assert names == {"write", "relocate", "delete"}
 
 
 def test_write_defaults_vector_required_to_True():

@@ -39,6 +39,17 @@ which is exactly what that sentinel is for. ``standing`` for a user-dropped clai
 (nearest-to-truth first), not cosmetic, and ADR-0041's own Consequences section says so: every
 consumer that reasons over :data:`OBTAINED_VIA` by position or exhaustiveness must be re-checked
 when this tuple grows. It has now grown once, here.
+
+── `ingest_id`, ADDED 2026-09-30 ON THE v0.9.5 CUT ORDER ───────────────────────────────────────
+The promotion store (ia-74/lane/74's `IngestGraph`/`IngestIndexes`) keys its cleanup on this one
+field: a promotion or rejection deletes "everything whose block carries the id" by scoping
+``MeshGraphWriter.delete_edges`` to an :class:`iagent_mesh.interfaces.EdgeIdentityFilter` bound on
+``key=ingest_id`` alone. That only works if every fact-triple written for one ingest's provenance
+shares the same ``key`` — this field is what a caller reads to supply that key, rather than
+re-deriving or inventing a second identifier that could drift from the one actually stamped.
+Optional, like ``derived_from``: not every provenance block names an ingest at all (a path-derived
+or warehouse-sourced claim may have no single ingest act to point back to), so this is additive to
+the six required fields, never a seventh required one.
 """
 from __future__ import annotations
 
@@ -144,6 +155,12 @@ class ProvenanceBlock(BaseModel):
     derived_from: Optional[str] = None
     """Maps to ``prov:wasDerivedFrom`` (:data:`PROV_DERIVED_FROM`) on serialization. Optional —
     not every claim derives from a named prior artifact."""
+    ingest_id: Optional[str] = None
+    """Which ingest act produced this claim, when there is a single one to name. Optional, same
+    discipline as ``derived_from`` — a path-derived or warehouse-sourced claim may have no one
+    ingest to point back to. **This is the field a promotion/rejection cleanup scopes its graph
+    delete by** (`EdgeIdentityFilter(key=ingest_id)` against `MeshGraphWriter.delete_edges`) — see
+    the module docstring's "ingest_id, ADDED 2026-09-30" section."""
 
     @field_validator("authoritative_source", "as_of", "ingested_at", "ingest_run", "standing")
     @classmethod
@@ -167,8 +184,9 @@ class ProvenanceBlock(BaseModel):
 
     def as_dict(self) -> dict:
         """The wire shape :func:`make_provenance` itself returns — a plain dict with
-        ``derived_from`` present only when set, matching the original ``iagent.provenance``
-        builder's output exactly so a consumer written against either shape reads the same keys.
+        ``derived_from``/``ingest_id`` present only when set, matching the original
+        ``iagent.provenance`` builder's output exactly so a consumer written against either shape
+        reads the same keys.
         """
         block = {
             "authoritative_source": self.authoritative_source,
@@ -180,12 +198,15 @@ class ProvenanceBlock(BaseModel):
         }
         if self.derived_from:
             block["derived_from"] = self.derived_from
+        if self.ingest_id:
+            block["ingest_id"] = self.ingest_id
         return block
 
 
 def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Optional[str],
                      ingested_at: Any, ingest_run: str, standing: str,
-                     derived_from: Optional[str] = None) -> dict:
+                     derived_from: Optional[str] = None,
+                     ingest_id: Optional[str] = None) -> dict:
     """Build the block. Every field is required; there are no convenient defaults.
 
     THE BUILDER DOC-TOOLS IMPORTS. Returns a plain ``dict`` — the wire shape every consumer
@@ -229,6 +250,8 @@ def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Opti
     }
     if derived_from:
         block["derived_from"] = derived_from      # -> prov:wasDerivedFrom on serialization
+    if ingest_id:
+        block["ingest_id"] = ingest_id            # scopes a promotion/rejection cleanup delete
     return block
 
 

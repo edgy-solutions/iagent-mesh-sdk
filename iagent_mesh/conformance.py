@@ -53,6 +53,9 @@ __all__ = [
     "check_ontology_writer_contract",
     "check_graph_writer_contract",
     "check_vectors_writer_contract",
+    "check_graph_writer_has_edges_contract",
+    "check_graph_writer_key_only_delete_contract",
+    "check_vectors_writer_delete_contract",
 ]
 
 
@@ -737,3 +740,153 @@ def check_vectors_writer_contract(
                            f"relocate takes a PRECOMPUTED vector and must never embed — a relocate "
                            f"that embeds has silently turned a move into a write the caller never "
                            f"asked for")
+
+
+# ── the three arms added 2026-09-30, on the promotion adapter's rejection packet back ───────
+#
+# `MeshGraphWriter` gained `has_edges`; `MeshVectorsWriter` gained `delete`; and the convention
+# that lets `delete_edges` serve as "delete everything carrying this ingest_id" — a key-only
+# filter spanning edges that differ in subject, verb AND object — had never been proven. All
+# three close an item from `ia-74/lane/74`'s packet naming what its promotion adapter lacked.
+
+
+def check_graph_writer_has_edges_contract(
+    *,
+    call_write_edge: Callable[[], MeshWriteResult],
+    call_has_edges_matching: Callable[[], MeshResult],
+    call_has_edges_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has_edges` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline as every other arm in this module.
+
+    `call_write_edge` writes one edge the caller has already bound. `call_has_edges_matching` is a
+    `has_edges` call whose `identity_filter` matches that edge, run AFTER the write.
+    `call_has_edges_not_matching` is a `has_edges` call for a filter that matches nothing the
+    fixture ever wrote — the negative case.
+    """
+    op = "graph.has_edges"
+
+    written = call_write_edge()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has_edges against")
+
+    present = call_has_edges_matching()
+    absent = call_has_edges_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching filter", present, absent, describe=lambda r: r.outcome
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a filter matching the edge just written produced {present.outcome!r}, not "
+                  f"'answered'. The write reported success and has_edges disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a filter matching nothing the fixture ever wrote produced "
+                  f"{absent.outcome!r}, not 'empty'. A check that answers regardless of what "
+                  f"was actually written cannot prove presence OR absence")
+
+
+def check_graph_writer_key_only_delete_contract(
+    *,
+    call_write_edge_a: Callable[[], MeshWriteResult],
+    call_write_edge_b_same_key_different_triple: Callable[[], MeshWriteResult],
+    call_delete_by_key_only: Callable[[], MeshWriteResult],
+    call_read_edge_a_after_delete: Callable[[], MeshResult],
+    call_read_edge_b_after_delete: Callable[[], MeshResult],
+) -> None:
+    """THE PROPERTY THE `ingest_id` CLEANUP CONVENTION DEPENDS ON, PROVEN HERE FOR THE FIRST TIME.
+    `iagent_mesh.provenance.ProvenanceBlock.ingest_id` exists so a caller can scope
+    `delete_edges(identity_filter=EdgeIdentityFilter(key=ingest_id))` to "everything whose block
+    carries this id" — which only works if a filter bound on `key` ALONE (subject, verb and object
+    all left as wildcards) reaches every edge sharing that key, even edges that differ from each
+    other in subject, verb AND object. The 2026-09-29 key arm (`check_graph_writer_contract`) never
+    exercised this: its delete filter was always bound to subject AND verb too, scoped to one
+    (subject, verb) pair throughout. A store that happens to index deletes by (subject, verb) and
+    treats `key` as a secondary filter WITHIN that pair would pass that arm and still fail this
+    one — exactly the gap a promotion/rejection cleanup would hit silently in production.
+
+    `call_write_edge_a` and `call_write_edge_b_same_key_different_triple` write two edges sharing
+    one `key` but differing in subject, verb and object. `call_delete_by_key_only` deletes using an
+    `EdgeIdentityFilter` with ONLY `key` bound. `call_read_edge_a_after_delete` and
+    `call_read_edge_b_after_delete` each read back one of the two written triples, run AFTER the
+    delete.
+    """
+    op = "graph.delete_edges (key-only)"
+
+    a = call_write_edge_a()
+    if not a.applied:
+        _fail(op, f"writing edge A did not apply: outcome={a.outcome!r} detail={a.detail!r} — "
+                  f"nothing to verify the key-only delete against")
+
+    b = call_write_edge_b_same_key_different_triple()
+    if not b.applied:
+        _fail(op, f"writing edge B (same key, a DIFFERENT subject/verb/object) did not apply: "
+                  f"outcome={b.outcome!r} detail={b.detail!r} — nothing to verify the key-only "
+                  f"delete against")
+
+    deleted = call_delete_by_key_only()
+    if not deleted.applied:
+        _fail(op, f"the key-only delete itself did not apply: outcome={deleted.outcome!r} "
+                  f"detail={deleted.detail!r} — nothing to verify against a read")
+
+    after_a = call_read_edge_a_after_delete()
+    after_b = call_read_edge_b_after_delete()
+
+    if after_a.outcome != "empty":
+        _fail(op, f"edge A still reads back {after_a.outcome!r} after a delete scoped to its own "
+                  f"key, not 'empty'")
+    if after_b.outcome != "empty":
+        _fail(op, f"edge B — a DIFFERENT subject/verb/object sharing the SAME key as edge A — "
+                  f"still reads back {after_b.outcome!r} after the key-only delete, not 'empty'. "
+                  f"The delete reached edge A but not edge B: this store scopes a key-only filter "
+                  f"to one triple rather than to every edge sharing the key, which is exactly the "
+                  f"property an ingest_id-scoped cleanup depends on and would silently leave "
+                  f"orphaned edges behind on a real promotion/rejection")
+
+
+def check_vectors_writer_delete_contract(
+    *,
+    call_write: Callable[[], MeshWriteResult],
+    call_delete_written: Callable[[], MeshWriteResult],
+    call_delete_never_written: Callable[[], MeshWriteResult],
+    contains_after_delete: Callable[[], bool],
+) -> None:
+    """The `delete` contract. `MeshVectors.nominate` is fuzzy and ranked, not a deterministic
+    oracle for presence — the same limit `check_vectors_writer_contract` names for `write`/
+    `relocate` — so this arm proves a STRUCTURAL property the implementer's own fixture exposes
+    directly (`contains_after_delete`, the same pattern as that arm's `embed_call_count`), rather
+    than a read-side round trip through semantic search.
+
+    `call_write` writes one object the caller has already bound. `call_delete_written` deletes
+    that SAME id, run after the write. `contains_after_delete` is the fixture's own introspection
+    on its backing store, called after that delete. `call_delete_never_written` deletes a
+    DIFFERENT id the fixture never wrote — the idempotency case `MeshGraphWriter.delete_edges`
+    already states ("a filter matching nothing still reports written").
+    """
+    write_op = "vectors.write"
+    delete_op = "vectors.delete"
+
+    written = call_write()
+    if not written.applied:
+        _fail(write_op, f"the write itself did not apply: outcome={written.outcome!r} "
+                        f"detail={written.detail!r} — nothing to verify delete against")
+
+    deleted = call_delete_written()
+    if not deleted.applied:
+        _fail(delete_op, f"deleting the id just written did not apply: outcome={deleted.outcome!r} "
+                         f"detail={deleted.detail!r}")
+
+    if contains_after_delete():
+        _fail(delete_op, "the id written above is STILL present after delete reported applied — "
+                         "the same write-side lie this suite refuses to trust from a reported "
+                         "outcome alone, now on the delete path")
+
+    idempotent = call_delete_never_written()
+    if not idempotent.applied:
+        _fail(delete_op, f"deleting an id that was never written produced "
+                         f"outcome={idempotent.outcome!r}, not an applied state. Deletion must be "
+                         f"idempotent — the store now satisfies 'this id is absent', which may "
+                         f"already have been true, the same reasoning "
+                         f"MeshGraphWriter.delete_edges applies to a filter matching zero edges")

@@ -68,6 +68,14 @@ class JenaOntologyWriter:
     Structurally satisfies ``iagent_mesh.interfaces.MeshOntologyWriter`` (a ``runtime_checkable``
     Protocol) by matching its method — there is no inheritance here on purpose, the same
     structural-typing posture the read Protocols already use throughout this SDK.
+
+    **EXPERIMENTAL, AS OF v0.9.5.** This is a reference implementation written and conformance-
+    tested against the Protocol it satisfies; it has no caller in this fleet yet. The three writer
+    Protocols it ships alongside (``MeshGraphWriter``, ``MeshVectorsWriter``, ``MeshOntologyWriter``
+    itself) are stable contracts — this class is one implementation of one of them, not yet proven
+    against a live Fuseki outside sandbox measurement. **First caller lands in 0.9.6.** Treat this
+    class as a worked example of what satisfying ``MeshOntologyWriter`` looks like, not yet as a
+    production dependency.
     """
 
     def __init__(self, *, base_url: str, dataset: str, timeout: float = 10.0) -> None:

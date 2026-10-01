@@ -65,6 +65,18 @@ def test_derived_from_appears_only_when_set():
     assert block.as_dict()["derived_from"] == "urn:pcn:12345"
 
 
+def test_ingest_id_appears_only_when_set():
+    """Same discipline as `derived_from`, same test shape — `ingest_id` is additive, optional,
+    and present on the wire only when a caller actually names an ingest act."""
+    with_ingest = make_provenance(**VALID, ingest_id="ingest-2026-09-30-001")
+    assert with_ingest["ingest_id"] == "ingest-2026-09-30-001"
+    assert "ingest_id" not in make_provenance(**VALID)
+
+    block = ProvenanceBlock(**VALID, ingest_id="ingest-2026-09-30-001")
+    assert block.as_dict()["ingest_id"] == "ingest-2026-09-30-001"
+    assert "ingest_id" not in ProvenanceBlock(**VALID).as_dict()
+
+
 # ── the ordered tuple, and `user-drop` as its fifth, farthest rung (ADR-0041 §2) ──────────
 
 def test_obtained_via_is_the_five_rung_tuple_ruled_by_adr_0041():
