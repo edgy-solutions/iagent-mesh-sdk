@@ -305,7 +305,45 @@ class MeshGraph(Protocol):
         """
 
     def verbs_for(self, initiator: Initiator, subject: str, *, max_hops: int) -> MeshResult:
-        """Predicates that can operate on ``subject``, walking the ancestor chain."""
+        """Predicates that can operate on ``subject``, walking the ancestor chain.
+
+        **ROW SHAPE WIDENED, 2026-10-02** — closing the gap ia-74 routed: "the Protocol declares
+        no row shape... it returns 4 fields, the route returns 14." The richer row
+        (``ontology_service``'s ``/find_compatible_verbs`` — "the route") is now this method's
+        declared shape, not a narrower one some implementations happen to answer with:
+
+        | field | meaning |
+        |---|---|
+        | ``verb_iri`` | the predicate's full IRI |
+        | ``verb_local`` | the predicate's local name. **Renamed from this SDK's prior ``verb_type``** — one fact, one name; an implementation widening to this shape renames the field, it does not carry both |
+        | ``input_uri`` | the class this verb's input must satisfy |
+        | ``output_uri`` | the class this verb's output satisfies |
+        | ``endpoint_url`` | where the verb is registered to be called, or ``None`` |
+        | ``owner_persona`` | the persona that registered it, or ``None`` |
+        | ``domains`` | the domains it is scoped to; empty means domain-agnostic |
+        | ``cost_class`` | its registered cost class, or ``None`` |
+        | ``requires_human_approval`` | declared at registration, never inferred |
+        | ``hops`` | ancestor-chain distance from ``subject`` to the class that admitted this verb |
+        | ``compatibility`` | which rule admitted it — ``"subject"`` (operates on ``subject`` directly) today; a non-``"subject"`` value is reserved, not yet produced by this leg |
+        | ``slots`` | the verb's declared slot requirements, as the JSON string the route already carries them in — not decoded here |
+        | ``arity`` | declared input cardinality (``"single"``/``"set"``/``"any"``), or ``None`` |
+        | ``required_args`` | declared argument keys the verb cannot run without; empty means unconstrained |
+
+        **Scope of this widening, stated so it is not assumed wider than it is:** this is the ROW
+        shape only. ``verbs_for`` still walks exactly the ancestor chain it always has — what
+        ia-74 named LEG 1 (coverage). It does **not** add LEG 2 (a verb admitted because a
+        *referent* slot covers ``subject``, not ``subject`` itself) or LEG 3 (the universal
+        referent set, every subject's ``mesh:explain``), and it takes no new parameter for either.
+        Those stay future, unscoped work — ia-74's report measured LEG 2 adding verbs on 4 of
+        1070 subjects and found LEG 3 dead by construction (a service identity cannot reach it;
+        a design question for a person, not a lane fix), and today's order rules the row's shape,
+        not the walk's reach. A ``compatibility`` value other than ``"subject"`` is reserved for
+        whenever that ruling lands, not produced by this leg now.
+
+        No conformance arm exists yet for this method, or for any ``MeshGraph`` read — unlike
+        ``MeshGraphWriter``, this Protocol has none today. Widening the row shape does not open
+        one; that is a separate, larger undertaking this order does not ask for.
+        """
 
     def ancestors(self, initiator: Initiator, iri: str, *, max_hops: int) -> MeshResult:
         """The ``subClassOf`` chain.
@@ -1053,6 +1091,37 @@ class MeshGraphWriter(Protocol):
         reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds. An implementation
         that reported failure for a never-written ``(label, id)`` would be treating "nothing to
         delete" as an error, which is exactly the defect this contract refuses.
+
+        **STATED, 2026-10-02 (closing the gap ia-74 routed: "is it refused, DETACHed, or
+        left?"): a node that still has edges naming it is IMPLEMENTATION-DEFINED, not fixed by
+        this Protocol — refuse, detach-and-delete, or delete-and-leave-dangling are all
+        conforming, and this is a deliberate non-mandate, not an oversight.**
+
+        ``write_node``/``has_node``/``delete_node`` key on ``(label, id)``; ``write_edge``/
+        ``has_edges``/``delete_edges`` key on ``EdgeIdentity``'s ``(subject, verb, object, key)``.
+        Nothing in this Protocol couples the two spaces — an edge's ``subject``/``object`` are
+        opaque strings, never validated against a node's ``(label, id)`` at write time.
+
+        **Why no universal answer: the three choices are not equally available on every
+        backend.** A property-graph store (Neo4j and similar) cannot represent a dangling
+        relationship at all — every relationship requires two live endpoint nodes, so deleting a
+        node that still has edges either fails outright or must ``DETACH``-delete them with it;
+        "leave" is not a storage state that backend can be in. A triple store has no such
+        constraint — a dangling reference is an ordinary, representable fact there, and "leave"
+        costs that implementation nothing. Mandating "leave" at the Protocol level would make it
+        unimplementable on the first backend; mandating "refuse" or "DETACH" would force a
+        referential-integrity walk the second backend's model does not otherwise require. Each
+        implementation picks the one its own backend actually supports and **documents which**,
+        on this method, in its own words — the same "a conscious, discoverable choice, not an
+        accident of the backend's native constraints" discipline this Protocol already asks of
+        every behavioral fork. Conformance can and should assert the implementation DOCUMENTS its
+        choice; it cannot assert WHICH one, because there is no universal right answer to assert
+        against.
+
+        For a Neo4j-backed implementation specifically: refuse or ``DETACH DELETE`` are the only
+        two storage-level options. A caller who wants delete-then-clean-edges can always do that
+        itself with an explicit ``delete_edges`` call first, regardless of which choice this
+        method's own implementation makes — that composition works under either.
         """
 
 
