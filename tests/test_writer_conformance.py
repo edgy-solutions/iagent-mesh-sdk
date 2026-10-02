@@ -18,7 +18,9 @@ import pytest
 from iagent_mesh.conformance import (
     ConformanceFailure,
     check_graph_writer_contract,
+    check_graph_writer_delete_node_contract,
     check_graph_writer_has_edges_contract,
+    check_graph_writer_has_node_contract,
     check_graph_writer_key_only_delete_contract,
     check_graph_writer_write_node_contract,
     check_ontology_writer_contract,
@@ -280,6 +282,17 @@ class _EdgeStore:
     ) -> MeshWriteResult:
         initiator.require_person_or_delegate("graph.write_node")
         self._nodes[(label, id)] = dict(payload or {})
+        return MeshWriteResult.written()
+
+    def has_node(self, initiator: Initiator, *, label: str, id: str) -> MeshResult:
+        initiator.require_person_or_delegate("graph.has_node")
+        if (label, id) in self._nodes:
+            return MeshResult.answered([dict(self._nodes[(label, id)])])
+        return MeshResult.empty()
+
+    def delete_node(self, initiator: Initiator, *, label: str, id: str) -> MeshWriteResult:
+        initiator.require_person_or_delegate("graph.delete_node")
+        self._nodes.pop((label, id), None)
         return MeshWriteResult.written()
 
 
@@ -977,3 +990,133 @@ def test_G_WRITE_NODE_THAT_APPENDS_INSTEAD_OF_UPSERTING_IS_CAUGHT():
 
     with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
         _run_write_node(AppendsInsteadOfUpserting())
+
+
+# ── check_graph_writer_has_node_contract, added 2026-10-01 — opens v0.9.7 scope, the read half
+# write_node's own docstring left open ──────────────────────────────────────────────────────────
+
+HAS_NODE_LABEL = "Ingest"
+HAS_NODE_ID = "ingest:2026-10-01-has-node"
+UNWRITTEN_NODE_LABEL = "Ingest"
+UNWRITTEN_NODE_ID = "ingest:2026-10-01-never-written"
+
+
+def _run_has_node(store) -> None:
+    check_graph_writer_has_node_contract(
+        call_write_node=lambda: store.write_node(
+            PERSON, label=HAS_NODE_LABEL, id=HAS_NODE_ID, payload={"stage": "received"}
+        ),
+        call_has_node_matching=lambda: store.has_node(
+            PERSON, label=HAS_NODE_LABEL, id=HAS_NODE_ID
+        ),
+        call_has_node_not_matching=lambda: store.has_node(
+            PERSON, label=UNWRITTEN_NODE_LABEL, id=UNWRITTEN_NODE_ID
+        ),
+    )
+
+
+def test_G_HAS_NODE_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_has_node(_EdgeStore())
+
+
+def test_G_HAS_NODE_THAT_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_EdgeStore):
+        def has_node(self, initiator, *, label, id):
+            initiator.require_person_or_delegate("graph.has_node")
+            return MeshResult.answered([{"stage": "received"}])
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_has_node(AlwaysAnswers())
+
+
+def test_G_HAS_NODE_THAT_CANNOT_FIND_THE_WRITTEN_NODE_IS_CAUGHT():
+    class CannotFind(_EdgeStore):
+        def has_node(self, initiator, *, label, id):
+            initiator.require_person_or_delegate("graph.has_node")
+            if (label, id) == (HAS_NODE_LABEL, HAS_NODE_ID):
+                return MeshResult.failed("simulated: the written node is not actually findable")
+            return super().has_node(initiator, label=label, id=id)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.has_node.*not 'answered'"):
+        _run_has_node(CannotFind())
+
+
+def test_G_HAS_NODE_THAT_ANSWERS_FOR_AN_UNWRITTEN_NODE_TOO_IS_CAUGHT():
+    class AnswersForUnwritten(_EdgeStore):
+        def has_node(self, initiator, *, label, id):
+            initiator.require_person_or_delegate("graph.has_node")
+            if (label, id) == (UNWRITTEN_NODE_LABEL, UNWRITTEN_NODE_ID):
+                return MeshResult.failed("simulated: errors instead of answering empty")
+            return super().has_node(initiator, label=label, id=id)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.has_node.*not 'empty'"):
+        _run_has_node(AnswersForUnwritten())
+
+
+# ── check_graph_writer_delete_node_contract, added 2026-10-01 — opens v0.9.7 scope, the cleanup
+# half write_node's own docstring left open ─────────────────────────────────────────────────────
+
+DELETE_NODE_LABEL = "Ingest"
+DELETE_NODE_ID = "ingest:2026-10-01-delete-node"
+NEVER_WRITTEN_DELETE_LABEL = "Ingest"
+NEVER_WRITTEN_DELETE_ID = "ingest:2026-10-01-delete-never-written"
+
+
+def _run_delete_node(store) -> None:
+    check_graph_writer_delete_node_contract(
+        call_write_node=lambda: store.write_node(
+            PERSON, label=DELETE_NODE_LABEL, id=DELETE_NODE_ID, payload={"stage": "received"}
+        ),
+        call_delete_node=lambda: store.delete_node(
+            PERSON, label=DELETE_NODE_LABEL, id=DELETE_NODE_ID
+        ),
+        node_present_after_delete=lambda: (DELETE_NODE_LABEL, DELETE_NODE_ID) in store._nodes,
+        call_delete_node_never_written=lambda: store.delete_node(
+            PERSON, label=NEVER_WRITTEN_DELETE_LABEL, id=NEVER_WRITTEN_DELETE_ID
+        ),
+    )
+
+
+def test_G_DELETE_NODE_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_delete_node(_EdgeStore())
+
+
+def test_G_DELETE_NODE_THAT_DID_NOT_APPLY_IS_CAUGHT_BEFORE_CHECKING_THE_STORE():
+    class RefusesDelete(_EdgeStore):
+        def delete_node(self, initiator, *, label, id):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_node.*did not apply"):
+        _run_delete_node(RefusesDelete())
+
+
+def test_G_DELETE_NODE_THAT_REPORTS_WRITTEN_BUT_DELETES_NOTHING_IS_CAUGHT():
+    """The write-side lie, replayed on the delete path: `delete_node` reports `written` and the
+    fixture's own introspection proves the node is still there."""
+
+    class DeleteIsANoOp(_EdgeStore):
+        def delete_node(self, initiator, *, label, id):
+            initiator.require_person_or_delegate("graph.delete_node")
+            return MeshWriteResult.written()  # never actually deletes anything
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_node.*STILL present"):
+        _run_delete_node(DeleteIsANoOp())
+
+
+def test_G_DELETE_NODE_THAT_TREATS_NEVER_WRITTEN_AS_A_FAILURE_IS_CAUGHT():
+    """THE DEFECT THIS ARM EXISTS TO CATCH: an implementation that treats "nothing to delete" as
+    an ERROR rather than an idempotent success — deleting a (label, id) that was never written
+    must still report applied, the same reasoning `delete_edges` already states for a filter
+    matching zero edges."""
+
+    class RefusesOnNeverWritten(_EdgeStore):
+        def delete_node(self, initiator, *, label, id):
+            initiator.require_person_or_delegate("graph.delete_node")
+            if (label, id) not in self._nodes:
+                return MeshWriteResult.refused("pretend a never-written node is an error")
+            return super().delete_node(initiator, label=label, id=id)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.delete_node.*never written.*not an applied state"):
+        _run_delete_node(RefusesOnNeverWritten())

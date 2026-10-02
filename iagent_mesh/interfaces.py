@@ -920,6 +920,32 @@ class MeshGraphWriter(Protocol):
     that node's payload, not mint a second node silently coexisting with the first. A writer that
     treated repeat writes as inserts would leave an ingest with as many phantom nodes as it had
     status transitions — exactly the defect an upsert contract exists to refuse.
+
+    **AMENDED AGAIN, 2026-10-01 — OPENS v0.9.7 SCOPE, ON THE ARCHITECT'S OWN ORDER.** The note just
+    above said neither ``delete_node`` nor ``has_node`` ships alongside ``write_node``, and that
+    either could follow on its own packet back — this is that packet. Both are genuinely NEW
+    methods beside the three ``write_node`` already sits with, not signature changes to any of
+    them; v0.9.6 is the release ``write_node`` itself opened scope under, so the same
+    widening-is-a-new-method rule already governs this amendment.
+
+    ``has_node`` is ``has_edges`` answered for a node instead of an edge: the same existence-check
+    need (idempotency before a write-or-delete decision, not routing), the same reason it lives
+    here rather than on the read-only :class:`MeshGraph` (whose reads may be served from a cached
+    or derived projection, and would not guarantee read-your-own-write consistency for this
+    writer's own prior writes), and the same :class:`MeshResult` return — ``outcome="answered"``
+    or ``outcome="empty"``, never a bare ``bool``. It is keyed on plain ``(label, id)``, exactly
+    the two arguments ``write_node`` already takes, rather than wrapped in a filter type the way
+    ``has_edges`` is scoped by :class:`EdgeIdentityFilter`: a node's identity is already two
+    required keyword arguments with no optional/wildcard axis the way an edge's four fields have,
+    so there is nothing a filter wrapper would earn its keep by serving here.
+
+    ``delete_node`` mirrors ``delete_edges``'s own idempotency, not its filter shape: deleting a
+    ``(label, id)`` that was never written still reports success, the same reasoning
+    ``delete_edges``'s own docstring states for a filter matching zero edges — a
+    ``DELETE ... WHERE`` with no matching rows still succeeds, and the store now satisfies "this
+    node is absent", which may already have been true. It is keyed on ``(label, id)`` for the same
+    reason ``has_node`` is: that pair is this Protocol's whole notion of a node's identity, stated
+    once by ``write_node`` and reused rather than re-invented by its two siblings.
     """
 
     def write_edge(
@@ -989,6 +1015,44 @@ class MeshGraphWriter(Protocol):
         :class:`iagent_mesh.ingest.IngestStatus` stage transition, and every one of those writes
         must reach the SAME node, the way a row update reaches the same row — if it minted a new
         node per write, "the ingest node" would stop meaning any one thing.
+        """
+
+    def has_node(self, initiator: Initiator, *, label: str, id: str) -> MeshResult:
+        """Does a node of kind ``label`` at ``id`` exist? Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-10-01**, opening v0.9.7 scope — the read half ``write_node``'s own docstring
+        named as something that could follow on its own packet back. Keyed on plain ``(label,
+        id)``, the same two arguments ``write_node`` takes, rather than wrapped in a filter type:
+        a node's identity has no optional/wildcard axis the way :class:`EdgeIdentityFilter`'s four
+        fields do, so a bespoke filter would earn its keep by serving nothing here.
+
+        Lives on the writer rather than the read-only :class:`MeshGraph`, for the SAME reason
+        ``has_edges`` does: a caller needing to check a node's presence before deciding whether to
+        write or delete it needs read-your-own-write consistency for THIS writer's own prior
+        writes, which a `MeshGraph` read — possibly served from a cached or derived projection —
+        would not guarantee.
+
+        Returns ``MeshResult`` with ``outcome="answered"`` and ``rows`` non-empty when the node
+        exists, ``outcome="empty"`` when it does not — never a bare ``bool``, the same discipline
+        ``has_edges`` already applies, so "determined absent" stays distinguishable from "could
+        not determine".
+        """
+
+    def delete_node(self, initiator: Initiator, *, label: str, id: str) -> MeshWriteResult:
+        """Remove the node of kind ``label`` at ``id``, if one exists. Person or delegate only —
+        see :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-10-01**, opening v0.9.7 scope, alongside ``has_node`` — the cleanup half
+        ``write_node``'s own docstring left open. Keyed on the same ``(label, id)`` pair
+        ``write_node`` and ``has_node`` use, this Protocol's one notion of a node's identity.
+
+        Idempotent, the SAME reasoning ``delete_edges`` states for its own filter: a ``(label,
+        id)`` matching no node still reports ``written``, because the store now satisfies "this
+        node is absent", which may already have been true — deletion is idempotent by the same
+        reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds. An implementation
+        that reported failure for a never-written ``(label, id)`` would be treating "nothing to
+        delete" as an error, which is exactly the defect this contract refuses.
         """
 
 

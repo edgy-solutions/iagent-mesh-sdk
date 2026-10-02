@@ -57,6 +57,8 @@ __all__ = [
     "check_graph_writer_key_only_delete_contract",
     "check_vectors_writer_delete_contract",
     "check_graph_writer_write_node_contract",
+    "check_graph_writer_has_node_contract",
+    "check_graph_writer_delete_node_contract",
 ]
 
 
@@ -960,3 +962,97 @@ def check_graph_writer_write_node_contract(
     if second_payload is None:
         _fail(op, "the second write reported success and the fixture's own introspection finds "
                   "no node at this (label, id) afterward")
+
+
+# ── check_graph_writer_has_node_contract / check_graph_writer_delete_node_contract, added
+# 2026-10-01 — opens v0.9.7 scope, for the read and cleanup halves write_node's own docstring
+# left open ───────────────────────────────────────────────────────────────────────────────────
+
+
+def check_graph_writer_has_node_contract(
+    *,
+    call_write_node: Callable[[], MeshWriteResult],
+    call_has_node_matching: Callable[[], MeshResult],
+    call_has_node_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has_node` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline `check_graph_writer_has_edges_contract` already applies to edges, adapted
+    to a node's `(label, id)` key instead of an edge's `identity_filter`. `has_node` returns
+    `MeshResult`, the same as `has_edges`, so the method's own return value IS the oracle here —
+    no structural introspection callable is needed, unlike `check_graph_writer_write_node_contract`
+    and `check_graph_writer_delete_node_contract`, which have no read-side Protocol method to call.
+
+    `call_write_node` writes one node the caller has already bound. `call_has_node_matching` is a
+    `has_node` call for that SAME `(label, id)`, run AFTER the write. `call_has_node_not_matching`
+    is a `has_node` call for a `(label, id)` the fixture never wrote — the negative case.
+    """
+    op = "graph.has_node"
+
+    written = call_write_node()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has_node against")
+
+    present = call_has_node_matching()
+    absent = call_has_node_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching (label, id)", present, absent, describe=lambda r: r.outcome
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a (label, id) matching the node just written produced {present.outcome!r}, "
+                  f"not 'answered'. The write reported success and has_node disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a (label, id) the fixture never wrote produced {absent.outcome!r}, not "
+                  f"'empty'. A check that answers regardless of what was actually written cannot "
+                  f"prove presence OR absence")
+
+
+def check_graph_writer_delete_node_contract(
+    *,
+    call_write_node: Callable[[], MeshWriteResult],
+    call_delete_node: Callable[[], MeshWriteResult],
+    node_present_after_delete: Callable[[], bool],
+    call_delete_node_never_written: Callable[[], MeshWriteResult],
+) -> None:
+    """The `delete_node` contract. `MeshGraphWriter` has no node-read Protocol method (the same
+    limitation `check_graph_writer_write_node_contract` already works around for `write_node`), so
+    this arm proves a STRUCTURAL property the implementer's own fixture exposes directly
+    (`node_present_after_delete`), the same pattern `check_vectors_writer_delete_contract` uses for
+    `contains_after_delete` when no deterministic read-side oracle exists.
+
+    `call_write_node` writes one node the caller has already bound. `call_delete_node` deletes
+    that SAME `(label, id)`, run after the write. `node_present_after_delete` is the fixture's own
+    introspection on its backing store for that `(label, id)`, called after that delete.
+    `call_delete_node_never_written` deletes a DIFFERENT `(label, id)` the fixture never wrote —
+    the idempotency case `delete_edges`'s own docstring already states ("a filter matching nothing
+    still reports written"), which `delete_node` must honour identically: "nothing to delete" is
+    success, never an error.
+    """
+    op = "graph.delete_node"
+
+    written = call_write_node()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify delete_node against")
+
+    deleted = call_delete_node()
+    if not deleted.applied:
+        _fail(op, f"deleting the (label, id) just written did not apply: "
+                  f"outcome={deleted.outcome!r} detail={deleted.detail!r}")
+
+    if node_present_after_delete():
+        _fail(op, "the node written above is STILL present after delete_node reported applied — "
+                  "the same write-side lie this suite refuses to trust from a reported outcome "
+                  "alone, now on the delete path")
+
+    idempotent = call_delete_node_never_written()
+    if not idempotent.applied:
+        _fail(op, f"deleting a (label, id) that was never written produced "
+                  f"outcome={idempotent.outcome!r}, not an applied state. Deletion must be "
+                  f"idempotent — the store now satisfies 'this node is absent', which may already "
+                  f"have been true, the same reasoning delete_edges applies to a filter matching "
+                  f"zero edges. Treating 'nothing to delete' as a failure is exactly the defect "
+                  f"this arm exists to catch")
