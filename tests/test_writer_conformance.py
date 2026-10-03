@@ -20,6 +20,7 @@ from iagent_mesh.conformance import (
     check_graph_writer_contract,
     check_graph_writer_has_edges_contract,
     check_graph_writer_key_only_delete_contract,
+    check_graph_writer_write_node_contract,
     check_ontology_writer_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
@@ -208,10 +209,15 @@ def test_A_CONFORMING_VECTORS_WRITER_PASSES_BOTH_OPERATIONS():
 class _EdgeStore:
     """The reference pair: a dict keyed by (subject, verb), holding every `key` written for that
     pair. Broken variants below override `write_edge` or `edge` to answer independently of what
-    was actually written."""
+    was actually written.
+
+    Also holds `_nodes`, keyed by (label, id) — `write_node`'s own storage, added 2026-10-01.
+    Separate dict from `_by_pair` on purpose: a node is not an edge, and conflating their storage
+    would let a node-id collision with a (subject, verb) pair go unnoticed."""
 
     def __init__(self) -> None:
         self._by_pair: dict[tuple[str, str], dict[str, str]] = {}
+        self._nodes: dict[tuple[str, str], dict[str, str]] = {}
 
     def write_edge(
         self, initiator: Initiator, *, identity: EdgeIdentity, payload=None
@@ -268,6 +274,13 @@ class _EdgeStore:
         if not matches:
             return MeshResult.empty()
         return MeshResult.answered(matches)
+
+    def write_node(
+        self, initiator: Initiator, *, label: str, id: str, payload=None
+    ) -> MeshWriteResult:
+        initiator.require_person_or_delegate("graph.write_node")
+        self._nodes[(label, id)] = dict(payload or {})
+        return MeshWriteResult.written()
 
 
 WRITTEN_SUBJECT, WRITTEN_VERB, WRITTEN_OBJECT = "ex:alice", "ex:knows", "ex:bob"
@@ -880,3 +893,87 @@ def test_V_DELETE_OF_A_NEVER_WRITTEN_ID_THAT_REFUSES_IS_CAUGHT():
     embedder = _CountingEmbedder(should_fail=False)
     with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*never written.*not an applied"):
         _run_vectors_delete(RefusesOnUnknownId(embedder), embedder)
+
+
+# ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
+# moving the ingest node off Neo4jIngestGraph ───────────────────────────────────────────────
+
+NODE_LABEL = "Ingest"
+NODE_ID = "ingest:2026-10-01-001"
+FIRST_NODE_PAYLOAD = {"stage": "received"}
+SECOND_NODE_PAYLOAD = {"stage": "extracting"}
+
+
+def _run_write_node(store) -> None:
+    check_graph_writer_write_node_contract(
+        call_write_node=lambda: store.write_node(
+            PERSON, label=NODE_LABEL, id=NODE_ID, payload=FIRST_NODE_PAYLOAD
+        ),
+        node_payload_after_write=lambda: store._nodes.get((NODE_LABEL, NODE_ID)),
+        call_write_node_again_same_id_different_payload=lambda: store.write_node(
+            PERSON, label=NODE_LABEL, id=NODE_ID, payload=SECOND_NODE_PAYLOAD
+        ),
+        node_payload_after_second_write=lambda: store._nodes.get((NODE_LABEL, NODE_ID)),
+    )
+
+
+def test_G_WRITE_NODE_A_CONFORMING_GRAPH_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_write_node(_EdgeStore())
+
+
+def test_G_WRITE_NODE_THAT_DID_NOT_APPLY_IS_CAUGHT_BEFORE_CHECKING_THE_STORE():
+    class RefusesWrite(_EdgeStore):
+        def write_node(self, initiator, *, label, id, payload=None):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_node.*did not apply"):
+        _run_write_node(RefusesWrite())
+
+
+def test_G_WRITE_NODE_SECOND_WRITE_THAT_DID_NOT_APPLY_IS_CAUGHT():
+    """The first write passes; the SECOND write is refused — caught by name, before the
+    discriminate check that follows it is ever reached."""
+
+    class RefusesSecondWrite(_EdgeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self._writes = 0
+
+        def write_node(self, initiator, *, label, id, payload=None):
+            self._writes += 1
+            if self._writes == 2:
+                return MeshWriteResult.refused("pretend the second write is refused")
+            return super().write_node(initiator, label=label, id=id, payload=payload)
+
+    with pytest.raises(ConformanceFailure, match=r"graph\.write_node.*second write.*did not apply"):
+        _run_write_node(RefusesSecondWrite())
+
+
+def test_G_WRITE_NODE_THAT_STORES_NOTHING_IS_CAUGHT_BY_THE_FIXTURE_CHECK():
+    """`written` reported twice, nothing ever persisted — both introspection reads come back
+    `None`, caught by the discriminate check before either is read individually."""
+
+    class Lost(_EdgeStore):
+        def write_node(self, initiator, *, label, id, payload=None):
+            initiator.require_person_or_delegate("graph.write_node")
+            return MeshWriteResult.written()  # never actually stores anything
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_write_node(Lost())
+
+
+def test_G_WRITE_NODE_THAT_APPENDS_INSTEAD_OF_UPSERTING_IS_CAUGHT():
+    """THE DEFECT THIS ARM EXISTS TO CATCH: a store that treats `write_node` like `write_edge` —
+    the first write lands, the second is silently ignored (`setdefault`, never overwritten) —
+    so a read after each write comes back identical, the same `(label, id)` frozen at its first
+    payload forever. Caught by the discriminate check: two reads that must differ, didn't."""
+
+    class AppendsInsteadOfUpserting(_EdgeStore):
+        def write_node(self, initiator, *, label, id, payload=None):
+            initiator.require_person_or_delegate("graph.write_node")
+            self._nodes.setdefault((label, id), dict(payload or {}))
+            return MeshWriteResult.written()
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_write_node(AppendsInsteadOfUpserting())

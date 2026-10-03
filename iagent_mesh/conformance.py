@@ -26,7 +26,7 @@ their store; it asserts that fixture discriminates before trusting it.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .interfaces import (
     MESH_COLLECTION_META,
@@ -56,6 +56,7 @@ __all__ = [
     "check_graph_writer_has_edges_contract",
     "check_graph_writer_key_only_delete_contract",
     "check_vectors_writer_delete_contract",
+    "check_graph_writer_write_node_contract",
 ]
 
 
@@ -890,3 +891,72 @@ def check_vectors_writer_delete_contract(
                          f"idempotent — the store now satisfies 'this id is absent', which may "
                          f"already have been true, the same reasoning "
                          f"MeshGraphWriter.delete_edges applies to a filter matching zero edges")
+
+
+# ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
+# moving the ingest node off Neo4jIngestGraph ───────────────────────────────────────────────
+
+
+def check_graph_writer_write_node_contract(
+    *,
+    call_write_node: Callable[[], MeshWriteResult],
+    node_payload_after_write: Callable[[], Optional[Mapping[str, str]]],
+    call_write_node_again_same_id_different_payload: Callable[[], MeshWriteResult],
+    node_payload_after_second_write: Callable[[], Optional[Mapping[str, str]]],
+) -> None:
+    """The `write_node` contract. `MeshGraphWriter` has no node-read operation of its own (reads
+    here are all edge-shaped — `MeshGraph.edge`, `MeshGraphWriter.has_edges` — and there is
+    deliberately no `has_node` in this amendment, see the Protocol's own 2026-10-01 note), so this
+    arm proves a STRUCTURAL property the implementer's own fixture exposes directly
+    (`node_payload_after_write`), the same pattern `check_vectors_writer_delete_contract` uses for
+    `contains_after_delete` when no deterministic read-side oracle exists.
+
+    THE PROPERTY THIS ARM EXISTS TO CATCH, SPECIFICALLY: `write_node` is an UPSERT, the opposite
+    of `write_edge`'s key-grants-multiplicity rule. `call_write_node` and
+    `call_write_node_again_same_id_different_payload` write to the SAME `(label, id)` with
+    DIFFERING payloads — a conforming store's `node_payload_after_second_write` must reflect the
+    SECOND write, never the first, and must not be reachable as two separate nodes. A store that
+    treated `write_node` like `write_edge` — appending, or silently keeping the first write in
+    place — leaves `node_payload_after_write` and `node_payload_after_second_write` reading back
+    the SAME value, caught by `assert_fixture_discriminates` the same way
+    `check_graph_writer_contract`'s own "stores nothing" case is: two observations that must
+    differ and didn't. This is exactly the defect Lane 1's repeated per-stage writes would hit in
+    production (as many phantom ingest nodes, or one frozen one, as status transitions).
+
+    `call_write_node` writes one node the caller has already bound. `node_payload_after_write` is
+    the fixture's own introspection on its backing store for that `(label, id)`, called after the
+    write. `call_write_node_again_same_id_different_payload` writes the SAME `(label, id)` again
+    with a payload the caller has bound to differ from the first.
+    `node_payload_after_second_write` is the same introspection, called after the second write.
+    """
+    op = "graph.write_node"
+
+    written = call_write_node()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify against the store")
+
+    first_payload = node_payload_after_write()
+
+    second = call_write_node_again_same_id_different_payload()
+    if not second.applied:
+        _fail(op, f"a second write to the SAME (label, id) with a different payload did not "
+                  f"apply: outcome={second.outcome!r} detail={second.detail!r} — nothing to "
+                  f"verify the upsert property against")
+
+    second_payload = node_payload_after_second_write()
+
+    # THE FIXTURE MUST DISCRIMINATE: a store that persists nothing (both reads come back None) or
+    # that silently ignores the second write (both reads come back the FIRST payload) looks
+    # identical here, and both ARE the defect this arm exists to catch.
+    assert_fixture_discriminates(
+        f"{op} first vs second payload", first_payload, second_payload, describe=lambda p: p
+    )
+
+    if first_payload is None:
+        _fail(op, "the first write reported success and the fixture's own introspection finds no "
+                  "node at this (label, id) afterward — the write-side lie this suite refuses to "
+                  "trust from a reported outcome alone")
+    if second_payload is None:
+        _fail(op, "the second write reported success and the fixture's own introspection finds "
+                  "no node at this (label, id) afterward")

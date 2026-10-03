@@ -92,9 +92,12 @@ def test_MeshGraphWriter_declares_write_and_delete_as_the_write_half():
     part of the write half, not a later addition — three of the registrar's four graph paths
     delete, and the writer and the cleanup must agree on identity. AMENDED AGAIN 2026-09-30, on
     the promotion adapter's own rejection packet back: `has_edges` joined as the existence check
-    that adapter named as missing."""
+    that adapter named as missing. AMENDED AGAIN 2026-10-01, opening v0.9.6 scope on the
+    architect's own order: `write_node` joined as a genuinely NEW method (v0.9.5 tagged this
+    Protocol, so widening it now means exactly that, per the Protocol's own 2026-09-29 rule) — for
+    Lane 1 moving the ingest node off `Neo4jIngestGraph`."""
     assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {
-        "write_edge", "delete_edges", "has_edges",
+        "write_edge", "delete_edges", "has_edges", "write_node",
     }
 
 

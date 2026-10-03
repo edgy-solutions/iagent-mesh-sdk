@@ -890,6 +890,36 @@ class MeshGraphWriter(Protocol):
     ``check_graph_writer_key_only_delete_contract`` in ``iagent_mesh.conformance``, the new arm
     added alongside this amendment. "Any delete on the vectors writer" is answered on
     :class:`MeshVectorsWriter` below, not here.
+
+    **AMENDED AGAIN, 2026-10-01 — OPENS v0.9.6 SCOPE.** v0.9.5 is tagged and this Protocol shipped
+    in it, so the "widening is a new method with its own manifest and seal" rule now governs for
+    real, for the first time. ``write_node`` lands as exactly that: a NEW method beside the ones
+    above, not a signature change to any of them.
+
+    Lane 1 needs it to move the ingest node off ``Neo4jIngestGraph`` — a raw-driver write that
+    predates this Protocol existing at all, the same shape of gap ``write_edge`` closed for
+    predicate assertions. Everything this Protocol declared until now is EDGE-shaped: subject,
+    verb, object. An ingest's own node — the thing whose lifecycle :class:`IngestStatus` tracks
+    across ``received`` → ``extracting`` → ``awaiting_disposition`` → a terminal stage — is not a
+    relationship between two other things, it IS the thing, and nothing here could address it
+    without inventing a self-referential triple to stand in for a node that was never an edge.
+
+    ``write_node`` is keyed the same way :meth:`MeshVectorsWriter.write` already keys an object —
+    a namespace (``label``, the node's kind) plus a caller-supplied ``id`` unique within it — not
+    wrapped in a new identity type the way :class:`EdgeIdentity` wraps four fields, because two
+    plain keyword arguments need no validation or optional-filter counterpart a wrapper would
+    earn its keep by serving. **No ``delete_node`` or ``has_node`` ships alongside it** — this
+    amendment is scoped to exactly what Lane 1 asked for; either could follow on its own packet
+    back, the same way ``has_edges`` followed `write_edge`/`delete_edges` rather than shipping
+    pre-emptively.
+
+    ``write_node`` IS AN UPSERT, DELIBERATELY UNLIKE ``write_edge``. Two ``write_edge`` calls
+    differing only in ``key`` land as two edges — multiplicity is the point, ``key`` is what
+    grants it. A node has no such second axis: Lane 1's own use is one ingest, one node, written
+    again at every stage transition, and a second write with the SAME ``(label, id)`` must UPDATE
+    that node's payload, not mint a second node silently coexisting with the first. A writer that
+    treated repeat writes as inserts would leave an ingest with as many phantom nodes as it had
+    status transitions — exactly the defect an upsert contract exists to refuse.
     """
 
     def write_edge(
@@ -934,6 +964,31 @@ class MeshGraphWriter(Protocol):
         edge matches, ``outcome="empty"`` when none do — never a bare ``bool``, so "determined
         absent" stays distinguishable from "could not determine" the same way every other read in
         this SDK keeps that distinction.
+        """
+
+    def write_node(
+        self,
+        initiator: Initiator,
+        *,
+        label: str,
+        id: str,
+        payload: Mapping[str, str] = MappingProxyType({}),
+    ) -> MeshWriteResult:
+        """Upsert one node of kind ``label`` at caller-supplied ``id``. Person or delegate only —
+        see :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-10-01**, opening v0.9.6 scope, for Lane 1 moving the ingest node off
+        ``Neo4jIngestGraph``'s own raw driver write. ``(label, id)`` is this method's whole
+        identity — the same "namespace plus caller-supplied id" shape
+        :meth:`MeshVectorsWriter.write` already uses, not :class:`EdgeIdentity`'s four fields,
+        because a node has no (subject, verb, object) to decompose.
+
+        **UPSERT, not append — the opposite of ``write_edge``'s key-grants-multiplicity rule.** A
+        second call with the SAME ``(label, id)`` updates that node's ``payload`` in place; it
+        never lands as a second node. This is deliberate: Lane 1's ingest node is written once per
+        :class:`iagent_mesh.ingest.IngestStatus` stage transition, and every one of those writes
+        must reach the SAME node, the way a row update reaches the same row — if it minted a new
+        node per write, "the ingest node" would stop meaning any one thing.
         """
 
 
