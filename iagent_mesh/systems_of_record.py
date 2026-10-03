@@ -352,7 +352,32 @@ class Origin(BaseModel):
     :class:`iagent_mesh.provenance.ProvenanceBlock` has to whatever graph node embeds it.
 
     See the module docstring's ruling 4 for why ``resolved_by`` is its own vocabulary, not
-    :data:`iagent_mesh.provenance.OBTAINED_VIA`.
+    :data:`iagent_mesh.provenance.OBTAINED_VIA`. The two stay separate vocabularies — this module
+    performs no translation between them — but one caller needs to go from one to the other: the
+    origin-suggestion seam building an ``Origin`` out of an ingest's ``ProvenanceBlock``. The
+    architect's 2026-10-03 ruling on that seam's two open contracts (ia-01/lane/01's "obtained_via
+    vs resolved_by" question) is this mapping, joined here so it lives beside the field it rules
+    on rather than only in the consumer that encodes it:
+
+    +-----------------------------+---------------------------------------------------------+
+    | ``obtained_via``            | ``resolved_by``                                          |
+    +=============================+===========================================================+
+    | ``"authoritative_source"``  | ``"record"`` (``evidence`` carries ``source:citation``)  |
+    +-----------------------------+---------------------------------------------------------+
+    | ``"user-drop"``             | ``"unresolved"`` until a steward sets it, then           |
+    |                             | ``"steward"``                                            |
+    +-----------------------------+---------------------------------------------------------+
+
+    Transcribed exactly as ruled, including ``"authoritative_source"`` on the left — that string
+    is NOT one of :data:`iagent_mesh.provenance.OBTAINED_VIA`'s five values (``direct``/``etl``/
+    ``warehouse``/``manual-export``/``user-drop``); it is the NAME of a different field
+    (:attr:`iagent_mesh.provenance.ProvenanceBlock.authoritative_source`). Left as the ruling
+    states it rather than silently corrected: Lane 1's own writer encodes this same table and
+    seals it with a test, so a unilateral fix here would disagree with what ships on the other
+    side of the seam. Read the left column as "an obtained_via that names a real authoritative
+    system" versus "user-drop, the one rung with none" — not as a literal second OBTAINED_VIA
+    value. This module still performs no enforcement of the mapping; it is documentation of the
+    ruling, not a validator on this class.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
