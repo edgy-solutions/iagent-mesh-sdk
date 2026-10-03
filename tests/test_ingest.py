@@ -20,10 +20,12 @@ from iagent_mesh.task_kinds import UNDECLARED, resolve as resolve_task_kind
 from iagent_mesh.ingest import (
     CONTENT_KIND_BRANCHES,
     INGEST_STAGES,
+    ArtifactRevision,
     ContentKindRegistration,
     ContentKindUnregistered,
     IngestRequest,
     IngestStatus,
+    RefreshSpec,
     compose,
     load_content_kind_registrations,
     registered_kinds,
@@ -54,6 +56,12 @@ VALID_EVENT_REGISTRATION = dict(
     branch="event",
     seeds_workflow="maintenance-fault-workflow",
     identity_field="event_id",
+)
+
+VALID_REFRESH = dict(
+    url_template="https://example.invalid/picture/{event_id}",
+    method="GET",
+    auth="seeding-delegate",
 )
 
 
@@ -263,6 +271,109 @@ def test_document_branch_forbids_seeds_workflow_and_identity_field():
         ContentKindRegistration(**{**VALID_REGISTRATION, "seeds_workflow": "x"})
     with pytest.raises(ValidationError, match="identity_field"):
         ContentKindRegistration(**{**VALID_REGISTRATION, "identity_field": "x"})
+
+
+# ── RefreshSpec, ADDED 0.9.7 ─────────────────────────────────────────────────────────────
+
+def test_a_valid_refresh_spec_builds():
+    spec = RefreshSpec(**VALID_REFRESH)
+    assert spec.url_template == "https://example.invalid/picture/{event_id}"
+    assert spec.method == "GET"
+    assert spec.auth == "seeding-delegate"
+
+
+def test_refresh_spec_refuses_a_blank_url_template():
+    with pytest.raises(ValidationError, match="nowhere to pull from"):
+        RefreshSpec(**{**VALID_REFRESH, "url_template": ""})
+
+
+@pytest.mark.parametrize(
+    "url_template",
+    [
+        "https://example.invalid/picture",  # zero placeholders
+        "https://example.invalid/{a}/{b}",  # two placeholders
+    ],
+)
+def test_refresh_spec_refuses_anything_but_exactly_one_placeholder(url_template):
+    with pytest.raises(ValidationError, match="exactly one"):
+        RefreshSpec(**{**VALID_REFRESH, "url_template": url_template})
+
+
+def test_refresh_spec_rejects_an_unregistered_method_or_auth():
+    """``method``/``auth`` are closed Literals, not bare constants — a value outside the
+    vocabulary is refused by pydantic itself, not silently coerced."""
+    with pytest.raises(ValidationError):
+        RefreshSpec(**{**VALID_REFRESH, "method": "POST"})
+    with pytest.raises(ValidationError):
+        RefreshSpec(**{**VALID_REFRESH, "auth": "caller-own-credential"})
+
+
+# ── ContentKindRegistration.refresh, ADDED 0.9.7 ─────────────────────────────────────────
+
+def test_event_branch_refresh_is_optional_push_only_unchanged():
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.refresh is None
+
+
+def test_event_branch_accepts_a_refresh_whose_placeholder_matches_identity_field():
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "refresh": VALID_REFRESH})
+    assert row.refresh == RefreshSpec(**VALID_REFRESH)
+
+
+def test_event_branch_refuses_a_refresh_whose_placeholder_does_not_match_identity_field():
+    mismatched = {**VALID_REFRESH, "url_template": "https://example.invalid/picture/{wrong_field}"}
+    with pytest.raises(ValidationError, match="not \\{event_id\\}"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "refresh": mismatched})
+
+
+def test_document_branch_forbids_refresh():
+    """refresh pulls by identity_field, which document rows don't have either — same shape of
+    refusal as seeds_workflow/identity_field above."""
+    with pytest.raises(ValidationError, match="refresh"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "refresh": VALID_REFRESH})
+
+
+# ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
+
+def test_a_valid_rev_1_builds_with_no_supersedes():
+    rev = ArtifactRevision(
+        rev=1, received_at="2026-09-30T12:00:00Z", provenance=ProvenanceBlock(**VALID_PROVENANCE),
+    )
+    assert rev.rev == 1
+    assert rev.supersedes is None
+
+
+def test_a_valid_rev_2_supersedes_rev_1():
+    rev = ArtifactRevision(
+        rev=2, received_at="2026-10-01T09:00:00Z", provenance=ProvenanceBlock(**VALID_PROVENANCE),
+        supersedes=1,
+    )
+    assert rev.supersedes == 1
+
+
+def test_rev_1_refuses_a_non_none_supersedes():
+    with pytest.raises(ValidationError, match="supersedes must be None"):
+        ArtifactRevision(
+            rev=1, received_at="2026-09-30T12:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE), supersedes=1,
+        )
+
+
+@pytest.mark.parametrize("bad_supersedes", [0, 1, None])
+def test_a_later_rev_refuses_anything_but_the_immediately_prior_rev(bad_supersedes):
+    with pytest.raises(ValidationError, match="supersedes must be"):
+        ArtifactRevision(
+            rev=3, received_at="2026-10-02T09:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE), supersedes=bad_supersedes,
+        )
+
+
+def test_rev_below_1_is_refused():
+    with pytest.raises(ValidationError, match="there is no rev 0"):
+        ArtifactRevision(
+            rev=0, received_at="2026-09-30T12:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE),
+        )
 
 
 # ── resolve_content_kind: THE HALT, not the default ─────────────────────────────────────

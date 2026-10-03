@@ -68,6 +68,8 @@ __all__ = [
     "IngestRequest",
     "IngestStatus",
     "ContentKindRegistration",
+    "RefreshSpec",
+    "ArtifactRevision",
     "ContentKindUnregistered",
     "resolve_content_kind",
     "registered_kinds",
@@ -137,6 +139,58 @@ CONTENT_KIND_BRANCHES = ("document", "event")
 ContentKindBranch = Literal[CONTENT_KIND_BRANCHES]  # type: ignore[valid-type]
 
 
+class RefreshSpec(BaseModel):
+    """Where and how to PULL a fresher arrival for an already-seeded Event kind, ADDED 0.9.7.
+    :attr:`ContentKindRegistration.refresh` is ``None`` by default — every Event kind before this
+    field existed only had PUSH, and ``None`` keeps meaning exactly that; this is additive.
+
+    **THE RESPONSE IS NOT A NEW ARTIFACT.** A refresh call returns an artifact of the SAME kind,
+    recorded as the next :class:`ArtifactRevision` on whatever artifact the seam already holds for
+    this registration's ``identity_field`` value — never a second, independent arrival. Building
+    that revision and appending it to the chain is the seam's job, not this model's; this model
+    only names where to pull from and under whose credential, the same "declares the key, does
+    not perform the dedupe" split :attr:`ContentKindRegistration.identity_field` already states.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url_template: str
+    """Exactly one ``{...}`` placeholder, naming the OWNING registration's own
+    ``identity_field`` — e.g. ``"https://…/picture/{event_id}"`` for a kind whose
+    ``identity_field`` is ``"event_id"``. This model cannot check the placeholder NAMES
+    ``identity_field`` — a bare ``RefreshSpec`` has no ``identity_field`` of its own to compare
+    against — so that check lives on :class:`ContentKindRegistration` instead, where both fields
+    are visible together; this validator only checks the shape (one placeholder, non-blank)."""
+
+    method: Literal["GET"]
+    """One value, not a default — a GET-only pass. A closed vocabulary rather than a bare
+    ``"GET"`` constant so a later pass adding a second method is additive to the Literal, not a
+    silent widening of a field that used to mean exactly one thing."""
+
+    auth: Literal["seeding-delegate"]
+    """One value, same reasoning as ``method``. ``"seeding-delegate"`` means the call is made
+    with the credential of the delegate client that seeded the original artifact,
+    ``on_behalf_of`` the same subject the original arrival's
+    :class:`iagent_mesh.interfaces.Initiator` carried — never a fresh credential, never the
+    asking caller's own. No other auth mode this pass; adding one is a Literal widening, the
+    same discipline ``method`` states above."""
+
+    @field_validator("url_template")
+    @classmethod
+    def _url_template_has_exactly_one_placeholder(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "RefreshSpec.url_template='' — a refresh with nowhere to pull from is not a "
+                "refresh, it is a row someone forgot to finish"
+            )
+        if v.count("{") != 1 or v.count("}") != 1:
+            raise ValueError(
+                f"RefreshSpec.url_template={v!r} must carry exactly one {{...}} placeholder — "
+                f"the owning registration's identity_field value, and nothing else templated"
+            )
+        return v
+
+
 class ContentKindRegistration(BaseModel):
     """One row of ADR-0021's mapping table: ``(kind-source value → kind → extractor-config →
     BAML-set → target OntologyClass)``, collapsed to the fields a kind-source repo needs to
@@ -199,6 +253,13 @@ class ContentKindRegistration(BaseModel):
     identity — e.g. ``"event_id"`` for ``maintenance-fault-event``. The seam dedupes arrivals on
     it; this module does not perform the dedupe (that is Lane 1's seam, keyed via Restate's
     ``run``/``send``), it only declares which field is the key."""
+
+    refresh: Optional[RefreshSpec] = None
+    """ADDED 0.9.7. Required for nothing, forbidden for ``branch="document"`` rows (it names a
+    pull keyed on ``identity_field``, which document rows don't have either — see
+    ``_branch_shape_is_consistent`` below). For ``branch="event"``, optional: ``None`` means this
+    kind is PUSH-only, same as every Event kind before this field existed. Set, it names where a
+    fresher arrival can be PULLED for this already-seeded kind — see :class:`RefreshSpec`."""
 
     domain: Optional[str] = None
     """ADDED 0.9.7, ADDENDUM CORRECTED BY THE ARCHITECT. The promotion task the grouped-review
@@ -264,6 +325,17 @@ class ContentKindRegistration(BaseModel):
                     f"identity_field — the seam dedupes arrivals on it; with none declared, "
                     f"every arrival is a new one"
                 )
+            if self.refresh is not None:
+                placeholder = self.refresh.url_template[
+                    self.refresh.url_template.index("{") + 1 : self.refresh.url_template.index("}")
+                ]
+                if placeholder != self.identity_field:
+                    raise ValueError(
+                        f"ContentKindRegistration(kind={self.kind!r}).refresh.url_template "
+                        f"placeholder is {{{placeholder}}}, not {{{self.identity_field}}} — "
+                        f"refresh pulls by THIS row's own identity_field, not an arbitrary "
+                        f"templated field"
+                    )
         else:  # branch == "document"
             if not self.passes:
                 raise ValueError(
@@ -287,6 +359,70 @@ class ContentKindRegistration(BaseModel):
                     f"ContentKindRegistration(kind={self.kind!r}, branch='document') declares "
                     f"identity_field — that field belongs to branch='event' rows only"
                 )
+            if self.refresh is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') declares "
+                    f"refresh — a pull keyed on identity_field, which document rows don't have "
+                    f"either; refresh belongs to branch='event' rows only"
+                )
+        return self
+
+
+class ArtifactRevision(BaseModel):
+    """One entry on an artifact's OWN arrival list, ADDED 0.9.7 — not a new artifact, the row
+    shape of one. ``rev=1`` is the artifact's original arrival; every later arrival — a push, or
+    the answer to a :class:`RefreshSpec` pull — appends the next rev and names which rev it
+    supersedes, building the chain a Worker's own ``input_revisions[]`` points at.
+
+    **THIS SDK DOES NOT STORE THE LIST.** An artifact's own arrival list, and the append step that
+    builds it, belong to whatever holds artifacts (the seam) — this model is the row shape only,
+    so a builder on either side (a push handler, a refresh poller) produces an identical row.
+
+    **"SAME KIND, SAME IDENTITY VALUE" IS NOT A FIELD ON THIS ROW, AND NOT CHECKED HERE.** Neither
+    fact lives on an individual revision — they're true of the ARTIFACT the chain belongs to, not
+    of one entry in it. Enforcing them is the seam's job at append time, the same "declares the
+    key, does not perform the dedupe" split :attr:`ContentKindRegistration.identity_field` already
+    states for the kind this chain's artifact was matched against. What THIS model enforces is
+    everything that is self-contained to one row plus its immediate predecessor: ``rev`` starts at
+    1 and only ever increments by one, and ``supersedes`` always names the rev immediately prior,
+    never an arbitrary earlier one — see ``_rev_and_supersedes_are_consistent``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rev: int
+    """1 for the artifact's original arrival; each later one is exactly one more than the rev it
+    supersedes — see ``_rev_and_supersedes_are_consistent``."""
+
+    received_at: str
+    """When THIS rev arrived — ISO-8601, same string convention as
+    :class:`iagent_mesh.provenance.ProvenanceBlock`'s own timestamp fields (this module does not
+    import ``datetime`` any more than that one does)."""
+
+    provenance: ProvenanceBlock
+    """THIS rev's own provenance — not copied from rev 1. A refreshed pull has its own
+    ``obtained_via``/``as_of``/``ingest_run``, distinct from whatever arrived the original."""
+
+    supersedes: Optional[int] = None
+    """The rev this one replaces. ``None`` only for ``rev=1`` — the original arrival supersedes
+    nothing. Every later rev names the rev immediately prior, not the original (``rev=3``
+    supersedes ``2``, never ``1``) — a chain a reader walks one step at a time, not a fan-in that
+    requires the whole list to find the prior rev."""
+
+    @model_validator(mode="after")
+    def _rev_and_supersedes_are_consistent(self) -> "ArtifactRevision":
+        if self.rev < 1:
+            raise ValueError(f"ArtifactRevision.rev={self.rev} — revs start at 1; there is no rev 0")
+        if self.rev == 1 and self.supersedes is not None:
+            raise ValueError(
+                "ArtifactRevision(rev=1).supersedes must be None — the original arrival "
+                "supersedes nothing"
+            )
+        if self.rev > 1 and self.supersedes != self.rev - 1:
+            raise ValueError(
+                f"ArtifactRevision(rev={self.rev}).supersedes must be {self.rev - 1} — each rev "
+                f"supersedes the one immediately before it, not an arbitrary earlier rev"
+            )
         return self
 
 
