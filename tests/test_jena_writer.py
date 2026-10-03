@@ -27,6 +27,7 @@ def wire(monkeypatch):
     def install(response_for):
         def handler(request: httpx.Request) -> httpx.Response:
             seen["url"] = str(request.url)
+            seen["authorization_header"] = request.headers.get("authorization")
             # form-urlencoded (`data={"update": sparql}`) — decode back to the actual SPARQL text
             # sent, not the wire-encoded body, so an assertion on it is a POSITIVE CONTENT check.
             seen["body"] = urllib.parse.parse_qs(request.read().decode())["update"][0]
@@ -34,9 +35,10 @@ def wire(monkeypatch):
 
         transport = httpx.MockTransport(handler)
 
-        def fake_post(url, *, data=None, timeout=None):
+        def fake_post(url, *, data=None, timeout=None, auth=None):
+            seen["auth"] = auth
             with httpx.Client(transport=transport) as client:
-                return client.post(url, data=data, timeout=timeout)
+                return client.post(url, data=data, timeout=timeout, auth=auth)
 
         monkeypatch.setattr("iagent_mesh.writers.jena.httpx.post", fake_post)
         return seen
@@ -87,9 +89,9 @@ def count_requests(monkeypatch):
 
     transport = httpx.MockTransport(handler)
 
-    def fake_post(url, *, data=None, timeout=None):
+    def fake_post(url, *, data=None, timeout=None, auth=None):
         with httpx.Client(transport=transport) as client:
-            return client.post(url, data=data, timeout=timeout)
+            return client.post(url, data=data, timeout=timeout, auth=auth)
 
     monkeypatch.setattr("iagent_mesh.writers.jena.httpx.post", fake_post)
     return calls
@@ -176,3 +178,44 @@ def test_it_structurally_satisfies_MeshOntologyWriter():
     from iagent_mesh.interfaces import MeshOntologyWriter
 
     assert isinstance(_writer(), MeshOntologyWriter)
+
+
+# ── auth, ADDED 0.9.7 — #28's 401 was this class shipping with nowhere to put a credential ──
+
+def test_no_auth_is_the_unchanged_default(wire):
+    seen = wire(lambda r: httpx.Response(200, text="Update succeeded"))
+    result = JenaOntologyWriter(base_url="http://fuseki.local", dataset="ds").upsert(
+        PERSON, graph="http://mesh/g", iri="http://mesh/thing", triples=["<x> a <y> ."]
+    )
+    assert result == MeshWriteResult.written()
+    assert seen["authorization_header"] is None
+
+
+def test_auth_sends_basic_credentials(wire):
+    seen = wire(lambda r: httpx.Response(200, text="Update succeeded"))
+    result = JenaOntologyWriter(
+        base_url="http://fuseki.local", dataset="ds", auth=("alice", "s3cret"),
+    ).upsert(PERSON, graph="http://mesh/g", iri="http://mesh/thing", triples=["<x> a <y> ."])
+    assert result == MeshWriteResult.written()
+    import base64
+    expected = "Basic " + base64.b64encode(b"alice:s3cret").decode()
+    assert seen["authorization_header"] == expected
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://alice:s3cret@fuseki.local", "http://alice@fuseki.local"],
+)
+def test_url_userinfo_is_refused_at_construction(base_url):
+    """The old client this class replaced read credentials out of the URL. Carrying that forward
+    would print the password into every proxy/access log between here and Fuseki — refused
+    outright, not silently stripped, so the hazard cannot arrive by a caller's old habit."""
+    with pytest.raises(ValueError, match="userinfo"):
+        JenaOntologyWriter(base_url=base_url, dataset="ds")
+
+
+def test_blank_auth_credential_is_refused_at_construction():
+    with pytest.raises(ValueError, match="blank"):
+        JenaOntologyWriter(base_url="http://fuseki.local", dataset="ds", auth=("", "s3cret"))
+    with pytest.raises(ValueError, match="blank"):
+        JenaOntologyWriter(base_url="http://fuseki.local", dataset="ds", auth=("alice", ""))
