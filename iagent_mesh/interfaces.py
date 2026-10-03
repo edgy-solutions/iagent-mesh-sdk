@@ -938,7 +938,7 @@ class MeshGraphWriter(Protocol):
     predates this Protocol existing at all, the same shape of gap ``write_edge`` closed for
     predicate assertions. Everything this Protocol declared until now is EDGE-shaped: subject,
     verb, object. An ingest's own node — the thing whose lifecycle :class:`IngestStatus` tracks
-    across ``received`` → ``extracting`` → ``awaiting_disposition`` → a terminal stage — is not a
+    across ``received`` → ``extracting`` → ``review`` → a terminal stage — is not a
     relationship between two other things, it IS the thing, and nothing here could address it
     without inventing a self-referential triple to stand in for a node that was never an edge.
 

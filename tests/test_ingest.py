@@ -18,6 +18,7 @@ from iagent_mesh.interfaces import Initiator
 from iagent_mesh.provenance import DIRECT, ProvenanceBlock
 from iagent_mesh.task_kinds import UNDECLARED, resolve as resolve_task_kind
 from iagent_mesh.ingest import (
+    CONTENT_KIND_BRANCHES,
     INGEST_STAGES,
     ContentKindRegistration,
     ContentKindUnregistered,
@@ -45,6 +46,14 @@ VALID_REGISTRATION = dict(
     kind="work-instruction",
     passes=("manufacturing.baml::ExtractWorkInstructions",),
     outputs=("mfg:WorkInstruction",),
+    domain="SUSTAINMENT",
+)
+
+VALID_EVENT_REGISTRATION = dict(
+    kind="maintenance-fault-event",
+    branch="event",
+    seeds_workflow="maintenance-fault-workflow",
+    identity_field="event_id",
 )
 
 
@@ -56,8 +65,10 @@ def _write(d, name: str, row: dict) -> None:
 # ── the stage vocabulary ─────────────────────────────────────────────────────────────────
 
 def test_ingest_stages_is_the_six_stage_tuple():
+    """`review` as of 0.9.7 — a rename of `awaiting_disposition`, same state, not a seventh
+    value beside it (see the INGEST_STAGES comment in ingest.py)."""
     assert INGEST_STAGES == (
-        "received", "extracting", "awaiting_disposition", "promoted", "rejected", "failed"
+        "received", "extracting", "review", "promoted", "rejected", "failed"
     )
 
 
@@ -191,6 +202,69 @@ def test_passes_order_is_preserved_not_a_set():
     assert row.passes == ordered
 
 
+def test_domain_is_optional_a_generic_kind_declares_none():
+    """Corrected by the architect: a required domain forces every kind to declare one, which is
+    the hazard the drop-domains prompt identified. A generic kind (pdf, engineering-document,
+    doors-export) has no home domain; its artifacts' origin resolves per-artifact from evidence."""
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "domain": None})
+    assert row.domain is None
+
+
+def test_domain_blank_string_is_refused_but_none_is_not():
+    with pytest.raises(ValidationError, match="domain"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "domain": ""})
+
+
+# ── ContentKindRegistration, the Event branch (0.9.7) ──────────────────────────────────────
+
+def test_content_kind_branches_is_the_two_branch_tuple():
+    assert CONTENT_KIND_BRANCHES == ("document", "event")
+
+
+def test_a_valid_event_registration_builds():
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.branch == "event"
+    assert row.seeds_workflow == "maintenance-fault-workflow"
+    assert row.identity_field == "event_id"
+    assert row.passes == ()
+    assert row.outputs == ()
+
+
+def test_document_branch_is_the_default():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.branch == "document"
+    assert row.seeds_workflow is None
+    assert row.identity_field is None
+
+
+def test_event_branch_requires_seeds_workflow():
+    with pytest.raises(ValidationError, match="seeds_workflow"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "seeds_workflow": None})
+
+
+def test_event_branch_requires_identity_field():
+    with pytest.raises(ValidationError, match="identity_field"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "identity_field": None})
+
+
+def test_event_branch_forbids_passes_and_outputs():
+    """An event kind is not extracted — it seeds a workflow. passes/outputs belong to
+    branch='document' rows only."""
+    with pytest.raises(ValidationError, match="passes/outputs"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "passes": ("p",)})
+    with pytest.raises(ValidationError, match="passes/outputs"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "outputs": ("o",)})
+
+
+def test_document_branch_forbids_seeds_workflow_and_identity_field():
+    """The inverse of the event-branch check — these two fields are event-only, so a document
+    row declaring either is the same shape of error as an event row declaring passes."""
+    with pytest.raises(ValidationError, match="seeds_workflow"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "seeds_workflow": "x"})
+    with pytest.raises(ValidationError, match="identity_field"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "identity_field": "x"})
+
+
 # ── resolve_content_kind: THE HALT, not the default ─────────────────────────────────────
 
 def test_resolve_content_kind_returns_the_matching_row():
@@ -233,7 +307,8 @@ def test_resolve_content_kind_message_names_the_registered_set():
 def test_registered_kinds_is_the_pickers_legal_set():
     rows = [
         ContentKindRegistration(**VALID_REGISTRATION),
-        ContentKindRegistration(kind="compliance-audit", passes=("p",), outputs=("o",)),
+        ContentKindRegistration(kind="compliance-audit", passes=("p",), outputs=("o",),
+                                domain="SUSTAINMENT"),
     ]
     assert registered_kinds(rows) == ("compliance-audit", "work-instruction")
 
@@ -275,6 +350,7 @@ def test_overlay_replaces_by_kind_and_carries_its_own_passes_and_outputs(tmp_pat
         "kind": "compliance-audit",
         "passes": ["compliance.baml::ExtractAudit"],
         "outputs": ["mfg:ComplianceAudit"],
+        "domain": "SUSTAINMENT",
     })
     out = compose(seed, [overlay])
     kinds = {r.kind: r for r in out}

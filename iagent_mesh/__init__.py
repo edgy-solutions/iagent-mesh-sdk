@@ -178,7 +178,9 @@ from .provenance import (
 # `graph_manifest`'s and `task_kinds`'s own same-named functions — see the 0.9.4 ruling comment
 # above); `load_content_kind_registrations` is unambiguous and comes to the root instead.
 from .ingest import (
+    CONTENT_KIND_BRANCHES,
     INGEST_STAGES,
+    ContentKindBranch,
     ContentKindRegistration,
     ContentKindUnregistered,
     IngestRequest,
@@ -237,6 +239,27 @@ from .task_kinds import (
     TaskKind,
     TaskKindError,
     load_task_kinds,
+)
+
+# THE SYSTEMS-OF-RECORD SCHEMA AND `Origin`, 0.9.7 — the architect's "ORIGIN, not audience"
+# ruling, item 1. `compose`/`validate_dir` here are NOT promoted bare, for the same reason
+# ingest's own aren't — see the 0.9.4 ruling comment above; this is the fifth family to collide
+# on those two names, covered by the existing rule rather than a new carve-out.
+from .systems_of_record import (
+    RECORD,
+    RESOLVED_BY,
+    STEWARD,
+    UNRESOLVED,
+    ConnectorLookup,
+    IdentityMatch,
+    Origin,
+    ResolvedBy,
+    SystemOfRecord,
+    SystemOfRecordConnector,
+    UnknownConnector,
+    load_systems_of_record,
+    match_system_of_record,
+    validate_connectors_known,
 )
 
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
@@ -336,7 +359,9 @@ __all__ = [
     "require_provenance",
     "validate_provenance",
     # the ingest wire shapes (ADR-0021 content-kind selection / ADR-0041 user-drop ingest)
+    "CONTENT_KIND_BRANCHES",
     "INGEST_STAGES",
+    "ContentKindBranch",
     "ContentKindRegistration",
     "ContentKindUnregistered",
     "IngestRequest",
@@ -390,4 +415,19 @@ __all__ = [
     "TaskKind",
     "TaskKindError",
     "load_task_kinds",
+    # the systems-of-record schema and `Origin` (0.9.7, "ORIGIN, not audience")
+    "RECORD",
+    "RESOLVED_BY",
+    "STEWARD",
+    "UNRESOLVED",
+    "ConnectorLookup",
+    "IdentityMatch",
+    "Origin",
+    "ResolvedBy",
+    "SystemOfRecord",
+    "SystemOfRecordConnector",
+    "UnknownConnector",
+    "load_systems_of_record",
+    "match_system_of_record",
+    "validate_connectors_known",
 ]
