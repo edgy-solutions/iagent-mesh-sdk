@@ -291,6 +291,64 @@ def test_nominate_scopes_by_a_SEQUENCE_of_domains_not_a_single_one():
     assert sig.parameters["domains"].default == (), "an empty sequence means no domain filter"
 
 
+def test_nominate_mode_offers_vector_only_and_hybrid_defaulting_to_vector_only():
+    """CONFORMANCE ARM, 0.9.8 OVERNIGHT item 2. ``vector_only`` is the default so that every
+    caller written against 0.9.7's ``nominate`` — no ``mode`` argument at all — keeps today's
+    exact behaviour; adding the parameter must not change what an unmodified call does.
+    """
+    import inspect
+    from typing import get_args, get_type_hints
+
+    sig = inspect.signature(MeshVectors.nominate)
+    assert "mode" in sig.parameters, "nominate must accept a retrieval-mode request"
+    assert sig.parameters["mode"].default == "vector_only", (
+        "the default must preserve 0.9.7 behaviour for callers passing no mode"
+    )
+    hints = get_type_hints(MeshVectors.nominate)
+    assert get_args(hints["mode"]) == ("vector_only", "hybrid"), (
+        "mode's legal values are exactly vector_only and hybrid — no silent third value"
+    )
+
+
+def test_nominate_metadata_filters_defaults_to_no_filter():
+    """CONFORMANCE ARM, 0.9.8 OVERNIGHT item 2: the compat-scoped predicate pool's set
+    restriction. An empty mapping means no filter at all, same convention as ``domains == ()`` —
+    a caller passing nothing must see unfiltered results, not an impossible-to-satisfy
+    empty-set filter.
+    """
+    import inspect
+
+    sig = inspect.signature(MeshVectors.nominate)
+    assert "metadata_filters" in sig.parameters, (
+        "nominate must accept a metadata filter — the compat-scoped predicate pool's set "
+        "restriction and exact-match property filters both need it"
+    )
+    assert dict(sig.parameters["metadata_filters"].default) == {}, (
+        "an empty mapping must mean no metadata filter"
+    )
+
+
+def test_nominate_mode_parameter_is_distinct_from_result_mode_field():
+    """CONFORMANCE ARM: the two ``mode``s are a naming collision, not a shared vocabulary.
+
+    ``nominate``'s ``mode`` parameter is a REQUEST (vector_only/hybrid); ``MeshResult.mode`` is a
+    REPORT drawn from ``MeshVectors.MODES`` (hybrid/bm25). They happen to share the string
+    "hybrid" for different reasons — the parameter's hybrid means a blended ranking was asked
+    for, the field's hybrid means the embed call succeeded, full stop. This arm fails the day
+    someone "simplifies" by making the parameter accept exactly ``MeshVectors.MODES``, which
+    would silently drop ``vector_only`` and smuggle "bm25" in as something a caller could ask
+    for rather than something an implementation falls back to.
+    """
+    import inspect
+    from typing import get_args, get_type_hints
+
+    sig = inspect.signature(MeshVectors.nominate)
+    hints = get_type_hints(MeshVectors.nominate)
+    assert get_args(hints["mode"]) != MeshVectors.MODES, (
+        "the request vocabulary and the report vocabulary must not be made to match"
+    )
+
+
 # ── the marker collection: a carrier that is OURS BY CONSTRUCTION ────────────────────────
 
 from iagent_mesh.conformance import check_embedding_contract, check_writer_marker  # noqa: E402

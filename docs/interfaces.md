@@ -315,7 +315,7 @@ types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a gue
 | Member | Notes |
 | --- | --- |
 | `embedding_model` (property) | The model this implementation embeds with — part of the contract, asserted **at open** |
-| `nominate(initiator, *, collection, text, domains=(), limit=10)` | Candidate rows for a phrase |
+| `nominate(initiator, *, collection, text, domains=(), limit=10, mode="vector_only", metadata_filters={})` | Candidate rows for a phrase |
 | `collection_present(initiator, *, collection)` | Is the collection there at all? |
 
 **`collection_present` is an operation, not an implementation detail**, because a
@@ -334,6 +334,26 @@ against one query, while three searches merged client-side return three
 separately-ranked lists whose scores **are not comparable across calls** — and you
 have no basis on which to interleave them. It is also N× the embedding cost for
 one phrase.
+
+#### `mode` (0.9.8): a request, not the report — don't conflate it with the result's `mode`
+
+```python
+r = vectors.nominate(who, collection="verb_iris_pool", text=phrase,
+                      mode="hybrid", metadata_filters={"verb_iris": {"a", "b"}})
+```
+
+`mode` here is what the CALLER asks for: `"vector_only"` (the default — today's only behaviour,
+unchanged for every pre-0.9.8 call) or `"hybrid"` (blend a lexical signal into one ranked list
+alongside the vector score). This is a different axis from `r.mode` below, which is what
+actually happened. The two share the string `"hybrid"` for unrelated reasons and are **not**
+unified by this addition — a caller reading `r.mode == "hybrid"` back is not confirming its
+request landed; `r.mode == "bm25"` means the embed call failed, regardless of which `mode` was
+requested.
+
+`metadata_filters` closes the gap that kept the compat-scoped predicate pool (`verb_iris`)
+incumbent on every version through 0.9.7: a scalar value is exact-match (`{"doc_id": "x"}`), a
+`Sequence`/`set` value is membership (`{"verb_iris": {"a", "b"}}`). Filters AND together. An
+empty mapping (the default) means no filter, same convention as `domains == ()`.
 
 #### Always read `mode` on a nominate result
 

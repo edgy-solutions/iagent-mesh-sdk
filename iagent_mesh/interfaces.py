@@ -710,6 +710,8 @@ class MeshVectors(Protocol):
         text: str,
         domains: Sequence[str] = (),
         limit: int = 10,
+        mode: Literal["vector_only", "hybrid"] = "vector_only",
+        metadata_filters: Mapping[str, object] = MappingProxyType({}),
     ) -> MeshResult:
         """Candidate rows for a phrase, within one collection and across the given domains.
 
@@ -735,6 +737,32 @@ class MeshVectors(Protocol):
         stdout — same fields, same score key, no marker. The fleet ran SIXTY-SEVEN DAYS with
         ``LLM_BASE_URL`` unset, every search BM25-only, and nothing in any result said so. A
         degraded retrieval is a MARKED success, never an unmarked one.
+
+        ``mode`` (THE PARAMETER) IS A DIFFERENT AXIS FROM ``MeshResult.mode`` (THE FIELD), AND
+        THE SHARED NAME IS A COLLISION, NOT A UNIFICATION — flagged here rather than silently
+        left for a caller to conflate. The parameter is a REQUEST: ``"vector_only"`` (the default,
+        and today's only behaviour — embedding similarity alone) or ``"hybrid"`` (blend a lexical
+        signal, e.g. BM25, into ONE ranked list alongside the vector score). The result field is a
+        REPORT of what actually happened, drawn from this interface's own ``MODES`` tuple
+        (``"hybrid"`` / ``"bm25"``), and ``"bm25"`` there means an UNPLANNED degradation — the
+        embed call failed and the implementation fell back, which is exactly the silent-for-67-days
+        failure the field exists to mark. A caller who passes ``mode="hybrid"`` and reads back
+        ``result.mode == "bm25"`` has NOT gotten a degraded version of what it asked for in some
+        softened sense — it got the embed-failure fallback, same as a ``mode="vector_only"`` caller
+        would. Nothing here unifies the two vocabularies; this paragraph exists so a future reader
+        does not assume they already are.
+
+        ``metadata_filters`` ADDS A SET-RESTRICTION THE PREDICATE POOL ALREADY NEEDED. A scalar
+        value is an exact-match filter (``{"doc_id": "x"}`` → the field equals ``"x"``); a
+        ``Sequence`` or ``set`` value is a membership filter (``{"verb_iris": {"a", "b"}}`` → the
+        field is IN that set). Both shapes were missing: one call site needs exact-match
+        properties and could not express them, and the compat-scoped predicate pool stays
+        incumbent today specifically because ``nominate`` has no way to restrict ``verb_iris`` to
+        a set. An empty mapping (the default) means no metadata filter, same convention as
+        ``domains == ()``. Filters AND together; there is no OR across filter keys — a caller
+        needing OR across two metadata values states that as a set-membership filter on one key,
+        not as two calls merged client-side, for the same ranking reason ``domains`` is a sequence
+        and not a loop.
         """
 
     def collection_present(self, initiator: Initiator, *, collection: str) -> MeshResult:
