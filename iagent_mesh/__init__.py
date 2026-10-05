@@ -264,6 +264,37 @@ from .systems_of_record import (
     validate_connectors_known,
 )
 
+# The maintenance bridge wire shapes (0.9.8) — `MaintenanceEvent`/`ActionRecord`/
+# `ApprovalChainEntry` and their nested rows, mirroring ADR-0046 §1/§4 per the week-1 contract
+# packet. `CaseState` is deliberately absent — see the module docstring for why.
+from .maintenance_bridge import (
+    APPROVAL_OUTCOMES,
+    EVENT_KINDS,
+    EVENT_SOURCES,
+    LEAD_TIME_SOURCES,
+    STAND_IN,
+    SUPPLY_SYSTEM,
+    ActionProvenance,
+    ActionRecord,
+    ApprovalChainEntry,
+    ApprovalOutcome,
+    BattleCondition,
+    BattleConditionBasis,
+    EventKind,
+    EventProvenanceRow,
+    EventSource,
+    EventSourceKind,
+    Fault,
+    LeadTimeSource,
+    MaintenanceEvent,
+    PartRow,
+    Picture,
+    ReleasabilityLabel,
+    SpareRow,
+    TaskRef,
+    WorkOrder,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -434,4 +465,30 @@ __all__ = [
     "load_systems_of_record",
     "match_system_of_record",
     "validate_connectors_known",
+    # the maintenance bridge wire shapes (0.9.8) — ADR-0046 §1/§4 mirror; CaseState deliberately absent
+    "APPROVAL_OUTCOMES",
+    "EVENT_KINDS",
+    "EVENT_SOURCES",
+    "LEAD_TIME_SOURCES",
+    "STAND_IN",
+    "SUPPLY_SYSTEM",
+    "ActionProvenance",
+    "ActionRecord",
+    "ApprovalChainEntry",
+    "ApprovalOutcome",
+    "BattleCondition",
+    "BattleConditionBasis",
+    "EventKind",
+    "EventProvenanceRow",
+    "EventSource",
+    "EventSourceKind",
+    "Fault",
+    "LeadTimeSource",
+    "MaintenanceEvent",
+    "PartRow",
+    "Picture",
+    "ReleasabilityLabel",
+    "SpareRow",
+    "TaskRef",
+    "WorkOrder",
 ]
