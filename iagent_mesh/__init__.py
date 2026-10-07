@@ -300,6 +300,19 @@ from .maintenance_bridge import (
     WorkOrder,
 )
 
+# The ADR-0039 case runner record (0.9.9) — `WorkflowCaseRecord` and its nested rows, mirroring
+# `workflow_runner.py`'s own `case: dict` field-for-field, per the two-days packet's item 3.
+# `CaseState` is deliberately absent here too — see the module docstring for why `state` is a
+# different concept from `CaseState`, not just a differently-typed one.
+from .workflow_case import (
+    INPUT_REVISION_PROVENANCES,
+    CaseInputRevision,
+    CaseInstanceRef,
+    CaseTransition,
+    InputRevisionProvenance,
+    WorkflowCaseRecord,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -501,4 +514,12 @@ __all__ = [
     "SpareRow",
     "TaskRef",
     "WorkOrder",
+    # the ADR-0039 case runner record (0.9.9) — workflow_runner.py's case dict mirror; CaseState
+    # deliberately absent, and is a different concept from WorkflowCaseRecord.state besides
+    "INPUT_REVISION_PROVENANCES",
+    "CaseInputRevision",
+    "CaseInstanceRef",
+    "CaseTransition",
+    "InputRevisionProvenance",
+    "WorkflowCaseRecord",
 ]
