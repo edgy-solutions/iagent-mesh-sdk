@@ -267,6 +267,26 @@ Two dispositions worth knowing as a caller:
   narrows verb compatibility, and a degraded answer there is indistinguishable
   from a considered one.
 
+#### Worked examples (surveyed 2026-10-07): none exist yet — stated honestly rather than omitted
+
+Every one of the 9 methods above is implemented, by one class: `Neo4jGraph`
+(`agent_fleet/ontology_service/mesh_graph.py`, lines 193-349 — `ancestors` 193,
+`verbs_for` 209, `classes_with_a_verb` 237, `operable_subjects` 279, `edge` 287,
+`path` 306, `providers_for` 327, `data_assets_for` 339, `registry` 344). But
+`Neo4jGraph` is imported in exactly three places in `invincible-agent`, and all
+three are tests: `tests/test_mesh_graph_conforms.py`,
+`tests/test_mesh_writers_conform.py`, and
+`tests/test_the_person_guard_is_an_allowlist_everywhere.py`. No production
+module imports it, and no call to any of the 9 methods above was found outside
+those same test files.
+
+This is a different state from `MeshOntologyWriter.upsert` below, which has
+neither an implementation nor a caller — `MeshGraph` has a real implementation,
+proven against by its own conformance arm, that nothing in production has
+wired up yet. Whatever engine calls `MeshGraph` in a running deployment, if one
+exists, is not in the one sibling repo this survey covers — stated here as a
+limit of the survey, not as proof no such caller exists anywhere.
+
 ### `MeshOntology` — named reads over the RDF store
 
 `MODES = ()`.
@@ -293,10 +313,15 @@ types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a gue
 - `construct` answers with Turtle **text** (`str` rows) that still carries its term
   types: `"42"^^xsd:integer` stays typed, `"hello"@en` keeps its tag.
 
-> **Status: the contract has a conformance arm and no implementation.** No
-> `MeshOntology` implementation exists in the fleet yet, and the entry-point group
-> `iagent_mesh.ontology` is unfilled. `check_ontology_contract` is proven against
-> in-memory fakes, not against a real RDF store.
+> **Status, corrected 2026-10-07 — a real implementation exists.** This note
+> previously said no `MeshOntology` implementation existed in the fleet. That was
+> stale: `JenaMeshOntology` (`agent_fleet/ontology_service/mesh_ontology.py:106`,
+> `ask` at line 205, `construct` at line 248) is a real implementation, and
+> `construct` has a real production caller — see the worked example below. The
+> entry-point group `iagent_mesh.ontology` is still unfilled, and this SDK's own
+> `check_ontology_contract` is still proven only against in-memory fakes in
+> **this** repo's test suite — `JenaMeshOntology` lives in `invincible-agent`,
+> a separate repo, and nothing here claims it is exercised against this arm.
 
 > **The write half now exists — this note is the second correction the same day
 > forced.** The route works (`POST update=<sparql>` to `{fusekiUrl}/ds/update`
@@ -307,6 +332,26 @@ types — a typed read has to be a CONSTRUCT and a parse, not a SELECT and a gue
 > 2026-09-27: see [§4a](#4a-the-write-half) below. `MeshOntology` itself is
 > **unchanged and stays pure** — the write half is a sibling class, never a new
 > method here.
+
+#### Worked example, the one store actually in production (surveyed 2026-10-07)
+
+```python
+# JenaMeshOntology (Fuseki) — agent_fleet/ontology_service/main.py:5452, inside
+# _pool_universal_referents()
+result = _JENA_ONTOLOGY.construct(_POOL_READ_INITIATOR, subject=candidate)
+```
+
+The caller never lets this call raise or propagate a failure outcome — every
+non-answer (`unreachable`, a refused read, a candidate Jena does not confirm)
+folds into "not confirmed," because the pool this feeds degrades to its other
+two legs rather than surfacing a single candidate's failure to the whole
+result. This is the `construct`-over-SELECT discipline from above, in its one
+real caller: the result rows are typed Turtle text, read for CONFIRMATION
+(does this IRI resolve as a class), never parsed for their content.
+
+`ask` has **no production caller** found in `invincible-agent` — every call
+site found is in this SDK's own test fixtures. Stated honestly rather than
+invented: a worked example needs a real caller, and none exists yet for `ask`.
 
 ### `MeshVectors` — semantic lookup within a declared collection and domain
 
@@ -421,6 +466,52 @@ writers, so metadata is missing for a while — swallowing that arrives dressed 
 tolerance and is exactly the vacuous self-comparison the property exists to
 avoid.
 
+### `MeshArtifacts` — named reads over the artifact store, added 2026-10-07
+
+**Not one of the three above — a fourth, added later**, for a gap neither of
+the first three closes: cortex and OpenDDIL each need to read an artifact by id
+and list artifacts by kind, and each had built its own gateway route to do it,
+one route per shape, kept in sync by hand. `kind` is the same vocabulary
+`iagent_mesh.ingest.ContentKindRegistration.kind` already names — the legal set
+of kinds IS the registered rows, not a second vocabulary declared here.
+
+`MODES = ()`.
+
+| Operation | Returns |
+| --- | --- |
+| `get(initiator, *, kind, id)` | One artifact of kind `kind` at `id` |
+| `list_by_kind(initiator, *, kind)` | Every artifact of kind `kind` this initiator is entitled to see |
+
+**Read-only, the same posture as the three above** — an artifact's own arrival
+is the ingest layer's concern (`iagent_mesh.ingest.ArtifactRevision`), not this
+one's; this Protocol is the read-back half that model explicitly leaves open.
+
+#### Entitlement collapses into `outcome="empty"` — on purpose, and conformance refuses to prove otherwise
+
+`"WITH ENTITLEMENT" is an obligation on the implementation, not a mechanism
+this Protocol carries` — this SDK owns no compartment/`can_view` model of its
+own (see `Initiator` on why identity travels opaque). What IS a Protocol-level
+requirement: a read for an artifact the initiator is not entitled to see must
+come back as `outcome="empty"`, indistinguishable from "no such artifact."
+Telling the two apart would let a caller probe an artifact's mere existence
+under an entitlement that only covers its *content* — the exact side channel
+collapsing them closes.
+
+`check_mesh_artifacts_entitlement_contract` asserts exactly this and
+**refuses to go further**: entitled→`answered` with rows, unentitled→`empty`,
+absent→`empty`, and the arm's own `assert_fixture_discriminates` call is
+between entitled and unentitled only — never between unentitled and absent,
+because that distinction is the one this Protocol rules out, not one a
+fixture simply failed to supply.
+
+#### Worked examples: none exist yet (surveyed 2026-10-07)
+
+`get` and `list_by_kind` have zero occurrences anywhere in `invincible-agent`
+as of this survey — expected, since this Protocol opened v0.9.9 scope the same
+day. Stated here rather than left silent: cortex and OpenDDIL's own
+hand-built gateway routes, the proliferation this Protocol exists to replace,
+have not yet been migrated to call it.
+
 ---
 
 ## 4a. The write half
@@ -504,8 +595,8 @@ constant a reader re-derives to compare against.
 
 | Protocol | Operation(s) | Notes |
 | --- | --- | --- |
-| `MeshGraphWriter` | `write_edge(initiator, *, identity, payload={})`; `delete_edges(initiator, *, identity_filter)` | **Amended in place, ruled 2026-09-29**, on the worker's own packet back — see below. |
-| `MeshVectorsWriter` | `write(initiator, *, collection, id, text, domains=(), vector_required=True)`; `relocate(initiator, *, collection, id, vector)` | **Two methods on purpose.** `write` embeds `text` via the injected `Embedder`; `relocate` takes a precomputed vector for migration/backfill only. One method accepting either would make "supply your own vector" a normal-looking parameter on the everyday path. |
+| `MeshGraphWriter` | `write_edge(initiator, *, identity, payload={})`; `delete_edges(initiator, *, identity_filter)`; `has_edges(initiator, *, identity_filter)`; `write_node(initiator, *, label, id, payload={})`; `has_node(initiator, *, label, id)`; `delete_node(initiator, *, label, id)` | **Amended four times.** `write_edge`/`delete_edges` ruled 2026-09-29 (see below); `has_edges` joined 2026-09-30; `write_node` opened v0.9.6 scope 2026-10-01; `has_node`/`delete_node` opened v0.9.7 scope the same day, the read/cleanup halves `write_node`'s own docstring left open. |
+| `MeshVectorsWriter` | `write(initiator, *, collection, id, text, domains=(), vector_required=True)`; `relocate(initiator, *, collection, id, vector)`; `delete(initiator, *, collection, id)`; `has(initiator, *, collection, id)` | **Two methods on purpose for `write`/`relocate`.** `write` embeds `text` via the injected `Embedder`; `relocate` takes a precomputed vector for migration/backfill only. One method accepting either would make "supply your own vector" a normal-looking parameter on the everyday path. `delete` joined 2026-09-30; `has` joined 2026-10-07, opening v0.9.9 scope, giving this Protocol write/has/delete parity with `MeshGraphWriter`'s trio **in shape**, not in name — see `MeshVectorsWriter`'s own docstring for why it keeps `has` rather than adopting `has_node`'s `_node` suffix: it has no node/edge distinction on the same class to disambiguate against. |
 | `MeshOntologyWriter` | `upsert(initiator, *, graph, iri, triples)` | `graph` is **required**, never optional — the read side's optional `graph` can mean "anywhere within scope"; a write choosing "anywhere" is the unscoped-default-graph defect this Protocol exists to make unrepresentable. |
 
 #### `MeshGraphWriter` — identity separate from payload, ruled 2026-09-29
@@ -567,6 +658,57 @@ trust from a reported outcome alone, now caught on the delete path. No gap
 remains disclosed here: `delete_edges` now has its own "verify the mutation
 applied" arm, the same discipline `write_edge` has above it.
 
+#### Worked examples, the store actually in production (surveyed 2026-10-07)
+
+`MeshGraphWriter`, unlike every read Protocol above, has real production
+callers for most of its methods, all in `invincible-agent`:
+
+```python
+# write_node — src/iagent/origin_writer.py:93 and src/iagent/promotion_stores.py:272
+result = graph_writer.write_node(
+    initiator, label=INGEST_FACT_FAMILY["node_label"], id=resolution["artifact_id"],
+    payload={"origin_resolved_by": resolved_by},
+)
+if result.outcome != "written":
+    return {"status": "write_refused", "reason": f"graph write outcome={result.outcome!r}: {result.detail}"}
+```
+
+```python
+# write_edge, has_edges, delete_edges — src/iagent/promotion_stores.py:280, 290, 297
+result = self._writer.write_edge(
+    self._initiator,
+    identity=EdgeIdentity(subject=ingest_id, verb=PROMOTION_VERB, object=ingest_id, key=ingest_id),
+    payload=dict(fact))
+if not result.applied:
+    raise RuntimeError(f"promotion fact for {ingest_id}: {result.outcome}: {result.detail}")
+
+# has_edges answers a COUNT by outcome, never zero-on-failure:
+scope = EdgeIdentityFilter(key=ingest_id)
+seen = self._writer.has_edges(self._initiator, identity_filter=scope)
+if seen.outcome == "empty":
+    count = 0
+elif seen.outcome == "answered":
+    count = len(seen.rows)
+else:  # a count nobody could read is not a zero
+    raise RuntimeError(f"graph sweep count for {ingest_id}: {seen.outcome}: {seen.detail}")
+result = self._writer.delete_edges(self._initiator, identity_filter=scope)
+```
+
+This caller treats `has_edges` returning anything other than `answered`/`empty`
+as a reason to raise, not as "zero" — the exact `.outcome`-over-`bool()`
+discipline the result types exist to enforce, at the one real call site that
+needs a count rather than a yes/no.
+
+`write_edge` also has a second production caller family in
+`agent_fleet/mesh_registrar/v2_substrate.py` (lines 241, 362 for `write_edge`;
+197 for `has_edges`; 341, 400, 426 for `delete_edges`), confirming the shape
+above is not `promotion_stores.py`'s own invention.
+
+`has_node` and `delete_node` have **no implementation and no caller** anywhere
+in `invincible-agent`, as of this survey — `write_node`'s own docstring left
+them as something that "could follow on its own packet back," and as of
+v0.9.9 the SDK carries the contract ahead of any store or caller adopting it.
+
 `MeshVectorsWriter.write`'s `vector_required` **defaults `True`**: an embed
 failure refuses the write rather than silently landing without a vector.
 Passing `vector_required=False` is the caller opting into a degraded write at
@@ -600,6 +742,32 @@ the same boundary `MeshOntology.construct` places on a caller reading Turtle
 back. A `502`/`503`/`504` reports `unreachable` (a proxy/deployment problem);
 any other non-`200` reports `failed`; an `httpx.RequestError` reports
 `unreachable`.
+
+#### Worked examples: none exist yet, for either writer (surveyed 2026-10-07)
+
+**`MeshOntologyWriter.upsert`** has no implementation and no caller anywhere in
+`invincible-agent`. `JenaOntologyWriter` just above is **this SDK's own**
+reference implementation (`iagent_mesh.writers.jena`) — nothing in
+`invincible-agent` constructs it or any other `MeshOntologyWriter`. The write
+route this Protocol models (`doc-tools/lane/7f`'s own SPARQL `GRAPH`-scoping
+fix) was verified against sandbox Fuseki directly, not through this Protocol.
+
+**`MeshVectorsWriter`** fares the same for `write`/`relocate`/`delete`: every
+call site found is in `invincible-agent`'s own test suite
+(`tests/test_mesh_writers_conform.py`). An implementation exists —
+`WeaviateVectorsWriter` (`agent_fleet/utils/mesh_writers/weaviate_vectors.py:162`,
+`write` at 203, `relocate` at 269, `delete` at 331) — but it is instantiated
+only in that same test file, never from production code. `has`, added this
+same survey date, has zero occurrences anywhere yet, as expected for a method
+that opened scope the day of this survey.
+
+Three different "no worked example" states appear across this file now, and
+they are not interchangeable: `MeshGraph` has an implementation with no
+caller; `MeshVectorsWriter`'s `write`/`relocate`/`delete` have an
+implementation exercised only by tests; `MeshOntologyWriter.upsert` and
+`MeshArtifacts` below have neither. Collapsing these into one "not used yet"
+note would lose exactly the distinction a reader deciding whether to build
+against one of these Protocols needs.
 
 ### Conformance: two new arms
 
@@ -1025,7 +1193,7 @@ was deployed.
 ```python
 from iagent_mesh.interfaces import (
     Initiator, ServiceIdentityRefused, DelegateIdentityRefused,
-    MeshGraph, MeshOntology, MeshVectors,
+    MeshGraph, MeshOntology, MeshVectors, MeshArtifacts,
     MESH_COLLECTION_META, CollectionMarker, CorruptCollectionMarker,
     collection_marker, read_collection_marker, marker_predates_collection,
     MARKER_ASSERTS, MARKER_DOES_NOT_ASSERT,
@@ -1037,6 +1205,7 @@ from iagent_mesh.conformance import (
     check_offline, check_live, check_embedding_contract, check_writer_marker,
     check_ontology_contract, assert_fixture_discriminates, ConformanceFailure,
     check_writer_offline, check_ontology_writer_contract,
+    check_vectors_writer_has_contract, check_mesh_artifacts_entitlement_contract,
 )
 from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 
