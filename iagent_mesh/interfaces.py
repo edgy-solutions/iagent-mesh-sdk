@@ -305,7 +305,45 @@ class MeshGraph(Protocol):
         """
 
     def verbs_for(self, initiator: Initiator, subject: str, *, max_hops: int) -> MeshResult:
-        """Predicates that can operate on ``subject``, walking the ancestor chain."""
+        """Predicates that can operate on ``subject``, walking the ancestor chain.
+
+        **ROW SHAPE WIDENED, 2026-10-02** — closing the gap ia-74 routed: "the Protocol declares
+        no row shape... it returns 4 fields, the route returns 14." The richer row
+        (``ontology_service``'s ``/find_compatible_verbs`` — "the route") is now this method's
+        declared shape, not a narrower one some implementations happen to answer with:
+
+        | field | meaning |
+        |---|---|
+        | ``verb_iri`` | the predicate's full IRI |
+        | ``verb_local`` | the predicate's local name. **Renamed from this SDK's prior ``verb_type``** — one fact, one name; an implementation widening to this shape renames the field, it does not carry both |
+        | ``input_uri`` | the class this verb's input must satisfy |
+        | ``output_uri`` | the class this verb's output satisfies |
+        | ``endpoint_url`` | where the verb is registered to be called, or ``None`` |
+        | ``owner_persona`` | the persona that registered it, or ``None`` |
+        | ``domains`` | the domains it is scoped to; empty means domain-agnostic |
+        | ``cost_class`` | its registered cost class, or ``None`` |
+        | ``requires_human_approval`` | declared at registration, never inferred |
+        | ``hops`` | ancestor-chain distance from ``subject`` to the class that admitted this verb |
+        | ``compatibility`` | which rule admitted it — ``"subject"`` (operates on ``subject`` directly) today; a non-``"subject"`` value is reserved, not yet produced by this leg |
+        | ``slots`` | the verb's declared slot requirements, as the JSON string the route already carries them in — not decoded here |
+        | ``arity`` | declared input cardinality (``"single"``/``"set"``/``"any"``), or ``None`` |
+        | ``required_args`` | declared argument keys the verb cannot run without; empty means unconstrained |
+
+        **Scope of this widening, stated so it is not assumed wider than it is:** this is the ROW
+        shape only. ``verbs_for`` still walks exactly the ancestor chain it always has — what
+        ia-74 named LEG 1 (coverage). It does **not** add LEG 2 (a verb admitted because a
+        *referent* slot covers ``subject``, not ``subject`` itself) or LEG 3 (the universal
+        referent set, every subject's ``mesh:explain``), and it takes no new parameter for either.
+        Those stay future, unscoped work — ia-74's report measured LEG 2 adding verbs on 4 of
+        1070 subjects and found LEG 3 dead by construction (a service identity cannot reach it;
+        a design question for a person, not a lane fix), and today's order rules the row's shape,
+        not the walk's reach. A ``compatibility`` value other than ``"subject"`` is reserved for
+        whenever that ruling lands, not produced by this leg now.
+
+        No conformance arm exists yet for this method, or for any ``MeshGraph`` read — unlike
+        ``MeshGraphWriter``, this Protocol has none today. Widening the row shape does not open
+        one; that is a separate, larger undertaking this order does not ask for.
+        """
 
     def ancestors(self, initiator: Initiator, iri: str, *, max_hops: int) -> MeshResult:
         """The ``subClassOf`` chain.
@@ -672,6 +710,8 @@ class MeshVectors(Protocol):
         text: str,
         domains: Sequence[str] = (),
         limit: int = 10,
+        mode: Literal["vector_only", "hybrid"] = "vector_only",
+        metadata_filters: Mapping[str, object] = MappingProxyType({}),
     ) -> MeshResult:
         """Candidate rows for a phrase, within one collection and across the given domains.
 
@@ -697,6 +737,32 @@ class MeshVectors(Protocol):
         stdout — same fields, same score key, no marker. The fleet ran SIXTY-SEVEN DAYS with
         ``LLM_BASE_URL`` unset, every search BM25-only, and nothing in any result said so. A
         degraded retrieval is a MARKED success, never an unmarked one.
+
+        ``mode`` (THE PARAMETER) IS A DIFFERENT AXIS FROM ``MeshResult.mode`` (THE FIELD), AND
+        THE SHARED NAME IS A COLLISION, NOT A UNIFICATION — flagged here rather than silently
+        left for a caller to conflate. The parameter is a REQUEST: ``"vector_only"`` (the default,
+        and today's only behaviour — embedding similarity alone) or ``"hybrid"`` (blend a lexical
+        signal, e.g. BM25, into ONE ranked list alongside the vector score). The result field is a
+        REPORT of what actually happened, drawn from this interface's own ``MODES`` tuple
+        (``"hybrid"`` / ``"bm25"``), and ``"bm25"`` there means an UNPLANNED degradation — the
+        embed call failed and the implementation fell back, which is exactly the silent-for-67-days
+        failure the field exists to mark. A caller who passes ``mode="hybrid"`` and reads back
+        ``result.mode == "bm25"`` has NOT gotten a degraded version of what it asked for in some
+        softened sense — it got the embed-failure fallback, same as a ``mode="vector_only"`` caller
+        would. Nothing here unifies the two vocabularies; this paragraph exists so a future reader
+        does not assume they already are.
+
+        ``metadata_filters`` ADDS A SET-RESTRICTION THE PREDICATE POOL ALREADY NEEDED. A scalar
+        value is an exact-match filter (``{"doc_id": "x"}`` → the field equals ``"x"``); a
+        ``Sequence`` or ``set`` value is a membership filter (``{"verb_iris": {"a", "b"}}`` → the
+        field is IN that set). Both shapes were missing: one call site needs exact-match
+        properties and could not express them, and the compat-scoped predicate pool stays
+        incumbent today specifically because ``nominate`` has no way to restrict ``verb_iris`` to
+        a set. An empty mapping (the default) means no metadata filter, same convention as
+        ``domains == ()``. Filters AND together; there is no OR across filter keys — a caller
+        needing OR across two metadata values states that as a set-membership filter on one key,
+        not as two calls merged client-side, for the same ranking reason ``domains`` is a sequence
+        and not a loop.
         """
 
     def collection_present(self, initiator: Initiator, *, collection: str) -> MeshResult:
@@ -900,7 +966,7 @@ class MeshGraphWriter(Protocol):
     predates this Protocol existing at all, the same shape of gap ``write_edge`` closed for
     predicate assertions. Everything this Protocol declared until now is EDGE-shaped: subject,
     verb, object. An ingest's own node — the thing whose lifecycle :class:`IngestStatus` tracks
-    across ``received`` → ``extracting`` → ``awaiting_disposition`` → a terminal stage — is not a
+    across ``received`` → ``extracting`` → ``review`` → a terminal stage — is not a
     relationship between two other things, it IS the thing, and nothing here could address it
     without inventing a self-referential triple to stand in for a node that was never an edge.
 
@@ -920,6 +986,32 @@ class MeshGraphWriter(Protocol):
     that node's payload, not mint a second node silently coexisting with the first. A writer that
     treated repeat writes as inserts would leave an ingest with as many phantom nodes as it had
     status transitions — exactly the defect an upsert contract exists to refuse.
+
+    **AMENDED AGAIN, 2026-10-01 — OPENS v0.9.7 SCOPE, ON THE ARCHITECT'S OWN ORDER.** The note just
+    above said neither ``delete_node`` nor ``has_node`` ships alongside ``write_node``, and that
+    either could follow on its own packet back — this is that packet. Both are genuinely NEW
+    methods beside the three ``write_node`` already sits with, not signature changes to any of
+    them; v0.9.6 is the release ``write_node`` itself opened scope under, so the same
+    widening-is-a-new-method rule already governs this amendment.
+
+    ``has_node`` is ``has_edges`` answered for a node instead of an edge: the same existence-check
+    need (idempotency before a write-or-delete decision, not routing), the same reason it lives
+    here rather than on the read-only :class:`MeshGraph` (whose reads may be served from a cached
+    or derived projection, and would not guarantee read-your-own-write consistency for this
+    writer's own prior writes), and the same :class:`MeshResult` return — ``outcome="answered"``
+    or ``outcome="empty"``, never a bare ``bool``. It is keyed on plain ``(label, id)``, exactly
+    the two arguments ``write_node`` already takes, rather than wrapped in a filter type the way
+    ``has_edges`` is scoped by :class:`EdgeIdentityFilter`: a node's identity is already two
+    required keyword arguments with no optional/wildcard axis the way an edge's four fields have,
+    so there is nothing a filter wrapper would earn its keep by serving here.
+
+    ``delete_node`` mirrors ``delete_edges``'s own idempotency, not its filter shape: deleting a
+    ``(label, id)`` that was never written still reports success, the same reasoning
+    ``delete_edges``'s own docstring states for a filter matching zero edges — a
+    ``DELETE ... WHERE`` with no matching rows still succeeds, and the store now satisfies "this
+    node is absent", which may already have been true. It is keyed on ``(label, id)`` for the same
+    reason ``has_node`` is: that pair is this Protocol's whole notion of a node's identity, stated
+    once by ``write_node`` and reused rather than re-invented by its two siblings.
     """
 
     def write_edge(
@@ -989,6 +1081,75 @@ class MeshGraphWriter(Protocol):
         :class:`iagent_mesh.ingest.IngestStatus` stage transition, and every one of those writes
         must reach the SAME node, the way a row update reaches the same row — if it minted a new
         node per write, "the ingest node" would stop meaning any one thing.
+        """
+
+    def has_node(self, initiator: Initiator, *, label: str, id: str) -> MeshResult:
+        """Does a node of kind ``label`` at ``id`` exist? Person or delegate only — see
+        :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-10-01**, opening v0.9.7 scope — the read half ``write_node``'s own docstring
+        named as something that could follow on its own packet back. Keyed on plain ``(label,
+        id)``, the same two arguments ``write_node`` takes, rather than wrapped in a filter type:
+        a node's identity has no optional/wildcard axis the way :class:`EdgeIdentityFilter`'s four
+        fields do, so a bespoke filter would earn its keep by serving nothing here.
+
+        Lives on the writer rather than the read-only :class:`MeshGraph`, for the SAME reason
+        ``has_edges`` does: a caller needing to check a node's presence before deciding whether to
+        write or delete it needs read-your-own-write consistency for THIS writer's own prior
+        writes, which a `MeshGraph` read — possibly served from a cached or derived projection —
+        would not guarantee.
+
+        Returns ``MeshResult`` with ``outcome="answered"`` and ``rows`` non-empty when the node
+        exists, ``outcome="empty"`` when it does not — never a bare ``bool``, the same discipline
+        ``has_edges`` already applies, so "determined absent" stays distinguishable from "could
+        not determine".
+        """
+
+    def delete_node(self, initiator: Initiator, *, label: str, id: str) -> MeshWriteResult:
+        """Remove the node of kind ``label`` at ``id``, if one exists. Person or delegate only —
+        see :meth:`Initiator.require_person_or_delegate`.
+
+        **ADDED 2026-10-01**, opening v0.9.7 scope, alongside ``has_node`` — the cleanup half
+        ``write_node``'s own docstring left open. Keyed on the same ``(label, id)`` pair
+        ``write_node`` and ``has_node`` use, this Protocol's one notion of a node's identity.
+
+        Idempotent, the SAME reasoning ``delete_edges`` states for its own filter: a ``(label,
+        id)`` matching no node still reports ``written``, because the store now satisfies "this
+        node is absent", which may already have been true — deletion is idempotent by the same
+        reasoning a ``DELETE ... WHERE`` with no matching rows still succeeds. An implementation
+        that reported failure for a never-written ``(label, id)`` would be treating "nothing to
+        delete" as an error, which is exactly the defect this contract refuses.
+
+        **STATED, 2026-10-02 (closing the gap ia-74 routed: "is it refused, DETACHed, or
+        left?"): a node that still has edges naming it is IMPLEMENTATION-DEFINED, not fixed by
+        this Protocol — refuse, detach-and-delete, or delete-and-leave-dangling are all
+        conforming, and this is a deliberate non-mandate, not an oversight.**
+
+        ``write_node``/``has_node``/``delete_node`` key on ``(label, id)``; ``write_edge``/
+        ``has_edges``/``delete_edges`` key on ``EdgeIdentity``'s ``(subject, verb, object, key)``.
+        Nothing in this Protocol couples the two spaces — an edge's ``subject``/``object`` are
+        opaque strings, never validated against a node's ``(label, id)`` at write time.
+
+        **Why no universal answer: the three choices are not equally available on every
+        backend.** A property-graph store (Neo4j and similar) cannot represent a dangling
+        relationship at all — every relationship requires two live endpoint nodes, so deleting a
+        node that still has edges either fails outright or must ``DETACH``-delete them with it;
+        "leave" is not a storage state that backend can be in. A triple store has no such
+        constraint — a dangling reference is an ordinary, representable fact there, and "leave"
+        costs that implementation nothing. Mandating "leave" at the Protocol level would make it
+        unimplementable on the first backend; mandating "refuse" or "DETACH" would force a
+        referential-integrity walk the second backend's model does not otherwise require. Each
+        implementation picks the one its own backend actually supports and **documents which**,
+        on this method, in its own words — the same "a conscious, discoverable choice, not an
+        accident of the backend's native constraints" discipline this Protocol already asks of
+        every behavioral fork. Conformance can and should assert the implementation DOCUMENTS its
+        choice; it cannot assert WHICH one, because there is no universal right answer to assert
+        against.
+
+        For a Neo4j-backed implementation specifically: refuse or ``DETACH DELETE`` are the only
+        two storage-level options. A caller who wants delete-then-clean-edges can always do that
+        itself with an explicit ``delete_edges`` call first, regardless of which choice this
+        method's own implementation makes — that composition works under either.
         """
 
 

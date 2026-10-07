@@ -95,9 +95,12 @@ def test_MeshGraphWriter_declares_write_and_delete_as_the_write_half():
     that adapter named as missing. AMENDED AGAIN 2026-10-01, opening v0.9.6 scope on the
     architect's own order: `write_node` joined as a genuinely NEW method (v0.9.5 tagged this
     Protocol, so widening it now means exactly that, per the Protocol's own 2026-09-29 rule) — for
-    Lane 1 moving the ingest node off `Neo4jIngestGraph`."""
+    Lane 1 moving the ingest node off `Neo4jIngestGraph`. AMENDED AGAIN 2026-10-01, opening v0.9.7
+    scope: `has_node` and `delete_node` joined as the read and cleanup halves `write_node`'s own
+    docstring left open, named as a thing that could follow on its own packet back — this is that
+    packet, on the architect's own order."""
     assert {n for n in dir(MeshGraphWriter) if not n.startswith("_")} == {
-        "write_edge", "delete_edges", "has_edges", "write_node",
+        "write_edge", "delete_edges", "has_edges", "write_node", "has_node", "delete_node",
     }
 
 

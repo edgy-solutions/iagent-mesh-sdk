@@ -6,11 +6,22 @@ vocabulary, and one registry mechanism without either inventing its own.
 ── FOUR THINGS, AND WHY THEY ARE ONE MODULE ─────────────────────────────────────────────────
 ``IngestRequest`` — what starts an ingest. ``IngestStatus`` — where it is, as a closed stage
 vocabulary. ``ContentKindRegistration`` — one row of the ADR-0021 mapping table (kind, passes,
-outputs). ``resolve_content_kind``/``registered_kinds`` — how a kind is validated against that
-table, i.e. how ``content_kind`` is DERIVED FROM REGISTRATIONS rather than living as a
-free-standing enum a registry could drift from. They are one module because ``IngestRequest``'s
-``content_kind`` field is only meaningful in the presence of the registry that validates it — the
-request shape and the vocabulary that governs it cannot be designed apart from each other.
+outputs — or, for an Event kind, ``seeds_workflow``/``identity_field`` instead; see
+:data:`CONTENT_KIND_BRANCHES`, 0.9.7). ``resolve_content_kind``/``registered_kinds`` — how a kind
+is validated against that table, i.e. how ``content_kind`` is DERIVED FROM REGISTRATIONS rather
+than living as a free-standing enum a registry could drift from. They are one module because
+``IngestRequest``'s ``content_kind`` field is only meaningful in the presence of the registry
+that validates it — the request shape and the vocabulary that governs it cannot be designed
+apart from each other.
+
+── NOT EVERY ARRIVAL IS A DOCUMENT, 0.9.7 ──────────────────────────────────────────────────
+An Event kind (``branch="event"``) declares no extraction at all — it names a workflow to start
+(``seeds_workflow``) and a field to dedupe arrivals on (``identity_field``). This answers
+ia-01/lane/01's 2026-10-02 packet: a per-domain route (``POST /maintenance/events``) is withdrawn
+in favour of the seam reading these two fields off the matched registration. The two branches
+share one ``kind`` namespace and one resolver (:func:`resolve_content_kind` does not care which
+branch it returns) because a caller asking "what do I do with this kind" always starts from the
+same lookup — what differs is which fields the answer carries.
 
 ── THE KIND IS NEVER GUESSED, AND THIS MODULE DOES NOT GUESS EITHER ────────────────────────
 ADR-0021's precedence rule is: (1) an explicit ``content_kind`` declaration wins, (2) a
@@ -52,9 +63,13 @@ from .provenance import ProvenanceBlock
 __all__ = [
     "INGEST_STAGES",
     "IngestStage",
+    "CONTENT_KIND_BRANCHES",
+    "ContentKindBranch",
     "IngestRequest",
     "IngestStatus",
     "ContentKindRegistration",
+    "RefreshSpec",
+    "ArtifactRevision",
     "ContentKindUnregistered",
     "resolve_content_kind",
     "registered_kinds",
@@ -64,17 +79,25 @@ __all__ = [
 ]
 
 # ── THE STAGE VOCABULARY, CLOSED, ORDERED NEAREST-TO-ARRIVAL FIRST ──────────────────────────
-#: `received`            the door accepted the object; provenance stamped; not yet extracted
-#: `extracting`          the registered kind's passes are running (ContentKindRegistration.passes)
-#: `awaiting_disposition` extraction complete; sitting at the grouped review surface (ADR-0041 §1/§5)
-#: `promoted`             a decision record + promotion fact landed (ADR-0041 §5); authority written
-#: `rejected`             a HUMAN decision swept the claim (ADR-0041 §6, property-keyed sweep)
-#: `failed`               a MECHANICAL halt — unclassifiable kind (ADR-0021 rule 3) or an
-#:                        extraction error. Kept separate from `rejected` for the same reason
-#:                        `refused`/`failed` stay separate on the write-result vocabulary: a
-#:                        human declined (`rejected`) and a pipeline could not proceed (`failed`)
-#:                        have different remedies — a disposition decision, or a kind/registry fix.
-INGEST_STAGES = ("received", "extracting", "awaiting_disposition", "promoted", "rejected", "failed")
+#: `received`    the door accepted the object; provenance stamped; not yet extracted
+#: `extracting`  the registered kind's passes are running (ContentKindRegistration.passes)
+#: `review`       extraction complete; sitting at the grouped review surface (ADR-0041 §1/§5),
+#:                where the architect's `document_promotion` task is created
+#: `promoted`    a decision record + promotion fact landed (ADR-0041 §5); authority written
+#: `rejected`    a HUMAN decision swept the claim (ADR-0041 §6, property-keyed sweep)
+#: `failed`      a MECHANICAL halt — unclassifiable kind (ADR-0021 rule 3) or an
+#:               extraction error. Kept separate from `rejected` for the same reason
+#:               `refused`/`failed` stay separate on the write-result vocabulary: a
+#:               human declined (`rejected`) and a pipeline could not proceed (`failed`)
+#:               have different remedies — a disposition decision, or a kind/registry fix.
+#:
+#: RENAMED 0.9.7, same state, not a seventh value beside it: this was `awaiting_disposition`
+#: through 0.9.6. ia-01/lane/01 flagged that the architect's own `document_promotion` ruling
+#: names the stage `review` while this module's docstring already described the identical state
+#: ("extraction complete; sitting at the grouped review surface") under the older name — a
+#: second name for one state, not two states. Ruled a rename, not an addition: the fleet's
+#: `ingest_status.py` (which mirrors this tuple) moves with it, per ia-01's own packet.
+INGEST_STAGES = ("received", "extracting", "review", "promoted", "rejected", "failed")
 
 #: The vocabulary as a type for field annotations — same "tuple is both the membership check and
 #: the static type" pattern as :data:`iagent_mesh.provenance.ObtainedVia`.
@@ -103,12 +126,86 @@ class ContentKindUnregistered(LookupError):
     """
 
 
+#: Two shapes an arriving artifact's registration can declare, ADDED 0.9.7 answering ia-01's
+#: first open question: `document` is the original shape — the kind runs extraction `passes`
+#: and stamps `outputs`. `event` is new — the kind names a workflow to start (`seeds_workflow`)
+#: and a field to dedupe arrivals on (`identity_field`); it runs no extraction pass, because
+#: what arrived is not something to extract FROM, it is the input TO something already running.
+#: Closed, ordered, same "tuple is both the membership check and the static type" pattern as
+#: :data:`INGEST_STAGES`.
+CONTENT_KIND_BRANCHES = ("document", "event")
+
+#: The vocabulary as a type for field annotations.
+ContentKindBranch = Literal[CONTENT_KIND_BRANCHES]  # type: ignore[valid-type]
+
+
+class RefreshSpec(BaseModel):
+    """Where and how to PULL a fresher arrival for an already-seeded Event kind, ADDED 0.9.7.
+    :attr:`ContentKindRegistration.refresh` is ``None`` by default — every Event kind before this
+    field existed only had PUSH, and ``None`` keeps meaning exactly that; this is additive.
+
+    **THE RESPONSE IS NOT A NEW ARTIFACT.** A refresh call returns an artifact of the SAME kind,
+    recorded as the next :class:`ArtifactRevision` on whatever artifact the seam already holds for
+    this registration's ``identity_field`` value — never a second, independent arrival. Building
+    that revision and appending it to the chain is the seam's job, not this model's; this model
+    only names where to pull from and under whose credential, the same "declares the key, does
+    not perform the dedupe" split :attr:`ContentKindRegistration.identity_field` already states.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url_template: str
+    """Exactly one ``{...}`` placeholder, naming the OWNING registration's own
+    ``identity_field`` — e.g. ``"https://…/picture/{event_id}"`` for a kind whose
+    ``identity_field`` is ``"event_id"``. This model cannot check the placeholder NAMES
+    ``identity_field`` — a bare ``RefreshSpec`` has no ``identity_field`` of its own to compare
+    against — so that check lives on :class:`ContentKindRegistration` instead, where both fields
+    are visible together; this validator only checks the shape (one placeholder, non-blank)."""
+
+    method: Literal["GET"]
+    """One value, not a default — a GET-only pass. A closed vocabulary rather than a bare
+    ``"GET"`` constant so a later pass adding a second method is additive to the Literal, not a
+    silent widening of a field that used to mean exactly one thing."""
+
+    auth: Literal["seeding-delegate"]
+    """One value, same reasoning as ``method``. ``"seeding-delegate"`` means the call is made
+    with the credential of the delegate client that seeded the original artifact,
+    ``on_behalf_of`` the same subject the original arrival's
+    :class:`iagent_mesh.interfaces.Initiator` carried — never a fresh credential, never the
+    asking caller's own. No other auth mode this pass; adding one is a Literal widening, the
+    same discipline ``method`` states above."""
+
+    @field_validator("url_template")
+    @classmethod
+    def _url_template_has_exactly_one_placeholder(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "RefreshSpec.url_template='' — a refresh with nowhere to pull from is not a "
+                "refresh, it is a row someone forgot to finish"
+            )
+        if v.count("{") != 1 or v.count("}") != 1:
+            raise ValueError(
+                f"RefreshSpec.url_template={v!r} must carry exactly one {{...}} placeholder — "
+                f"the owning registration's identity_field value, and nothing else templated"
+            )
+        return v
+
+
 class ContentKindRegistration(BaseModel):
     """One row of ADR-0021's mapping table: ``(kind-source value → kind → extractor-config →
-    BAML-set → target OntologyClass)``, collapsed to the three fields a kind-source repo needs to
-    answer "what do I run, and what does it produce" — ``passes`` folds extractor-config and
-    BAML-set into one ordered sequence of named extraction passes, and ``outputs`` is the target
-    ``OntologyClass`` kind(s) the ``INSTANCE_OF`` edge is stamped against.
+    BAML-set → target OntologyClass)``, collapsed to the fields a kind-source repo needs to
+    answer "what do I run, what does it produce, and who can promote it" — ``passes`` folds
+    extractor-config and BAML-set into one ordered sequence of named extraction passes,
+    ``outputs`` is the target ``OntologyClass`` kind(s) the ``INSTANCE_OF`` edge is stamped
+    against, and ``domain`` (0.9.7) is the kind's HOME audience for the promotion task ADR-0041
+    §5 opens on it, where one exists.
+
+    **BRANCHES, ADDED 0.9.7** — answering ia-01/lane/01's 2026-10-02 packet. Not every arriving
+    artifact is a document to extract: an ``Event`` kind (``branch="event"``) names a workflow to
+    start on arrival (``seeds_workflow``) and a field to dedupe on (``identity_field``) instead of
+    running passes. See :data:`CONTENT_KIND_BRANCHES`. ``branch="document"`` is the default and
+    the original shape — ``passes``/``outputs`` required, ``seeds_workflow``/``identity_field``
+    absent.
 
     **THIS SDK DOES NOT SHIP ANY ROWS.** The mapping table is "chartable, version-able,
     code-owned" per ADR-0021, colocated with the plugin registry — which lives in doc-tools, not
@@ -121,44 +218,212 @@ class ContentKindRegistration(BaseModel):
     """The registered kind name, e.g. ``"work-instruction"``. Opaque to this module — never
     parsed, only compared for equality against an ``IngestRequest.content_kind``."""
 
-    passes: tuple[str, ...]
-    """The extraction passes this kind runs, IN THE ORDER THEY RUN — e.g.
-    ``("manufacturing.baml::ExtractWorkInstructions",)``. Required, non-empty: a kind with no
-    pass is not a kind, it is a row someone forgot to finish. Ordered for the same reason
-    :attr:`iagent_mesh.task_kinds.TaskKind.accepts` is ordered rather than a set — a pipeline
-    that runs passes in sequence has a sequence to declare, and a set would let composition
-    silently reorder it."""
+    branch: ContentKindBranch = "document"  # type: ignore[valid-type]
+    """ADDED 0.9.7. Which of :data:`CONTENT_KIND_BRANCHES` this row is. Governs which other
+    fields on this row are required versus forbidden — see ``_branch_shape_is_consistent``
+    below."""
 
-    outputs: tuple[str, ...]
+    passes: tuple[str, ...] = ()
+    """The extraction passes this kind runs, IN THE ORDER THEY RUN — e.g.
+    ``("manufacturing.baml::ExtractWorkInstructions",)``. Required, non-empty, for
+    ``branch="document"`` only: a document kind with no pass is not a kind, it is a row someone
+    forgot to finish; an event kind runs no pass at all (see ``branch``). Ordered for the same
+    reason :attr:`iagent_mesh.task_kinds.TaskKind.accepts` is ordered rather than a set — a
+    pipeline that runs passes in sequence has a sequence to declare, and a set would let
+    composition silently reorder it."""
+
+    outputs: tuple[str, ...] = ()
     """The target ``OntologyClass`` kind(s) this registration's passes stamp via ``INSTANCE_OF``
-    — e.g. ``("mfg:WorkInstruction",)``. Required, non-empty: ADR-0021's whole point is that an
-    extracted instance is reachable through its class chain, and a registration with no declared
-    output is a kind whose instances the routing graph still cannot reach."""
+    — e.g. ``("mfg:WorkInstruction",)``. Required, non-empty, for ``branch="document"`` only —
+    ADR-0021's whole point is that an extracted instance is reachable through its class chain,
+    and a document registration with no declared output is a kind whose instances the routing
+    graph still cannot reach. An event kind stamps nothing; it starts a workflow instead."""
+
+    seeds_workflow: Optional[str] = None
+    """ADDED 0.9.7, ia-01's second question. Required for ``branch="event"``, forbidden for
+    ``branch="document"``. The workflow this Event kind starts on arrival, with the artifact as
+    its input — e.g. the maintenance bridge's seam starting a Restate workflow for an arriving
+    ``maintenance-fault-event``. Replaces a per-domain route (``POST /maintenance/events`` is
+    withdrawn in favour of this): the seam reads ``seeds_workflow`` off the matched registration
+    rather than branching on the caller's URL."""
+
+    identity_field: Optional[str] = None
+    """ADDED 0.9.7, ia-01's third question. Required for ``branch="event"``, forbidden for
+    ``branch="document"``. Names which field of the arriving artifact is this Event kind's
+    identity — e.g. ``"event_id"`` for ``maintenance-fault-event``. The seam dedupes arrivals on
+    it; this module does not perform the dedupe (that is Lane 1's seam, keyed via Restate's
+    ``run``/``send``), it only declares which field is the key."""
+
+    refresh: Optional[RefreshSpec] = None
+    """ADDED 0.9.7. Required for nothing, forbidden for ``branch="document"`` rows (it names a
+    pull keyed on ``identity_field``, which document rows don't have either — see
+    ``_branch_shape_is_consistent`` below). For ``branch="event"``, optional: ``None`` means this
+    kind is PUSH-only, same as every Event kind before this field existed. Set, it names where a
+    fresher arrival can be PULLED for this already-seeded kind — see :class:`RefreshSpec`."""
+
+    domain: Optional[str] = None
+    """ADDED 0.9.7, ADDENDUM CORRECTED BY THE ARCHITECT. The promotion task the grouped-review
+    surface opens on this kind (ADR-0041 §5) is granted to an audience keyed
+    ``document_promotion:<domain>`` where a domain exists — but not every kind has one.
+    ``None`` means this kind declares no HOME domain; a generic kind (``pdf``,
+    ``engineering-document``, ``doors-export``) is read by many domains, and ITS artifacts'
+    origin resolves per-artifact from evidence (:class:`iagent_mesh.systems_of_record.Origin`,
+    ``resolved_by="record"``/``"steward"``), not from a fixed field on the kind. Ruled optional,
+    not required: an earlier draft of this field required it on every kind, which is exactly the
+    hazard the drop-domains prompt identified — forcing a generic kind to declare a domain it
+    does not have. Set it only for a kind whose outputs always belong to one domain."""
 
     @field_validator("kind")
     @classmethod
-    def _kind_is_present(cls, v: str) -> str:
+    def _required_string_is_present(cls, v: str, info) -> str:
         if not v.strip():
             raise ValueError(
-                "ContentKindRegistration.kind='' — a blank kind cannot be matched against an "
-                "IngestRequest.content_kind, which makes the row unreachable rather than general"
+                f"ContentKindRegistration.{info.field_name}='' — a blank {info.field_name} "
+                f"cannot be matched or granted against, which makes the row unreachable rather "
+                f"than general"
+            )
+        return v
+
+    @field_validator("seeds_workflow", "identity_field", "domain")
+    @classmethod
+    def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"ContentKindRegistration.{info.field_name}='' — omit the field (None) rather "
+                f"than binding it to nothing"
             )
         return v
 
     @field_validator("passes", "outputs")
     @classmethod
-    def _sequence_is_nonempty_and_unique(cls, v: tuple[str, ...], info) -> tuple[str, ...]:
-        if not v:
-            raise ValueError(
-                f"ContentKindRegistration.{info.field_name}=() — empty means this kind runs "
-                f"nothing / produces nothing, which is not a registration, it is a placeholder"
-            )
+    def _sequence_is_unique(cls, v: tuple[str, ...], info) -> tuple[str, ...]:
         seen = [x for i, x in enumerate(v) if x in v[:i]]
         if seen:
             raise ValueError(
                 f"ContentKindRegistration.{info.field_name} repeats {sorted(set(seen))}"
             )
         return v
+
+    @model_validator(mode="after")
+    def _branch_shape_is_consistent(self) -> "ContentKindRegistration":
+        if self.branch == "event":
+            if self.passes or self.outputs:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='event') declares "
+                    f"passes/outputs — an event kind is not extracted, it seeds a workflow; "
+                    f"passes/outputs belong to branch='document' rows only"
+                )
+            if self.seeds_workflow is None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='event') requires "
+                    f"seeds_workflow — an event kind with nothing to start is not a kind, it is "
+                    f"a row someone forgot to finish"
+                )
+            if self.identity_field is None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='event') requires "
+                    f"identity_field — the seam dedupes arrivals on it; with none declared, "
+                    f"every arrival is a new one"
+                )
+            if self.refresh is not None:
+                placeholder = self.refresh.url_template[
+                    self.refresh.url_template.index("{") + 1 : self.refresh.url_template.index("}")
+                ]
+                if placeholder != self.identity_field:
+                    raise ValueError(
+                        f"ContentKindRegistration(kind={self.kind!r}).refresh.url_template "
+                        f"placeholder is {{{placeholder}}}, not {{{self.identity_field}}} — "
+                        f"refresh pulls by THIS row's own identity_field, not an arbitrary "
+                        f"templated field"
+                    )
+        else:  # branch == "document"
+            if not self.passes:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') requires "
+                    f"non-empty passes — empty means this kind runs nothing, which is not a "
+                    f"registration, it is a placeholder"
+                )
+            if not self.outputs:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') requires "
+                    f"non-empty outputs — empty means this kind produces nothing the routing "
+                    f"graph can reach"
+                )
+            if self.seeds_workflow is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') declares "
+                    f"seeds_workflow — that field belongs to branch='event' rows only"
+                )
+            if self.identity_field is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') declares "
+                    f"identity_field — that field belongs to branch='event' rows only"
+                )
+            if self.refresh is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='document') declares "
+                    f"refresh — a pull keyed on identity_field, which document rows don't have "
+                    f"either; refresh belongs to branch='event' rows only"
+                )
+        return self
+
+
+class ArtifactRevision(BaseModel):
+    """One entry on an artifact's OWN arrival list, ADDED 0.9.7 — not a new artifact, the row
+    shape of one. ``rev=1`` is the artifact's original arrival; every later arrival — a push, or
+    the answer to a :class:`RefreshSpec` pull — appends the next rev and names which rev it
+    supersedes, building the chain a Worker's own ``input_revisions[]`` points at.
+
+    **THIS SDK DOES NOT STORE THE LIST.** An artifact's own arrival list, and the append step that
+    builds it, belong to whatever holds artifacts (the seam) — this model is the row shape only,
+    so a builder on either side (a push handler, a refresh poller) produces an identical row.
+
+    **"SAME KIND, SAME IDENTITY VALUE" IS NOT A FIELD ON THIS ROW, AND NOT CHECKED HERE.** Neither
+    fact lives on an individual revision — they're true of the ARTIFACT the chain belongs to, not
+    of one entry in it. Enforcing them is the seam's job at append time, the same "declares the
+    key, does not perform the dedupe" split :attr:`ContentKindRegistration.identity_field` already
+    states for the kind this chain's artifact was matched against. What THIS model enforces is
+    everything that is self-contained to one row plus its immediate predecessor: ``rev`` starts at
+    1 and only ever increments by one, and ``supersedes`` always names the rev immediately prior,
+    never an arbitrary earlier one — see ``_rev_and_supersedes_are_consistent``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rev: int
+    """1 for the artifact's original arrival; each later one is exactly one more than the rev it
+    supersedes — see ``_rev_and_supersedes_are_consistent``."""
+
+    received_at: str
+    """When THIS rev arrived — ISO-8601, same string convention as
+    :class:`iagent_mesh.provenance.ProvenanceBlock`'s own timestamp fields (this module does not
+    import ``datetime`` any more than that one does)."""
+
+    provenance: ProvenanceBlock
+    """THIS rev's own provenance — not copied from rev 1. A refreshed pull has its own
+    ``obtained_via``/``as_of``/``ingest_run``, distinct from whatever arrived the original."""
+
+    supersedes: Optional[int] = None
+    """The rev this one replaces. ``None`` only for ``rev=1`` — the original arrival supersedes
+    nothing. Every later rev names the rev immediately prior, not the original (``rev=3``
+    supersedes ``2``, never ``1``) — a chain a reader walks one step at a time, not a fan-in that
+    requires the whole list to find the prior rev."""
+
+    @model_validator(mode="after")
+    def _rev_and_supersedes_are_consistent(self) -> "ArtifactRevision":
+        if self.rev < 1:
+            raise ValueError(f"ArtifactRevision.rev={self.rev} — revs start at 1; there is no rev 0")
+        if self.rev == 1 and self.supersedes is not None:
+            raise ValueError(
+                "ArtifactRevision(rev=1).supersedes must be None — the original arrival "
+                "supersedes nothing"
+            )
+        if self.rev > 1 and self.supersedes != self.rev - 1:
+            raise ValueError(
+                f"ArtifactRevision(rev={self.rev}).supersedes must be {self.rev - 1} — each rev "
+                f"supersedes the one immediately before it, not an arbitrary earlier rev"
+            )
+        return self
 
 
 def resolve_content_kind(

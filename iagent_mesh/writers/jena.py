@@ -32,11 +32,24 @@ update clauses — the same class of defect as building SQL by string concatenat
 NOT similarly escaped: the caller supplies already-formed triple statements (the same trust
 boundary ``MeshOntology.construct`` already places on a caller reading Turtle text back), and this
 writer's job is GRAPH-scoping, not becoming a second RDF serializer.
+
+── AUTH, ADDED 0.9.7 — #28's 401 was this class shipping with nowhere to put a credential ──
+This class REPLACED an older client that read ``user:pass@host`` userinfo straight out of its
+endpoint URL. That worked for building the request, and is exactly why it is refused here instead
+of carried forward: ``httpx``, and any proxy or access log between this process and Fuseki, prints
+the full request URL it handled — userinfo embedded in ``base_url`` prints the password into every
+one of those logs. ``__init__`` now takes ``auth`` as a separate keyword (a ``(username,
+password)`` pair, sourced from config BY THE CALLER — this module does not read a config file any
+more than it derives ``base_url`` from a query endpoint) and refuses construction outright if
+``base_url`` carries userinfo rather than silently stripping it, so the hazard cannot arrive by a
+caller's old habit. ``auth=None`` (the default) means an unauthenticated Fuseki — unchanged
+behaviour for every caller that doesn't need this.
 """
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -78,13 +91,31 @@ class JenaOntologyWriter:
     production dependency.
     """
 
-    def __init__(self, *, base_url: str, dataset: str, timeout: float = 10.0) -> None:
+    def __init__(
+        self, *, base_url: str, dataset: str, timeout: float = 10.0,
+        auth: Optional[tuple[str, str]] = None,
+    ) -> None:
         if not base_url.strip():
             raise ValueError("base_url is empty — a writer with nowhere to post is not a writer")
         if not dataset.strip():
             raise ValueError("dataset is empty")
+        parsed = urlsplit(base_url)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(
+                f"base_url={base_url!r} carries userinfo — refused. httpx, and any proxy or "
+                f"access log between here and Fuseki, prints the full request URL it handled; "
+                f"userinfo embedded there prints the password into every one of those run logs. "
+                f"Pass the credential through auth=(username, password) instead, read from your "
+                f"own config, never embedded in the URL."
+            )
+        if auth is not None and (not auth[0].strip() or not auth[1].strip()):
+            raise ValueError(
+                "auth carries a blank username or password — omit auth (None) for an "
+                "unauthenticated Fuseki rather than binding it to nothing"
+            )
         self._update_url = f"{base_url.rstrip('/')}/{dataset}/update"
         self._timeout = timeout
+        self._auth = httpx.BasicAuth(*auth) if auth is not None else None
 
     def upsert(
         self, initiator: Initiator, *, graph: str, iri: str, triples: Sequence[str]
@@ -117,7 +148,8 @@ class JenaOntologyWriter:
 
         try:
             response = httpx.post(
-                self._update_url, data={"update": sparql}, timeout=self._timeout
+                self._update_url, data={"update": sparql}, timeout=self._timeout,
+                auth=self._auth,
             )
         except httpx.RequestError as exc:
             return MeshWriteResult.unreachable(f"could not reach {self._update_url}: {exc}")

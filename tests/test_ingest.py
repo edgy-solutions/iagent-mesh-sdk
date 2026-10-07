@@ -18,11 +18,14 @@ from iagent_mesh.interfaces import Initiator
 from iagent_mesh.provenance import DIRECT, ProvenanceBlock
 from iagent_mesh.task_kinds import UNDECLARED, resolve as resolve_task_kind
 from iagent_mesh.ingest import (
+    CONTENT_KIND_BRANCHES,
     INGEST_STAGES,
+    ArtifactRevision,
     ContentKindRegistration,
     ContentKindUnregistered,
     IngestRequest,
     IngestStatus,
+    RefreshSpec,
     compose,
     load_content_kind_registrations,
     registered_kinds,
@@ -45,6 +48,20 @@ VALID_REGISTRATION = dict(
     kind="work-instruction",
     passes=("manufacturing.baml::ExtractWorkInstructions",),
     outputs=("mfg:WorkInstruction",),
+    domain="SUSTAINMENT",
+)
+
+VALID_EVENT_REGISTRATION = dict(
+    kind="maintenance-fault-event",
+    branch="event",
+    seeds_workflow="maintenance-fault-workflow",
+    identity_field="event_id",
+)
+
+VALID_REFRESH = dict(
+    url_template="https://example.invalid/picture/{event_id}",
+    method="GET",
+    auth="seeding-delegate",
 )
 
 
@@ -56,8 +73,10 @@ def _write(d, name: str, row: dict) -> None:
 # ── the stage vocabulary ─────────────────────────────────────────────────────────────────
 
 def test_ingest_stages_is_the_six_stage_tuple():
+    """`review` as of 0.9.7 — a rename of `awaiting_disposition`, same state, not a seventh
+    value beside it (see the INGEST_STAGES comment in ingest.py)."""
     assert INGEST_STAGES == (
-        "received", "extracting", "awaiting_disposition", "promoted", "rejected", "failed"
+        "received", "extracting", "review", "promoted", "rejected", "failed"
     )
 
 
@@ -191,6 +210,172 @@ def test_passes_order_is_preserved_not_a_set():
     assert row.passes == ordered
 
 
+def test_domain_is_optional_a_generic_kind_declares_none():
+    """Corrected by the architect: a required domain forces every kind to declare one, which is
+    the hazard the drop-domains prompt identified. A generic kind (pdf, engineering-document,
+    doors-export) has no home domain; its artifacts' origin resolves per-artifact from evidence."""
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "domain": None})
+    assert row.domain is None
+
+
+def test_domain_blank_string_is_refused_but_none_is_not():
+    with pytest.raises(ValidationError, match="domain"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "domain": ""})
+
+
+# ── ContentKindRegistration, the Event branch (0.9.7) ──────────────────────────────────────
+
+def test_content_kind_branches_is_the_two_branch_tuple():
+    assert CONTENT_KIND_BRANCHES == ("document", "event")
+
+
+def test_a_valid_event_registration_builds():
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.branch == "event"
+    assert row.seeds_workflow == "maintenance-fault-workflow"
+    assert row.identity_field == "event_id"
+    assert row.passes == ()
+    assert row.outputs == ()
+
+
+def test_document_branch_is_the_default():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.branch == "document"
+    assert row.seeds_workflow is None
+    assert row.identity_field is None
+
+
+def test_event_branch_requires_seeds_workflow():
+    with pytest.raises(ValidationError, match="seeds_workflow"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "seeds_workflow": None})
+
+
+def test_event_branch_requires_identity_field():
+    with pytest.raises(ValidationError, match="identity_field"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "identity_field": None})
+
+
+def test_event_branch_forbids_passes_and_outputs():
+    """An event kind is not extracted — it seeds a workflow. passes/outputs belong to
+    branch='document' rows only."""
+    with pytest.raises(ValidationError, match="passes/outputs"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "passes": ("p",)})
+    with pytest.raises(ValidationError, match="passes/outputs"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "outputs": ("o",)})
+
+
+def test_document_branch_forbids_seeds_workflow_and_identity_field():
+    """The inverse of the event-branch check — these two fields are event-only, so a document
+    row declaring either is the same shape of error as an event row declaring passes."""
+    with pytest.raises(ValidationError, match="seeds_workflow"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "seeds_workflow": "x"})
+    with pytest.raises(ValidationError, match="identity_field"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "identity_field": "x"})
+
+
+# ── RefreshSpec, ADDED 0.9.7 ─────────────────────────────────────────────────────────────
+
+def test_a_valid_refresh_spec_builds():
+    spec = RefreshSpec(**VALID_REFRESH)
+    assert spec.url_template == "https://example.invalid/picture/{event_id}"
+    assert spec.method == "GET"
+    assert spec.auth == "seeding-delegate"
+
+
+def test_refresh_spec_refuses_a_blank_url_template():
+    with pytest.raises(ValidationError, match="nowhere to pull from"):
+        RefreshSpec(**{**VALID_REFRESH, "url_template": ""})
+
+
+@pytest.mark.parametrize(
+    "url_template",
+    [
+        "https://example.invalid/picture",  # zero placeholders
+        "https://example.invalid/{a}/{b}",  # two placeholders
+    ],
+)
+def test_refresh_spec_refuses_anything_but_exactly_one_placeholder(url_template):
+    with pytest.raises(ValidationError, match="exactly one"):
+        RefreshSpec(**{**VALID_REFRESH, "url_template": url_template})
+
+
+def test_refresh_spec_rejects_an_unregistered_method_or_auth():
+    """``method``/``auth`` are closed Literals, not bare constants — a value outside the
+    vocabulary is refused by pydantic itself, not silently coerced."""
+    with pytest.raises(ValidationError):
+        RefreshSpec(**{**VALID_REFRESH, "method": "POST"})
+    with pytest.raises(ValidationError):
+        RefreshSpec(**{**VALID_REFRESH, "auth": "caller-own-credential"})
+
+
+# ── ContentKindRegistration.refresh, ADDED 0.9.7 ─────────────────────────────────────────
+
+def test_event_branch_refresh_is_optional_push_only_unchanged():
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.refresh is None
+
+
+def test_event_branch_accepts_a_refresh_whose_placeholder_matches_identity_field():
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "refresh": VALID_REFRESH})
+    assert row.refresh == RefreshSpec(**VALID_REFRESH)
+
+
+def test_event_branch_refuses_a_refresh_whose_placeholder_does_not_match_identity_field():
+    mismatched = {**VALID_REFRESH, "url_template": "https://example.invalid/picture/{wrong_field}"}
+    with pytest.raises(ValidationError, match="not \\{event_id\\}"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "refresh": mismatched})
+
+
+def test_document_branch_forbids_refresh():
+    """refresh pulls by identity_field, which document rows don't have either — same shape of
+    refusal as seeds_workflow/identity_field above."""
+    with pytest.raises(ValidationError, match="refresh"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "refresh": VALID_REFRESH})
+
+
+# ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
+
+def test_a_valid_rev_1_builds_with_no_supersedes():
+    rev = ArtifactRevision(
+        rev=1, received_at="2026-09-30T12:00:00Z", provenance=ProvenanceBlock(**VALID_PROVENANCE),
+    )
+    assert rev.rev == 1
+    assert rev.supersedes is None
+
+
+def test_a_valid_rev_2_supersedes_rev_1():
+    rev = ArtifactRevision(
+        rev=2, received_at="2026-10-01T09:00:00Z", provenance=ProvenanceBlock(**VALID_PROVENANCE),
+        supersedes=1,
+    )
+    assert rev.supersedes == 1
+
+
+def test_rev_1_refuses_a_non_none_supersedes():
+    with pytest.raises(ValidationError, match="supersedes must be None"):
+        ArtifactRevision(
+            rev=1, received_at="2026-09-30T12:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE), supersedes=1,
+        )
+
+
+@pytest.mark.parametrize("bad_supersedes", [0, 1, None])
+def test_a_later_rev_refuses_anything_but_the_immediately_prior_rev(bad_supersedes):
+    with pytest.raises(ValidationError, match="supersedes must be"):
+        ArtifactRevision(
+            rev=3, received_at="2026-10-02T09:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE), supersedes=bad_supersedes,
+        )
+
+
+def test_rev_below_1_is_refused():
+    with pytest.raises(ValidationError, match="there is no rev 0"):
+        ArtifactRevision(
+            rev=0, received_at="2026-09-30T12:00:00Z",
+            provenance=ProvenanceBlock(**VALID_PROVENANCE),
+        )
+
+
 # ── resolve_content_kind: THE HALT, not the default ─────────────────────────────────────
 
 def test_resolve_content_kind_returns_the_matching_row():
@@ -233,7 +418,8 @@ def test_resolve_content_kind_message_names_the_registered_set():
 def test_registered_kinds_is_the_pickers_legal_set():
     rows = [
         ContentKindRegistration(**VALID_REGISTRATION),
-        ContentKindRegistration(kind="compliance-audit", passes=("p",), outputs=("o",)),
+        ContentKindRegistration(kind="compliance-audit", passes=("p",), outputs=("o",),
+                                domain="SUSTAINMENT"),
     ]
     assert registered_kinds(rows) == ("compliance-audit", "work-instruction")
 
@@ -275,6 +461,7 @@ def test_overlay_replaces_by_kind_and_carries_its_own_passes_and_outputs(tmp_pat
         "kind": "compliance-audit",
         "passes": ["compliance.baml::ExtractAudit"],
         "outputs": ["mfg:ComplianceAudit"],
+        "domain": "SUSTAINMENT",
     })
     out = compose(seed, [overlay])
     kinds = {r.kind: r for r in out}

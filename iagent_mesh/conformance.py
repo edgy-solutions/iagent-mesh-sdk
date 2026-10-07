@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from .ingest import ArtifactRevision
 from .interfaces import (
     MESH_COLLECTION_META,
     CorruptCollectionMarker,
@@ -57,6 +58,10 @@ __all__ = [
     "check_graph_writer_key_only_delete_contract",
     "check_vectors_writer_delete_contract",
     "check_graph_writer_write_node_contract",
+    "check_graph_writer_has_node_contract",
+    "check_graph_writer_delete_node_contract",
+    "check_artifact_revision_chain_contract",
+    "check_refresh_spec_pull_contract",
 ]
 
 
@@ -960,3 +965,194 @@ def check_graph_writer_write_node_contract(
     if second_payload is None:
         _fail(op, "the second write reported success and the fixture's own introspection finds "
                   "no node at this (label, id) afterward")
+
+
+# ── check_graph_writer_has_node_contract / check_graph_writer_delete_node_contract, added
+# 2026-10-01 — opens v0.9.7 scope, for the read and cleanup halves write_node's own docstring
+# left open ───────────────────────────────────────────────────────────────────────────────────
+
+
+def check_graph_writer_has_node_contract(
+    *,
+    call_write_node: Callable[[], MeshWriteResult],
+    call_has_node_matching: Callable[[], MeshResult],
+    call_has_node_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has_node` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline `check_graph_writer_has_edges_contract` already applies to edges, adapted
+    to a node's `(label, id)` key instead of an edge's `identity_filter`. `has_node` returns
+    `MeshResult`, the same as `has_edges`, so the method's own return value IS the oracle here —
+    no structural introspection callable is needed, unlike `check_graph_writer_write_node_contract`
+    and `check_graph_writer_delete_node_contract`, which have no read-side Protocol method to call.
+
+    `call_write_node` writes one node the caller has already bound. `call_has_node_matching` is a
+    `has_node` call for that SAME `(label, id)`, run AFTER the write. `call_has_node_not_matching`
+    is a `has_node` call for a `(label, id)` the fixture never wrote — the negative case.
+    """
+    op = "graph.has_node"
+
+    written = call_write_node()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has_node against")
+
+    present = call_has_node_matching()
+    absent = call_has_node_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching (label, id)", present, absent, describe=lambda r: r.outcome
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a (label, id) matching the node just written produced {present.outcome!r}, "
+                  f"not 'answered'. The write reported success and has_node disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a (label, id) the fixture never wrote produced {absent.outcome!r}, not "
+                  f"'empty'. A check that answers regardless of what was actually written cannot "
+                  f"prove presence OR absence")
+
+
+def check_graph_writer_delete_node_contract(
+    *,
+    call_write_node: Callable[[], MeshWriteResult],
+    call_delete_node: Callable[[], MeshWriteResult],
+    node_present_after_delete: Callable[[], bool],
+    call_delete_node_never_written: Callable[[], MeshWriteResult],
+) -> None:
+    """The `delete_node` contract. `MeshGraphWriter` has no node-read Protocol method (the same
+    limitation `check_graph_writer_write_node_contract` already works around for `write_node`), so
+    this arm proves a STRUCTURAL property the implementer's own fixture exposes directly
+    (`node_present_after_delete`), the same pattern `check_vectors_writer_delete_contract` uses for
+    `contains_after_delete` when no deterministic read-side oracle exists.
+
+    `call_write_node` writes one node the caller has already bound. `call_delete_node` deletes
+    that SAME `(label, id)`, run after the write. `node_present_after_delete` is the fixture's own
+    introspection on its backing store for that `(label, id)`, called after that delete.
+    `call_delete_node_never_written` deletes a DIFFERENT `(label, id)` the fixture never wrote —
+    the idempotency case `delete_edges`'s own docstring already states ("a filter matching nothing
+    still reports written"), which `delete_node` must honour identically: "nothing to delete" is
+    success, never an error.
+    """
+    op = "graph.delete_node"
+
+    written = call_write_node()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify delete_node against")
+
+    deleted = call_delete_node()
+    if not deleted.applied:
+        _fail(op, f"deleting the (label, id) just written did not apply: "
+                  f"outcome={deleted.outcome!r} detail={deleted.detail!r}")
+
+    if node_present_after_delete():
+        _fail(op, "the node written above is STILL present after delete_node reported applied — "
+                  "the same write-side lie this suite refuses to trust from a reported outcome "
+                  "alone, now on the delete path")
+
+    idempotent = call_delete_node_never_written()
+    if not idempotent.applied:
+        _fail(op, f"deleting a (label, id) that was never written produced "
+                  f"outcome={idempotent.outcome!r}, not an applied state. Deletion must be "
+                  f"idempotent — the store now satisfies 'this node is absent', which may already "
+                  f"have been true, the same reasoning delete_edges applies to a filter matching "
+                  f"zero edges. Treating 'nothing to delete' as a failure is exactly the defect "
+                  f"this arm exists to catch")
+
+
+# ── check_artifact_revision_chain_contract / check_refresh_spec_pull_contract, added
+# 2026-10-06 — opens v0.9.8 scope for the worker's refresh_input seam. NOT YET validated against
+# a real caller: a survey of invincible-agent this same day found `agent_fleet/restate_analyst/
+# case_routing.py`'s `refresh_input` logic (`check_revision`/`newest_revision`) is a LOCAL
+# reimplementation that does not import `iagent_mesh.ingest` at all. These two arms exist so that
+# integration has something to validate against ONCE it lands — the same posture
+# `check_graph_writer_write_node_contract` took for Lane 1's not-yet-landed move off
+# Neo4jIngestGraph — not a claim that the worker's branch calls these types today. ─────────────
+
+
+def check_artifact_revision_chain_contract(
+    *,
+    call_build_initial_revision: Callable[[], ArtifactRevision],
+    call_build_next_revision: Callable[[], ArtifactRevision],
+) -> None:
+    """The ``ArtifactRevision`` CHAIN-BUILDING contract — the property
+    ``ArtifactRevision._rev_and_supersedes_are_consistent`` CANNOT check on its own, because it
+    only ever sees ONE row. That validator proves a single revision is internally consistent
+    (``rev >= 1``, ``supersedes == rev - 1`` for ``rev > 1``) — it cannot prove that a seam's
+    "build the next revision" step actually READ the chain's current head before building that
+    row, rather than, say, always emitting ``rev=2`` regardless of how many revisions already
+    exist. That property only shows up across a SEQUENCE of builds, the same reason
+    :func:`check_graph_writer_write_node_contract` needs two writes to prove an upsert reflects
+    the second payload rather than freezing on the first.
+
+    ``call_build_initial_revision`` is the seam's own build step for an artifact's FIRST
+    arrival — must produce ``rev=1, supersedes=None``. ``call_build_next_revision`` is the SAME
+    seam's build step called a second time for the SAME artifact, after the first revision
+    already exists in whatever the seam holds as its chain — must produce ``rev=2,
+    supersedes=1``. The caller wires both to their own storage; this arm only inspects the two
+    rows that come back.
+
+    **THIS SDK DOES NOT BUILD OR STORE THE CHAIN** (``ArtifactRevision``'s own docstring) — this
+    arm admits a seam's builder, it is not a builder of its own.
+    """
+    op = "ingest.build_artifact_revision"
+
+    first = call_build_initial_revision()
+    if first.rev != 1 or first.supersedes is not None:
+        _fail(op, f"the first revision built for a fresh artifact is rev={first.rev!r} "
+                  f"supersedes={first.supersedes!r}, not rev=1/supersedes=None — an artifact's "
+                  f"original arrival must open the chain, not join one already in progress")
+
+    second = call_build_next_revision()
+
+    # THE FIXTURE MUST DISCRIMINATE: a builder that returns the SAME row twice (e.g. one that
+    # never advances past rev=1) would pass the check below trivially.
+    assert_fixture_discriminates(
+        f"{op} first vs second revision", first, second,
+        describe=lambda r: (r.rev, r.supersedes),
+    )
+
+    # NOTE: `second.supersedes` is not checked separately here — `ArtifactRevision`'s own
+    # `_rev_and_supersedes_are_consistent` already forces `supersedes == rev - 1` for any
+    # `rev > 1` it accepted at construction, so once `rev` is proven to track the chain's real
+    # head, `supersedes` is proven along with it. A check repeating that would never be able to
+    # fire independently of the one below, which is exactly the kind of fixture that cannot
+    # discriminate this suite refuses to carry.
+    if second.rev != first.rev + 1:
+        _fail(op, f"the second revision built for the SAME artifact is rev={second.rev!r}, not "
+                  f"{first.rev + 1}. A seam that does not read its own chain's actual head before "
+                  f"building the next row has disconnected rev from the chain it is supposed to "
+                  f"extend — exactly the gap a hard-coded or cached head would hit silently")
+
+
+def check_refresh_spec_pull_contract(
+    *,
+    identity_value: str,
+    call_pull_url: Callable[[], str],
+) -> None:
+    """Proves a seam's refresh pull actually substitutes THIS ARTIFACT's identity value into
+    ``RefreshSpec.url_template``, rather than pulling a fixed or wrong URL.
+
+    ``RefreshSpec``'s own validator (``_url_template_has_exactly_one_placeholder``) checks the
+    template's SHAPE — exactly one ``{...}`` placeholder — but a bare ``RefreshSpec`` has no
+    identity value of its own to substitute, by design (the module docstring states this split:
+    "this model only names where to pull from... not perform the dedupe"). Nothing in the type
+    can check what a seam actually does with the template at pull time; this arm closes that gap
+    for the one property a wrong substitution would silently break.
+
+    ``call_pull_url`` is the seam's own resolved URL for a pull keyed on ``identity_value``, built
+    from a ``RefreshSpec`` and that value by the caller's own code — this arm only inspects what
+    came back.
+    """
+    op = "ingest.refresh_spec_pull"
+
+    if not (identity_value or "").strip():
+        _fail(op, "identity_value='' supplied to the arm itself — a fixture with no identity "
+                  "value cannot prove the pull is keyed on one")
+
+    url = call_pull_url()
+    if identity_value not in url:
+        _fail(op, f"the resolved pull URL {url!r} does not contain the identity value "
+                  f"{identity_value!r}. A pull URL that does not key on this artifact's identity "
+                  f"is pulling SOMETHING, not necessarily the fresher arrival for THIS artifact")

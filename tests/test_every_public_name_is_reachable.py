@@ -88,8 +88,8 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: from `import iagent_mesh`.
 _EXPORTED = {
     "conformance", "declarations", "discovery", "edge_types", "enumeration",
-    "graph_manifest", "ingest", "interfaces", "provenance", "results", "rows", "shapes",
-    "task_kinds", "write_results",
+    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "provenance", "results",
+    "rows", "shapes", "systems_of_record", "task_kinds", "write_results",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a
@@ -153,6 +153,21 @@ _EXEMPT = {
         "collides with graph_manifest.validate_dir (at the root, what the policy repo's PR gate "
         "imports) and task_kinds.validate_dir (already exempt). RULED: ingest's stays "
         "module-qualified too, same reason as `compose`",
+    # ── 2026-10-02: `systems_of_record` joins the collision, applying the SAME 0.9.4 ruling to
+    # a FIFTH family rather than a new one — the architect's "ORIGIN, not audience" ruling.
+    # `SystemOfRecord` composes with the identical `declarations.compose_rows`/`load_rows`
+    # mechanism every other family here does, so it inherits `compose`/`validate_dir` for the
+    # same reason `ingest` did.
+    ("systems_of_record", "compose"):
+        "collides with graph_manifest.compose (at the root, shipped since 0.7.x), "
+        "task_kinds.compose and ingest.compose (both already exempt). RULED: "
+        "systems_of_record's stays module-qualified too — `from iagent_mesh.systems_of_record "
+        "import compose` composes SYSTEMS-OF-RECORD ROWS, a fourth unrelated job sharing the "
+        "name",
+    ("systems_of_record", "validate_dir"):
+        "collides with graph_manifest.validate_dir (at the root, what the policy repo's PR gate "
+        "imports), task_kinds.validate_dir and ingest.validate_dir (both already exempt). "
+        "RULED: systems_of_record's stays module-qualified too, same reason as `compose`",
 }
 
 
