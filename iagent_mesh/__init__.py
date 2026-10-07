@@ -68,6 +68,7 @@ from .graph_manifest import (
 from .conformance import (
     ConformanceFailure,
     assert_fixture_discriminates,
+    check_artifact_revision_chain_contract,
     check_embedding_contract,
     check_graph_writer_contract,
     check_graph_writer_delete_node_contract,
@@ -79,6 +80,7 @@ from .conformance import (
     check_offline,
     check_ontology_contract,
     check_ontology_writer_contract,
+    check_refresh_spec_pull_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
     check_writer_marker,
@@ -329,6 +331,7 @@ __all__ = [
     # the interface surface (interfaces / results / conformance)
     "ConformanceFailure",
     "assert_fixture_discriminates",
+    "check_artifact_revision_chain_contract",
     "check_embedding_contract",
     "check_graph_writer_contract",
     "check_graph_writer_delete_node_contract",
@@ -340,6 +343,7 @@ __all__ = [
     "check_offline",
     "check_ontology_contract",
     "check_ontology_writer_contract",
+    "check_refresh_spec_pull_contract",
     "check_vectors_writer_contract",
     "check_vectors_writer_delete_contract",
     "check_writer_marker",
