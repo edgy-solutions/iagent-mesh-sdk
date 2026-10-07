@@ -62,6 +62,8 @@ __all__ = [
     "check_graph_writer_delete_node_contract",
     "check_artifact_revision_chain_contract",
     "check_refresh_spec_pull_contract",
+    "check_vectors_writer_has_contract",
+    "check_mesh_artifacts_entitlement_contract",
 ]
 
 
@@ -896,6 +898,112 @@ def check_vectors_writer_delete_contract(
                          f"idempotent — the store now satisfies 'this id is absent', which may "
                          f"already have been true, the same reasoning "
                          f"MeshGraphWriter.delete_edges applies to a filter matching zero edges")
+
+
+# ── check_vectors_writer_has_contract, added 2026-10-07 — opens v0.9.9 scope, the
+# write_node/has_node/delete_node PARITY ask for MeshVectorsWriter ─────────────────────────────
+
+
+def check_vectors_writer_has_contract(
+    *,
+    call_write: Callable[[], MeshWriteResult],
+    call_has_matching: Callable[[], MeshResult],
+    call_has_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline `check_graph_writer_has_node_contract` already applies to a node's
+    `(label, id)`, adapted to this Protocol's `(collection, id)` key. `has` returns `MeshResult`,
+    the same as `has_node`/`has_edges`, so the method's own return value IS the oracle here — no
+    structural introspection callable is needed, unlike `check_vectors_writer_delete_contract`'s
+    `contains_after_delete`, which exists only because `MeshVectors.nominate` is fuzzy and ranked
+    and cannot serve as a deterministic existence oracle the way `has` now can.
+
+    `call_write` writes one object the caller has already bound. `call_has_matching` is a `has`
+    call for that SAME `(collection, id)`, run AFTER the write. `call_has_not_matching` is a `has`
+    call for a `(collection, id)` the fixture never wrote — the negative case.
+    """
+    op = "vectors.has"
+
+    written = call_write()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has against")
+
+    present = call_has_matching()
+    absent = call_has_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching (collection, id)", present, absent,
+        describe=lambda r: r.outcome,
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a (collection, id) matching the object just written produced "
+                  f"{present.outcome!r}, not 'answered'. The write reported success and has "
+                  f"disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a (collection, id) the fixture never wrote produced {absent.outcome!r}, not "
+                  f"'empty'. A check that answers regardless of what was actually written cannot "
+                  f"prove presence OR absence")
+
+
+# ── check_mesh_artifacts_entitlement_contract, added 2026-10-07 — opens v0.9.9 scope for the new
+# MeshArtifacts Protocol ────────────────────────────────────────────────────────────────────────
+
+
+def check_mesh_artifacts_entitlement_contract(
+    *,
+    call_get_as_entitled: Callable[[], MeshResult],
+    call_get_as_unentitled: Callable[[], MeshResult],
+    call_get_absent: Callable[[], MeshResult],
+) -> None:
+    """Proves an implementation's `MeshArtifacts.get` tells "answered" apart from BOTH refusal
+    shapes `MeshResult` is allowed to collapse together — never that it tells "refused" apart
+    from "absent", which the Protocol's own docstring states is not a distinction this contract
+    can assert (the two are observationally identical by design, to close the existence side
+    channel an entitled/unentitled split would otherwise open).
+
+    `call_get_as_entitled` reads one artifact an initiator IS entitled to see — the implementer's
+    fixture must bind this to a real artifact its own fixture wrote, the same "nothing to verify
+    against" discipline every write-then-read arm in this module already applies.
+    `call_get_as_unentitled` reads the SAME artifact as an initiator the fixture constructs to be
+    refused by whatever decider the implementation defers to. `call_get_absent` reads a
+    `(kind, id)` the fixture never wrote, as the entitled initiator — the ordinary absent case,
+    unrelated to entitlement at all.
+
+    **WHAT THIS ARM REFUSES TO ASSERT, STATED SO A CALLER DOES NOT ASK FOR IT BY ACCIDENT:**
+    whether `call_get_as_unentitled` and `call_get_absent` are distinguishable from each other.
+    The Protocol's own docstring rules that out on purpose — asserting it here would make this
+    arm reward an implementation that leaks existence through a side channel the Protocol exists
+    to close. The one thing this arm CAN and does assert: the entitled read actually sees rows,
+    proving entitlement is a real gate and not a no-op that happens to be satisfied for every
+    fixture this implementer wrote.
+    """
+    op = "artifacts.get"
+
+    entitled = call_get_as_entitled()
+    if entitled.outcome != "answered" or not entitled.rows:
+        _fail(op, f"an initiator entitled to the fixture's own artifact got "
+                  f"outcome={entitled.outcome!r}, not 'answered' with rows. Nothing proves "
+                  f"entitlement is a real gate if the one case meant to pass does not")
+
+    unentitled = call_get_as_unentitled()
+    if unentitled.outcome != "empty":
+        _fail(op, f"an initiator NOT entitled to the fixture's own artifact got "
+                  f"outcome={unentitled.outcome!r}, not 'empty'. An implementation returning "
+                  f"'answered' here is not refusing — it is leaking the artifact to a caller "
+                  f"this fixture built specifically to be refused")
+
+    absent = call_get_absent()
+    if absent.outcome != "empty":
+        _fail(op, f"a (kind, id) the fixture never wrote produced outcome={absent.outcome!r}, "
+                  f"not 'empty' — unrelated to entitlement, the ordinary absent case every other "
+                  f"read Protocol in this SDK already distinguishes from 'answered'")
+
+    assert_fixture_discriminates(
+        f"{op} entitled vs unentitled", entitled, unentitled, describe=lambda r: r.outcome
+    )
 
 
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1

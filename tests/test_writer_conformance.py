@@ -26,6 +26,7 @@ from iagent_mesh.conformance import (
     check_ontology_writer_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
+    check_vectors_writer_has_contract,
     check_writer_offline,
 )
 from iagent_mesh.interfaces import EdgeIdentity, EdgeIdentityFilter, Initiator
@@ -678,6 +679,12 @@ class _VectorsStore:
         self._store.pop((collection, id), None)
         return MeshWriteResult.written()
 
+    def has(self, initiator: Initiator, *, collection, id) -> MeshResult:
+        initiator.require_person_or_delegate("vectors.has")
+        if (collection, id) in self._store:
+            return MeshResult.answered([{"collection": collection, "id": id}])
+        return MeshResult.empty()
+
 
 GOOD_VECTOR = [0.1, 0.2, 0.3]
 WRONG_VECTOR = [0.1, 0.2]
@@ -906,6 +913,80 @@ def test_V_DELETE_OF_A_NEVER_WRITTEN_ID_THAT_REFUSES_IS_CAUGHT():
     embedder = _CountingEmbedder(should_fail=False)
     with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*never written.*not an applied"):
         _run_vectors_delete(RefusesOnUnknownId(embedder), embedder)
+
+
+# ── check_vectors_writer_has_contract, added 2026-10-07 — opens v0.9.9 scope, the
+# write_node/has_node/delete_node PARITY ask for MeshVectorsWriter ─────────────────────────────
+
+HAS_COLLECTION = "c"
+HAS_WRITTEN_ID, HAS_NEVER_WRITTEN_ID = "has-written-id", "has-never-written-id"
+
+
+def _run_vectors_has(store, embedder) -> None:
+    check_vectors_writer_has_contract(
+        call_write=lambda: store.write(
+            PERSON, collection=HAS_COLLECTION, id=HAS_WRITTEN_ID, text="t"
+        ),
+        call_has_matching=lambda: store.has(
+            PERSON, collection=HAS_COLLECTION, id=HAS_WRITTEN_ID
+        ),
+        call_has_not_matching=lambda: store.has(
+            PERSON, collection=HAS_COLLECTION, id=HAS_NEVER_WRITTEN_ID
+        ),
+    )
+
+
+def test_V_HAS_A_CONFORMING_VECTORS_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    embedder = _CountingEmbedder(should_fail=False)
+    _run_vectors_has(_VectorsStore(embedder), embedder)
+
+
+def test_V_HAS_THAT_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            return MeshResult.answered([{"collection": collection, "id": id}])
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_vectors_has(AlwaysAnswers(embedder), embedder)
+
+
+def test_V_HAS_THAT_CANNOT_FIND_THE_WRITTEN_ID_IS_CAUGHT():
+    class CannotFind(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            if (collection, id) == (HAS_COLLECTION, HAS_WRITTEN_ID):
+                return MeshResult.failed("simulated: the written id is not actually findable")
+            return super().has(initiator, collection=collection, id=id)
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*not 'answered'"):
+        _run_vectors_has(CannotFind(embedder), embedder)
+
+
+def test_V_HAS_THAT_ANSWERS_FOR_A_NEVER_WRITTEN_ID_TOO_IS_CAUGHT():
+    class AnswersForUnwritten(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            if (collection, id) == (HAS_COLLECTION, HAS_NEVER_WRITTEN_ID):
+                return MeshResult.failed("simulated: errors instead of answering empty")
+            return super().has(initiator, collection=collection, id=id)
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*not 'empty'"):
+        _run_vectors_has(AnswersForUnwritten(embedder), embedder)
+
+
+def test_V_HAS_WHEN_THE_WRITE_ITSELF_DID_NOT_APPLY_IS_CAUGHT_BEFORE_CHECKING_HAS():
+    class RefusesWrite(_VectorsStore):
+        def write(self, initiator, *, collection, id, text, domains=(), vector_required=True):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*did not apply"):
+        _run_vectors_has(RefusesWrite(embedder), embedder)
 
 
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1

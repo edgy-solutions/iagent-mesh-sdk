@@ -70,6 +70,7 @@ __all__ = [
     "MeshGraph",
     "MeshOntology",
     "MeshVectors",
+    "MeshArtifacts",
     "MESH_COLLECTION_META",
     "CollectionMarker",
     "CorruptCollectionMarker",
@@ -774,6 +775,62 @@ class MeshVectors(Protocol):
         """
 
 
+@runtime_checkable
+class MeshArtifacts(Protocol):
+    """Named reads over the artifact store — whatever holds artifacts, read through ONE contract
+    instead of a gateway route hand-built per shape.
+
+    **ADDED 2026-10-07, OPENING v0.9.9 SCOPE.** Not one of the three this file's own
+    ``## the three interfaces`` section header names above — a fourth, added later, for a gap
+    neither of the first three closes: cortex and OpenDDIL each need to read an artifact by id and
+    list artifacts by kind, and each had built its own gateway route to do it, one route per
+    shape, kept in sync by hand. That is the same proliferation ``run_any_graph`` reasoning
+    already refuses for a query language, applied to a gateway instead. ``kind`` here is the same
+    vocabulary :attr:`iagent_mesh.ingest.ContentKindRegistration.kind` already names — the legal
+    set of kinds IS the registered rows, not a second vocabulary declared here.
+
+    **READ-ONLY, the same posture as MeshGraph/MeshOntology/MeshVectors** — nothing here holds a
+    driver, and this Protocol has no write half. An artifact's own arrival is the ingest layer's
+    concern (see :class:`iagent_mesh.ingest.ArtifactRevision`), not this one's: that model is the
+    row shape an arrival list builds with, and explicitly does not say who holds the list or how
+    it is read back — this Protocol is the read-back half that leaves open.
+
+    **"WITH ENTITLEMENT" IS AN OBLIGATION ON THE IMPLEMENTATION, NOT A MECHANISM THIS PROTOCOL
+    CARRIES.** This SDK owns no compartment/``can_view`` model of its own — see :class:`Initiator`
+    on why identity travels opaque rather than parsed, the same reason this Protocol does not
+    invent a second authorization surface beside whatever decider the deployment already has.
+    What IS a Protocol-level requirement: a read for an artifact the initiator is not entitled to
+    see must come back as a REFUSAL — ``MeshResult(outcome="empty")`` or a raised
+    ``PermissionError`` the implementation owns — never as ``outcome="answered"`` over a
+    silently-filtered, incomplete row set standing in for one. Conformance can assert the SHAPE of
+    that refusal; it cannot assert the policy decision behind it, the same split this SDK already
+    draws between "declares the key" and "performs the check"
+    (:attr:`iagent_mesh.ingest.ContentKindRegistration.identity_field`).
+    """
+
+    def get(self, initiator: Initiator, *, kind: str, id: str) -> MeshResult:
+        """Read one artifact of kind ``kind`` at ``id``.
+
+        ``outcome="empty"`` covers BOTH "no such artifact" and "exists, but this initiator is not
+        entitled to see it" — the same ambiguity ``MeshResult`` already carries for every other
+        read in this SDK (*asked, and nothing matches* is one fact, *could not ask* is another,
+        and collapsing the two is the ambiguity this type exists to refuse — not a THIRD state
+        for "refused" to occupy). Telling "absent" apart from "refused" would mean a caller could
+        probe an artifact's mere existence under an entitlement that only covers its CONTENT —
+        exactly the side channel treating the two outcomes alike exists to close.
+        """
+
+    def list_by_kind(self, initiator: Initiator, *, kind: str) -> MeshResult:
+        """Every artifact of kind ``kind`` this initiator is entitled to see.
+
+        Fewer rows than the full registered set under ``kind`` is the CORRECT, intended shape of
+        an entitlement-scoped list — not a gap to fill. A caller that compares this result against
+        the complete set to detect what it is "missing" is reading entitlement scope off the
+        comparison, the same misreading a single `get`'s collapsed ``outcome="empty"`` already
+        refuses to support.
+        """
+
+
 # ── the write half, ruled 2026-09-27 ────────────────────────────────────────────────────────
 #
 # SIBLING PROTOCOLS, NOT NEW METHODS ON THE READ INTERFACES ABOVE. Every read Protocol in this
@@ -1177,6 +1234,18 @@ class MeshVectorsWriter(Protocol):
     unlike the graph writer's two needs, this one is genuinely new capability, cleanly additive
     because ``id`` is already first-class identity on this Protocol (unlike the graph writer's
     payload/identity split, nothing here is walled off from being addressed directly).
+
+    **AMENDED 2026-10-07 — OPENS v0.9.9 SCOPE, THE WRITE_NODE/HAS_NODE/DELETE_NODE PARITY ASK.**
+    :class:`MeshGraphWriter` carries a complete write/has/delete trio for a node's identity
+    (``write_node``/``has_node``/``delete_node``, all keyed on ``(label, id)``). This Protocol has
+    carried `write`/`delete` since 2026-09-30 but never grew the existence-check sibling — `has`
+    closes exactly that gap, keyed on the same ``(collection, id)`` pair `write`/`relocate`/
+    `delete` already use. Parity is in SHAPE, not in NAME: this Protocol keeps its own short
+    `write`/`relocate`/`delete`/`has` names rather than adopting `write_node`-style suffixes,
+    because `MeshVectorsWriter` has no edge/node distinction to disambiguate against — the
+    `_node` suffix on the graph writer's trio exists to tell those three apart from
+    `write_edge`/`has_edges`/`delete_edges` on the SAME Protocol, a problem this Protocol does
+    not have.
     """
 
     def write(
@@ -1218,6 +1287,28 @@ class MeshVectorsWriter(Protocol):
         :meth:`MeshGraphWriter.delete_edges` states for its own filter — an ``id`` that matches
         nothing still reports ``written``, because the store now satisfies "this id is absent",
         which may already have been true.
+        """
+
+    def has(self, initiator: Initiator, *, collection: str, id: str) -> MeshResult:
+        """Does an object at ``id`` within ``collection`` exist?
+
+        **ADDED 2026-10-07**, opening v0.9.9 scope — the existence-check sibling `write`/
+        `relocate`/`delete` never grew, closing the parity gap against
+        :meth:`MeshGraphWriter.has_node`/:meth:`MeshGraphWriter.has_edges`. The same idempotency
+        need those two serve: a caller deciding whether to `write` or `delete` an ``id`` needs to
+        know which one applies first, and a `MeshVectors` read (possibly served from a stale or
+        eventually-consistent index) would not guarantee read-your-own-write consistency for THIS
+        writer's own prior writes — the identical reasoning :meth:`MeshGraphWriter.has_node`'s own
+        docstring states for living on the writer rather than the read-only Protocol.
+
+        Keyed on plain ``(collection, id)``, the same two arguments `write`/`relocate`/`delete`
+        already take — no filter wrapper, because this Protocol's identity has no optional or
+        wildcard axis a wrapper would earn its keep by serving.
+
+        Returns :class:`MeshResult` with ``outcome="answered"`` and ``rows`` non-empty when the
+        object exists, ``outcome="empty"`` when it does not — never a bare ``bool``, the same
+        discipline ``has_edges``/``has_node`` already apply, so "determined absent" stays
+        distinguishable from "could not determine".
         """
 
 
