@@ -355,6 +355,36 @@ incumbent on every version through 0.9.7: a scalar value is exact-match (`{"doc_
 `Sequence`/`set` value is membership (`{"verb_iris": {"a", "b"}}`). Filters AND together. An
 empty mapping (the default) means no filter, same convention as `domains == ()`.
 
+#### Worked examples, one per store actually in production (surveyed 2026-10-06)
+
+The two examples above are illustrative. These three are not — each is a real caller, cited by
+file:line, so the mode/filter combination can be checked against deployed behavior rather than a
+hypothetical:
+
+```python
+# DocumentChunks (Weaviate) — agent_fleet/weaviate_expert/service.py:259
+r = vectors.nominate(who, collection=collection_name, text=phrase,
+                      mode="vector_only", metadata_filters=dict(metadata_filters))
+```
+`mode="vector_only"` is the DEFAULT — named here rather than omitted. This is the one
+combination the two illustrative examples above don't show: the default mode paired with a real
+`metadata_filters` narrow.
+
+```python
+# OntologyClass (Weaviate) — agent_fleet/ontology_service/main.py:1516
+r = vectors.nominate(who, collection="OntologyClass", text=phrase, mode="hybrid")
+```
+```python
+# Predicate (Weaviate) — agent_fleet/ontology_service/main.py:2001
+r = vectors.nominate(who, collection="Predicate", text=phrase, mode="hybrid")
+```
+Both name `mode="hybrid"` and pass no `metadata_filters`. Two different collections, the same
+call shape — included to show that shape is a CALLER's choice made per collection, not a property
+the collection itself forces.
+
+No production caller leaves `mode` unnamed: every one of the three above states it explicitly,
+`vector_only` included, rather than relying on the default reading as a silent choice.
+
 #### Always read `mode` on a nominate result
 
 ```python
