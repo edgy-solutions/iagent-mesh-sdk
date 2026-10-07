@@ -207,6 +207,13 @@ class ContentKindRegistration(BaseModel):
     the original shape — ``passes``/``outputs`` required, ``seeds_workflow``/``identity_field``
     absent.
 
+    **PARENT LINK, ADDED 0.9.9** — Lane 1's ask, opened by the s1000d-data-module walk: a
+    hierarchical document kind's instances name their own parent inside their extracted output,
+    and ``parent_link_field`` names which field of that output holds it. ``None`` (the default)
+    means this kind's instances are flat — a routing graph still reaches them, there is simply no
+    further hop up. Forbidden for ``branch="event"`` rows, which run no pass and produce no
+    extracted output for a parent reference to live in.
+
     **THIS SDK DOES NOT SHIP ANY ROWS.** The mapping table is "chartable, version-able,
     code-owned" per ADR-0021, colocated with the plugin registry — which lives in doc-tools, not
     here, the same reason :mod:`iagent_mesh.task_kinds` ships no domain species of its own.
@@ -273,6 +280,18 @@ class ContentKindRegistration(BaseModel):
     hazard the drop-domains prompt identified — forcing a generic kind to declare a domain it
     does not have. Set it only for a kind whose outputs always belong to one domain."""
 
+    parent_link_field: Optional[str] = None
+    """ADDED 0.9.9, Lane 1's ask. Names which field of this kind's EXTRACTED output holds the
+    identity of the artifact's own parent — e.g. the DMC string an S1000D data module's own
+    extraction names as its parent module, so the graph a kind's passes build can be walked one
+    hop at a time instead of requiring the whole hierarchy to be present before any edge is
+    drawn. ``None`` means this kind's instances have no parent to link (the default, and every
+    kind before this field existed) — a flat kind like ``work-instruction`` declares nothing
+    here. THIS MODULE DOES NOT WALK THE LINK, same split :attr:`identity_field` already states
+    for the event branch's own key: it only declares which field of the extracted output names
+    the parent, not how a caller resolves that name to the parent's own node. Forbidden for
+    ``branch="event"`` rows — see ``_branch_shape_is_consistent`` below."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
@@ -284,7 +303,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("seeds_workflow", "identity_field", "domain")
+    @field_validator("seeds_workflow", "identity_field", "domain", "parent_link_field")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
@@ -312,6 +331,13 @@ class ContentKindRegistration(BaseModel):
                     f"ContentKindRegistration(kind={self.kind!r}, branch='event') declares "
                     f"passes/outputs — an event kind is not extracted, it seeds a workflow; "
                     f"passes/outputs belong to branch='document' rows only"
+                )
+            if self.parent_link_field is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='event') declares "
+                    f"parent_link_field — an event kind runs no pass and produces no extracted "
+                    f"output for a parent reference to live in; parent_link_field belongs to "
+                    f"branch='document' rows only"
                 )
             if self.seeds_workflow is None:
                 raise ValueError(
