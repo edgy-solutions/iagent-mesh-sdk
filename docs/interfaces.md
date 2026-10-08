@@ -512,6 +512,14 @@ day. Stated here rather than left silent: cortex and OpenDDIL's own
 hand-built gateway routes, the proliferation this Protocol exists to replace,
 have not yet been migrated to call it.
 
+**Still true 2026-10-08**, one day later: Lane 1's §8 read is this Protocol's
+named first caller, but it does not exist yet either. A shape packet went out
+the same day (`invincible-agent/sessions/
+2026-10-08-packet-to-lane-01-meshartifacts-shape-for-the-section-8-read.md`) so
+§8 can be built against this spec directly — it ships the shape, not an
+implementation, so this section's "none exist yet" stays accurate until §8
+lands and actually calls `get`/`list_by_kind`.
+
 ---
 
 ## 4a. The write half
