@@ -315,6 +315,26 @@ from .workflow_case import (
     WorkflowCaseRecord,
 )
 
+# The ADR-0029 git-asserted process schema ADR-0039 extends (0.9.9) — `WorkflowDefinition` and its
+# eight step kinds, mirroring `workflow_definition.py` field-for-field, per today's packet's item 2.
+# Carries no execution state of its own; see the module docstring for why neither `CaseState` nor
+# `WorkflowCaseRecord.state`/`.terminal` have any counterpart here.
+from .workflow_definition import (
+    CompletionPolicy,
+    DirectCallStep,
+    DispatchFanoutStep,
+    EmitStep,
+    HumanAwaitStep,
+    RenderStep,
+    SignalAwaitStep,
+    SpoOperationStep,
+    Step,
+    WaitStep,
+    WorkflowDefinition,
+    WorkflowDefinitionError,
+    load_workflow_definition,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -526,4 +546,19 @@ __all__ = [
     "CaseTransition",
     "InputRevisionProvenance",
     "WorkflowCaseRecord",
+    # the ADR-0029 process schema ADR-0039 extends (0.9.9) — workflow_definition.py's
+    # WorkflowDefinition and its 8 step kinds mirror, no execution state of its own
+    "CompletionPolicy",
+    "DirectCallStep",
+    "DispatchFanoutStep",
+    "EmitStep",
+    "HumanAwaitStep",
+    "RenderStep",
+    "SignalAwaitStep",
+    "SpoOperationStep",
+    "Step",
+    "WaitStep",
+    "WorkflowDefinition",
+    "WorkflowDefinitionError",
+    "load_workflow_definition",
 ]
