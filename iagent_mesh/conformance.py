@@ -26,7 +26,7 @@ their store; it asserts that fixture discriminates before trusting it.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from .ingest import ArtifactRevision
 from .interfaces import (
@@ -64,6 +64,7 @@ __all__ = [
     "check_refresh_spec_pull_contract",
     "check_vectors_writer_has_contract",
     "check_mesh_artifacts_entitlement_contract",
+    "check_system_of_record_query_contract",
 ]
 
 
@@ -1264,3 +1265,85 @@ def check_refresh_spec_pull_contract(
         _fail(op, f"the resolved pull URL {url!r} does not contain the identity value "
                   f"{identity_value!r}. A pull URL that does not key on this artifact's identity "
                   f"is pulling SOMETHING, not necessarily the fresher arrival for THIS artifact")
+
+
+# ── check_system_of_record_query_contract, added 0.9.9 — lane/saf's proposal 1 (accepted),
+# ADR-0056's connector-shape question ───────────────────────────────────────────────────────
+
+
+def check_system_of_record_query_contract(
+    *,
+    connector: str,
+    returns: Sequence[str],
+    call_query_known: Callable[[], Iterable[dict[str, str]]],
+    call_query_unknown: Callable[[], Iterable[dict[str, str]]],
+    call_lookup_known: Callable[[], Optional[dict[str, str]]],
+) -> None:
+    """Proves a `SystemOfRecordQuery` implementation against `SystemOfRecordConnector`'s own
+    `lookup` rulings, never by building either fixture itself — same "nothing to verify against"
+    discipline every write-then-read arm in this module already applies.
+
+    `call_query_known` queries a value the implementer's fixture connector holds one or more
+    records for; `call_query_unknown` queries a value it holds none for; `call_lookup_known`
+    looks up the SAME known value through the existing single-record `lookup` — the control
+    proving this module's query() sibling leaves lookup()'s one-dict-or-None shape untouched.
+    `connector`/`returns` are the fixture row's own `lookup.connector` / `lookup.returns`, so this
+    arm can check records are keyed by the row's OWN declared fields, not a shape it invents.
+    """
+    op = "systems_of_record.query"
+
+    unknown = call_query_unknown()
+    unknown_first = list(unknown)
+    unknown_second = list(unknown)
+    if unknown_first:
+        _fail(op, f"query() for a value the fixture connector does not hold returned "
+                  f"{unknown_first!r}, not empty — an unknown value must come back as an empty "
+                  f"iterable, the many-record sibling of lookup()'s None, never a third state")
+    if unknown_second != unknown_first:
+        _fail(op, f"iterating the object query() returned for an unknown value produced "
+                  f"{unknown_first!r} on the first pass and {unknown_second!r} on a second pass "
+                  f"over the SAME object — query()'s result must be RE-ITERABLE even when empty")
+
+    known = call_query_known()
+    known_first = list(known)
+    known_second = list(known)
+    if not known_first:
+        _fail(op, "query() for a value the fixture connector DOES hold returned no records — "
+                  "nothing proves query() can ever return a hit if the one case meant to pass "
+                  "does not")
+    if known_second != known_first:
+        _fail(op, f"iterating the object query() returned produced {known_first!r} on the first "
+                  f"pass and {known_second!r} on a second pass over the SAME known value — "
+                  f"query() must return a RE-ITERABLE result (e.g. a list or tuple), not a "
+                  f"one-shot iterator that goes empty the second time a caller counts then cites")
+
+    assert_fixture_discriminates(
+        f"{op} known vs unknown", known_first, unknown_first, describe=lambda r: bool(r)
+    )
+
+    expected_keys = set(returns)
+    citations = []
+    for record in known_first:
+        if "record_id" not in record:
+            _fail(op, f"a record query() returned is {record!r} — missing 'record_id', the key "
+                      f"a caller needs to build the citation f'{{connector}}:{{record_id}}', the "
+                      f"same grammar lookup()'s own evidence already cites a hit with")
+        other_keys = set(record) - {"record_id"}
+        if other_keys != expected_keys:
+            _fail(op, f"a record query() returned has keys {sorted(other_keys)!r} besides "
+                      f"'record_id', not {sorted(expected_keys)!r} from this row's own "
+                      f"lookup.returns — query()'s records must be keyed by the SAME declared "
+                      f"returns lookup()'s single hit already is, not a connector-invented shape")
+        citations.append(f"{connector}:{record['record_id']}")
+
+    if len(set(citations)) != len(citations):
+        _fail(op, f"query() returned records whose citations collide once built as "
+                  f"f'{{connector}}:{{record_id}}': {citations!r} — two distinct records must "
+                  f"not round-trip to the same citation, or a caller citing one silently cites "
+                  f"the other")
+
+    control = call_lookup_known()
+    if not isinstance(control, (dict, type(None))):
+        _fail(op, f"lookup() for the same value this arm queried returned {control!r}, not a "
+                  f"dict-or-None — adding query() as a sibling must leave the origin path "
+                  f"(lookup()) UNCHANGED, never widened into also returning a list")
