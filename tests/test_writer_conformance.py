@@ -24,6 +24,7 @@ from iagent_mesh.conformance import (
     check_graph_writer_key_only_delete_contract,
     check_graph_writer_write_node_contract,
     check_ontology_writer_contract,
+    check_ontology_writer_graph_isolation_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
     check_vectors_writer_has_contract,
@@ -35,6 +36,7 @@ from iagent_mesh.write_results import MeshWriteResult
 
 PERSON = Initiator(subject="alice", kind="person")
 GRAPH = "ex:graph"
+GRAPH_B = "ex:other-graph"
 IRI = "ex:thing"
 
 
@@ -157,6 +159,71 @@ def test_A_STORE_WHERE_BOTH_ASKS_ARE_ALWAYS_EMPTY_IS_REFUSED_AS_NON_DISCRIMINATI
 
     with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
         _run(AlwaysEmpty())
+
+
+# ── check_ontology_writer_graph_isolation_contract: graph A vs a DIFFERENT NAMED graph B ───
+# (check_ontology_writer_contract above only proves scoped-vs-DEFAULT isolation; it cannot catch
+# a writer that scopes correctly against the default graph but still leaks across two caller-
+# chosen graphs — the document-graph case this SDK scopes writes by.)
+
+def _run_isolation(store) -> None:
+    check_ontology_writer_graph_isolation_contract(
+        call_upsert_into_graph_a=lambda: store.upsert(
+            PERSON, graph=GRAPH, iri=IRI, triples=[f"<{IRI}> a <ex:Class> ."]
+        ),
+        call_ask_graph_a=lambda: store.ask(PERSON, iri=IRI, graph=GRAPH),
+        call_ask_graph_b=lambda: store.ask(PERSON, iri=IRI, graph=GRAPH_B),
+    )
+
+
+def test_B_A_SCOPED_WRITER_NEVER_TOUCHES_A_DIFFERENT_GRAPH():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_isolation(_ScopedOntologyStore())
+
+
+def test_B_A_WRITER_THAT_LEAKS_INTO_A_DIFFERENT_NAMED_GRAPH_IS_CAUGHT():
+    """A write correctly found WITHIN graph A, but also visible from a graph-B ask — scoped
+    against the default graph (it could still pass `check_ontology_writer_contract`'s own arm)
+    but not scoped between two graphs a caller actually uses."""
+
+    class LeaksIntoGraphBToo(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            if graph == GRAPH_B:
+                return MeshResult.failed("simulated: graph B is not actually empty here")
+            return super().ask(initiator, iri=iri, graph=graph)
+
+    with pytest.raises(ConformanceFailure, match=r"ontology\.upsert \(graph isolation\).*graph B.*not 'empty'"):
+        _run_isolation(LeaksIntoGraphBToo())
+
+
+def test_B_A_WRITER_WHOSE_UPSERT_DID_NOT_APPLY_IS_REFUSED_BEFORE_ASKING():
+    class Refuses(_ScopedOntologyStore):
+        def upsert(self, initiator, *, graph, iri, triples):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    with pytest.raises(ConformanceFailure, match=r"ontology\.upsert \(graph isolation\).*did not apply"):
+        _run_isolation(Refuses())
+
+
+def test_B_A_STORE_WHERE_BOTH_GRAPH_ASKS_ALWAYS_ANSWER_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            return MeshResult.answered([iri])
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_isolation(AlwaysAnswers())
+
+
+def test_B_A_STORE_WHERE_BOTH_GRAPH_ASKS_ARE_ALWAYS_EMPTY_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysEmpty(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            return MeshResult.empty()
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_isolation(AlwaysEmpty())
 
 
 # ── check_writer_offline: the NotImplementedError arm, not yet covered elsewhere ──────────

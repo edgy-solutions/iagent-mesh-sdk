@@ -77,6 +77,25 @@ def test_the_body_GRAPH_WRAPS_both_the_delete_and_the_insert_half(wire):
     assert "<http://mesh/thing> a <http://mesh/Class> ." in body
 
 
+def test_upserts_into_two_different_graphs_never_cross_reference_each_other(wire):
+    """Document-graph scoping: two upserts to two different graphs must each be GRAPH-wrapped to
+    ONLY their own graph — the wire-level sibling of
+    `check_ontology_writer_graph_isolation_contract`, proved against the real SPARQL body rather
+    than an in-memory fake."""
+    seen = wire(lambda r: httpx.Response(200, text="Update succeeded"))
+    writer = _writer()
+
+    writer.upsert(PERSON, graph="http://mesh/doc-a", iri="http://mesh/thing", triples=["<http://mesh/thing> a <ex:Class> ."])
+    body_a = seen["body"]
+    assert "http://mesh/doc-a" in body_a
+    assert "http://mesh/doc-b" not in body_a
+
+    writer.upsert(PERSON, graph="http://mesh/doc-b", iri="http://mesh/thing", triples=["<http://mesh/thing> a <ex:Class> ."])
+    body_b = seen["body"]
+    assert "http://mesh/doc-b" in body_b
+    assert "http://mesh/doc-a" not in body_b
+
+
 @pytest.fixture
 def count_requests(monkeypatch):
     """No two-round-trip window where the graph holds neither the old state nor the new one —

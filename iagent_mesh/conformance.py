@@ -52,6 +52,7 @@ __all__ = [
     "check_ontology_contract",
     "check_writer_offline",
     "check_ontology_writer_contract",
+    "check_ontology_writer_graph_isolation_contract",
     "check_graph_writer_contract",
     "check_vectors_writer_contract",
     "check_graph_writer_has_edges_contract",
@@ -544,6 +545,53 @@ def check_ontology_writer_contract(
                   f"landed unscoped — this is the exact doc-tools defect (three of four "
                   f"SPARQL-emitting plugins inserting into the default graph, invisible to the "
                   f"mesh resolver) that GRAPH-wrapping every write exists to make impossible")
+
+
+# ── the ontology writer's cross-graph isolation arm, added 0.9.9 ───────────────────────────
+
+
+def check_ontology_writer_graph_isolation_contract(
+    *,
+    call_upsert_into_graph_a: Callable[[], MeshWriteResult],
+    call_ask_graph_a: Callable[[], MeshResult],
+    call_ask_graph_b: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshOntologyWriter`` contract's other half: an upsert into graph A must be invisible
+    from graph B — a DIFFERENT NAMED graph, not Jena's default. :func:`check_ontology_writer_contract`
+    already proves scoped-vs-default isolation; it cannot catch a writer that scopes correctly
+    against the default graph but still leaks across two caller-chosen graphs (the document-graph
+    case this SDK scopes writes by: one graph per document, siblings that must never see each
+    other's upserts).
+
+    ``call_upsert_into_graph_a`` performs one upsert into a known graph ("graph A") for a known
+    ``iri``, already bound by the caller. ``call_ask_graph_a`` and ``call_ask_graph_b`` are both
+    zero-argument :class:`iagent_mesh.interfaces.MeshOntology` ``ask()`` calls for that SAME
+    ``iri`` — one scoped to graph A, one scoped to a DIFFERENT named graph ("graph B") — bound to a
+    PERSON initiator by the caller, run AFTER the upsert.
+    """
+    op = "ontology.upsert (graph isolation)"
+
+    written = call_upsert_into_graph_a()
+    if not written.applied:
+        _fail(op, f"the upsert itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify isolation against")
+
+    a = call_ask_graph_a()
+    b = call_ask_graph_b()
+
+    assert_fixture_discriminates(
+        f"{op} graph A vs graph B ask", a, b, describe=lambda r: r.outcome
+    )
+
+    if a.outcome != "answered":
+        _fail(op, f"asking for the written iri WITHIN graph A produced {a.outcome!r}, not "
+                  f"'answered'. The write claimed to land in graph A and a scoped read cannot "
+                  f"find it there")
+    if b.outcome != "empty":
+        _fail(op, f"asking for the written iri in graph B produced {b.outcome!r}, not 'empty'. "
+                  f"An upsert into graph A leaked into a DIFFERENT NAMED graph — the document-graph "
+                  f"scoping this Protocol exists to guarantee does not hold between two graphs a "
+                  f"caller actually uses, only between a graph and the default one")
 
 
 # ── the graph-writer arm, ruled 2026-09-28 overnight ────────────────────────────────────────

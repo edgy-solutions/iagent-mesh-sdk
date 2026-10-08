@@ -809,6 +809,33 @@ answers while the default-graph ask stays empty. A writer that reported
 `written` while landing unscoped cannot pass by reporting alone — the lie does
 not survive being asked.
 
+#### A third arm, added 0.9.9: graph A vs a different named graph B
+
+The arm above only proves scoped-vs-**default**-graph isolation. It cannot
+catch a writer that scopes correctly against the default graph but still
+leaks across two caller-chosen graphs — the document-graph case this SDK
+scopes writes by, one graph per document, siblings that must never see each
+other's upserts.
+
+```python
+from iagent_mesh.conformance import check_ontology_writer_graph_isolation_contract
+
+check_ontology_writer_graph_isolation_contract(
+    call_upsert_into_graph_a=lambda: writer.upsert(who, graph=GRAPH_A, iri=IRI, triples=T),
+    call_ask_graph_a=lambda: reader.ask(who, iri=IRI, graph=GRAPH_A),
+    call_ask_graph_b=lambda: reader.ask(who, iri=IRI, graph=GRAPH_B),
+)
+```
+
+Same discipline, different pair: the ask scoped to graph A must answer, the
+ask scoped to graph B (a different NAMED graph, not `None`) must stay empty.
+`JenaOntologyWriter.upsert` already satisfies both arms — its `graph` keyword
+has been required since the 2026-09-27 ruling, wrapped around every triple on
+both the delete and insert half of the update — so this arm closes a gap in
+the *conformance suite's* coverage, not in the reference writer, which
+`tests/test_jena_writer.py::test_upserts_into_two_different_graphs_never_cross_reference_each_other`
+now also proves directly against the SPARQL body it sends.
+
 ---
 
 ## 5. The collection marker
