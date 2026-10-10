@@ -6,6 +6,33 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## Unreleased — `lane/ca-0.9.10`
+
+On a lane branch, not tagged — per this cycle's own governing instruction, no tag until Lane 1
+asks. `pyproject.toml`'s `version` is unchanged at `0.9.9` on this branch; it only moves at the
+next release ceremony on `master`.
+
+### Added
+- `Initiator.authz_id` — a second opaque identity claim, for deployments whose authorization
+  decider keys on a different claim than `subject` (e.g. invincible-agent's `GatewayArtifacts`:
+  owner check on `subject`, delegate map on `authz_id`). Unconstrained by `kind`, unlike
+  `on_behalf_of` — no proposal yet says which kinds require or forbid it.
+- `check_mesh_artifacts_list_by_kind_contract` — the list-route sibling of
+  `check_mesh_artifacts_entitlement_contract`: proves `list_by_kind` scopes by entitlement
+  (entitled→rows, entitled-to-none→empty, absent kind→empty) without asserting anything about a
+  partially-entitled caller's row count, which the Protocol's own docstring rules is a correctly
+  scoped list's intended shape, not a gap.
+- `check_system_of_record_query_independence_contract` — proves one `SystemOfRecordQuery`
+  connector instance answers two different values independently: querying B must not perturb a
+  later re-query of A, and each result stays its own re-iterable collection. `query()` takes no
+  `Initiator`, so this is not an entitlement arm — per-caller scoping for this Protocol is the
+  caller's own concern (confirmed against lane/saf's FRACAS consumer).
+
+### Coordination (no code change in this repo)
+- Packet to `invincible-agent/lane/01` naming `frontend_version` as the field `InterviewRequest`
+  needs to declare to unblock cortex-ui's `feat/frontend-version-on-ask` worktree — that model is
+  owned by `invincible-agent/src/iagent/gateway.py`, not this SDK; nothing here to change.
+
 ## 0.9.9 — 2026-10-09
 
 First tagged cut since v0.9.8; v0.9.7 was requested but never actually tagged, so several items

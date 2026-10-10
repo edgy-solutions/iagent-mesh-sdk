@@ -157,6 +157,22 @@ class Initiator(BaseModel):
     person or a service asserts a relationship neither kind declares.
     """
 
+    authz_id: Optional[str] = None
+    """A second opaque identity claim, present only when the deployment's authorization decider
+    keys on a DIFFERENT claim than ``subject`` does. **ADDED 2026-10-10, answering invincible-
+    agent/lane/01's 2026-10-08 packet**: their ``GatewayArtifacts`` reader checks ownership against
+    the JWT ``sub`` (``subject`` here) but resolves its delegate map against ``authz_id`` — two
+    claims off the same token, read for two different purposes, and until now ``Initiator`` could
+    only carry one of them, which is why that reader had grown its own extra kwarg instead.
+
+    **SAME DISCIPLINE AS ``subject`` — opaque, never parsed, and this is still ``authz_id`` kept
+    distinct from a provenance actor**, not a new kind of field. Nothing in this SDK reads it as a
+    gate input on its own; a conforming decider that needs it reads it directly off this object the
+    same way it already reads ``subject``. Unconstrained by ``kind`` deliberately: unlike
+    ``on_behalf_of``, no proposal yet says which kinds require or forbid it, and inventing that
+    constraint here would be this SDK answering a question lane/01 did not ask.
+    """
+
     @field_validator("subject")
     @classmethod
     def _subject_is_present(cls, v: str) -> str:
@@ -164,6 +180,16 @@ class Initiator(BaseModel):
             raise ValueError(
                 "initiator subject is empty — an anonymous read is not a read with a missing "
                 "name, it is a read nobody can be held to"
+            )
+        return v
+
+    @field_validator("authz_id")
+    @classmethod
+    def _authz_id_is_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                "initiator authz_id='' — omit the field (None) to mean 'this deployment has no "
+                "second claim', rather than binding it to an empty one"
             )
         return v
 

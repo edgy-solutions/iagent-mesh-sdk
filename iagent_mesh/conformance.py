@@ -65,7 +65,9 @@ __all__ = [
     "check_refresh_spec_pull_contract",
     "check_vectors_writer_has_contract",
     "check_mesh_artifacts_entitlement_contract",
+    "check_mesh_artifacts_list_by_kind_contract",
     "check_system_of_record_query_contract",
+    "check_system_of_record_query_independence_contract",
     "check_provenance_floor_contract",
     "check_provenance_sources_contract",
 ]
@@ -1057,6 +1059,62 @@ def check_mesh_artifacts_entitlement_contract(
     )
 
 
+# ── check_mesh_artifacts_list_by_kind_contract, added 2026-10-10 — the list-route sibling,
+# opened by cortex's consumer needing a shape before the platform builds against it ────────────
+
+
+def check_mesh_artifacts_list_by_kind_contract(
+    *,
+    call_list_as_entitled: Callable[[], MeshResult],
+    call_list_as_unentitled: Callable[[], MeshResult],
+    call_list_absent_kind: Callable[[], MeshResult],
+) -> None:
+    """Proves an implementation's `MeshArtifacts.list_by_kind` scopes by entitlement rather than
+    returning the kind's full registered set regardless of caller — same discipline as
+    `check_mesh_artifacts_entitlement_contract`'s `get` arm, applied to the list route.
+
+    `call_list_as_entitled` lists a `kind` the fixture wrote at least one artifact under, as an
+    initiator entitled to see it — the fixture's own write, so there is something to verify
+    against. `call_list_as_unentitled` lists the SAME `kind` as an initiator the fixture
+    constructs to be refused, entitled to none of it, by whatever decider the implementation
+    defers to. `call_list_absent_kind` lists a `kind` the fixture never wrote anything under, as
+    the entitled initiator — the ordinary empty-collection case, unrelated to entitlement.
+
+    **WHAT THIS ARM REFUSES TO ASSERT, STATED SO A CALLER DOES NOT ASK FOR IT BY ACCIDENT:**
+    whether a PARTIALLY entitled caller's row count matches anything. `list_by_kind`'s own
+    docstring rules that a correctly-scoped list may legitimately return fewer rows than the
+    kind's full registered set — not a gap to fill — and a caller diffing against the full set to
+    detect what it is "missing" is misreading entitlement scope as a defect. This arm covers only
+    the binary case every other read Protocol in this SDK already covers: entitled to the whole
+    fixture vs. entitled to none of it vs. nothing registered at all.
+    """
+    op = "artifacts.list_by_kind"
+
+    entitled = call_list_as_entitled()
+    if entitled.outcome != "answered" or not entitled.rows:
+        _fail(op, f"an initiator entitled to the fixture's own artifacts got "
+                  f"outcome={entitled.outcome!r}, not 'answered' with rows. Nothing proves "
+                  f"entitlement-scoping is a real gate if the one case meant to pass does not")
+
+    unentitled = call_list_as_unentitled()
+    if unentitled.outcome != "empty":
+        _fail(op, f"an initiator entitled to NONE of the fixture's artifacts under this kind got "
+                  f"outcome={unentitled.outcome!r}, not 'empty'. An implementation returning "
+                  f"'answered' here is not scoping by entitlement — it is listing the kind's "
+                  f"full set to a caller this fixture built specifically to be refused")
+
+    absent = call_list_absent_kind()
+    if absent.outcome != "empty":
+        _fail(op, f"a kind the fixture never wrote anything under produced "
+                  f"outcome={absent.outcome!r}, not 'empty' — unrelated to entitlement, the "
+                  f"ordinary empty-collection case every other read Protocol in this SDK already "
+                  f"distinguishes from 'answered'")
+
+    assert_fixture_discriminates(
+        f"{op} entitled vs unentitled", entitled, unentitled, describe=lambda r: r.outcome
+    )
+
+
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
 # moving the ingest node off Neo4jIngestGraph ───────────────────────────────────────────────
 
@@ -1397,6 +1455,65 @@ def check_system_of_record_query_contract(
         _fail(op, f"lookup() for the same value this arm queried returned {control!r}, not a "
                   f"dict-or-None — adding query() as a sibling must leave the origin path "
                   f"(lookup()) UNCHANGED, never widened into also returning a list")
+
+
+# ── check_system_of_record_query_independence_contract, added 2026-10-10 — 0.9.10 branch item 3.
+# `SystemOfRecordQuery.query` takes NO `Initiator` — unlike `MeshArtifacts`, there is no
+# caller-identity input this Protocol scopes by; per-caller entitlement is the CALLER's own
+# concern (confirmed against lane/saf's FRACAS consumer, which gates at the app level before this
+# Protocol is ever reached). What this Protocol DOES promise, and what had no arm before this
+# one: one connector instance answers successive, DIFFERENT queries independently — no state
+# bleed from an earlier call shapes a later one ──────────────────────────────────────────────────
+
+
+def check_system_of_record_query_independence_contract(
+    *,
+    call_query_value_a: Callable[[], Iterable[dict[str, str]]],
+    call_query_value_b: Callable[[], Iterable[dict[str, str]]],
+    call_query_value_a_again: Callable[[], Iterable[dict[str, str]]],
+) -> None:
+    """Proves one connector instance answers two different values independently: querying B then
+    A-again must not have been perturbed by the earlier call to A, and each result stays its own
+    safely re-iterable collection — the property `check_system_of_record_query_contract` does not
+    cover, since every one of its calls queries a single value in isolation.
+
+    `call_query_value_a` and `call_query_value_b` must query two DIFFERENT values the fixture
+    connector holds distinct, non-empty record sets for (the fixture's own writes — this arm has
+    nothing to verify against otherwise). `call_query_value_a_again` must re-run the SAME query as
+    `call_query_value_a`, on the SAME connector instance, after B has already been queried.
+    """
+    op = "systems_of_record.query (independence)"
+
+    a_first = list(call_query_value_a())
+    if not a_first:
+        _fail(op, "query() for value A returned no records on the first call — nothing proves "
+                  "independence if there is nothing to compare a later call against")
+
+    b = list(call_query_value_b())
+    if not b:
+        _fail(op, "query() for value B returned no records — the fixture must hold a distinct, "
+                  "non-empty record set for B, or this arm cannot prove A's second answer was "
+                  "unperturbed by an intervening call that itself did nothing")
+
+    if a_first == b:
+        _fail(op, f"value A and value B both produced {a_first!r} — the fixture must query two "
+                  f"values whose record sets actually differ, or this arm cannot tell "
+                  f"'independent' apart from 'always returns the same thing'")
+
+    a_again = call_query_value_a_again()
+    a_second = list(a_again)
+    a_second_repeat = list(a_again)
+    if a_second != a_first:
+        _fail(op, f"query() for value A returned {a_first!r} before value B was queried and "
+                  f"{a_second!r} after — the SAME value must produce the SAME records regardless "
+                  f"of what else this connector instance was asked in between. State bleeding "
+                  f"across calls means a caller holding one connector instance across a request "
+                  f"cannot trust any answer it already received")
+    if a_second_repeat != a_second:
+        _fail(op, f"re-iterating the object returned for value A's second call produced "
+                  f"{a_second!r} then {a_second_repeat!r} on a second pass over the SAME object — "
+                  f"query()'s result must stay RE-ITERABLE even after an intervening call to a "
+                  f"different value")
 
 
 # ── check_provenance_floor_contract / check_provenance_sources_contract, added 0.9.9 — item 2

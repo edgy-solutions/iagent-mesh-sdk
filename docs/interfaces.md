@@ -80,10 +80,12 @@ who = Initiator(subject="alice@example.com", kind="person")
 | `subject` | `str` | The authorization identity, **opaque**. Whatever claim your deployment keys on — an email, an employee id, a Keycloak name. The SDK never parses it. |
 | `kind` | `"person"` \| `"service"` \| `"delegate"` | **Declared, never sniffed.** |
 | `on_behalf_of` | `str \| None` | Who a **delegate** is accountable to. Required (non-blank) when `kind == "delegate"`, refused otherwise. **Provenance, never a gate input** — no guard reads it. |
+| `authz_id` | `str \| None` | A second opaque identity claim, for deployments whose authorization decider keys on a different claim than `subject`. Added 2026-10-10 for invincible-agent's `GatewayArtifacts` (owner check on `subject`, delegate map on `authz_id`). Unconstrained by `kind` — no proposal yet says which kinds require or forbid it. |
 
 The model is frozen and forbids extra fields. An empty or whitespace `subject` is
 refused at construction: *an anonymous read is not a read with a missing name, it
-is a read nobody can be held to.*
+is a read nobody can be held to.* `authz_id`, when set, is held to the same
+non-blank rule; omit the field (leave it `None`) rather than binding it empty.
 
 `"delegate"` (added 2026-09-27) is a non-human session acting under its **own**
 entitlements — a lane worktree, a scheduled job — distinct from a `"service"`
@@ -515,6 +517,17 @@ absent→`empty`, and the arm's own `assert_fixture_discriminates` call is
 between entitled and unentitled only — never between unentitled and absent,
 because that distinction is the one this Protocol rules out, not one a
 fixture simply failed to supply.
+
+**`check_mesh_artifacts_list_by_kind_contract`, added 2026-10-10** is the
+list-route sibling, same binary shape applied to `list_by_kind`: entitled to
+the fixture's own artifacts under `kind`→`answered` with rows, entitled to
+NONE of them→`empty`, a `kind` never written under at all→`empty`. It does
+**not** assert anything about a partially-entitled caller's row count —
+`list_by_kind`'s own docstring rules that returning fewer rows than the
+kind's full registered set is the correct, intended shape of a scoped list,
+not a gap; a caller diffing against the full set to detect what it is
+"missing" is misreading entitlement scope as a defect, and this contract does
+not reward trying.
 
 #### Worked examples: none exist yet (surveyed 2026-10-07)
 
@@ -1270,6 +1283,8 @@ from iagent_mesh.conformance import (
     check_ontology_contract, assert_fixture_discriminates, ConformanceFailure,
     check_writer_offline, check_ontology_writer_contract,
     check_vectors_writer_has_contract, check_mesh_artifacts_entitlement_contract,
+    check_mesh_artifacts_list_by_kind_contract, check_system_of_record_query_contract,
+    check_system_of_record_query_independence_contract,
 )
 from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 

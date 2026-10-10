@@ -120,6 +120,39 @@ def test_on_behalf_of_IS_NEVER_A_GATE_INPUT():
             i.require_person("registry")
 
 
+# ── authz_id, added 2026-10-10 ───────────────────────────────────────────────────────────
+
+def test_authz_id_defaults_to_none_and_is_carried_opaque_and_verbatim():
+    """POSITIVE CONTROL plus the opaque-carry property `subject` already has, applied to the
+    new field: unset stays `None`, and a set value round-trips unparsed."""
+    assert Initiator(subject="alice", kind="person").authz_id is None
+    i = Initiator(subject="alice", kind="person", authz_id="topaz:alice-42")
+    assert i.authz_id == "topaz:alice-42"
+
+
+def test_authz_id_is_unconstrained_by_kind():
+    """Unlike `on_behalf_of`, no proposal says which kinds require or forbid `authz_id` — it must
+    be settable (or left unset) on every kind without raising."""
+    for kind, extra in (("person", {}), ("service", {}), ("delegate", {"on_behalf_of": "chris"})):
+        Initiator(subject="someone", kind=kind, authz_id="topaz:someone", **extra)
+
+
+def test_a_blank_authz_id_is_refused_but_none_is_fine():
+    with pytest.raises(Exception, match="authz_id"):
+        Initiator(subject="alice", kind="person", authz_id="   ")
+    Initiator(subject="alice", kind="person", authz_id=None)  # does not raise
+
+
+def test_authz_id_is_NEVER_A_GATE_INPUT():
+    """Same discipline as `on_behalf_of`: two initiators differing only in `authz_id` must be
+    admitted or refused identically by `require_person`."""
+    a = Initiator(subject="svc:anything", kind="service", authz_id="topaz:a")
+    b = Initiator(subject="svc:anything", kind="service", authz_id="topaz:b")
+    for i in (a, b):
+        with pytest.raises(ServiceIdentityRefused):
+            i.require_person("registry")
+
+
 # ── the fixture rule ─────────────────────────────────────────────────────────────────────
 
 def test_assert_fixture_discriminates_REFUSES_an_undiscriminating_pair():
