@@ -26,7 +26,7 @@ their store; it asserts that fixture discriminates before trusting it.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from .ingest import ArtifactRevision
 from .interfaces import (
@@ -52,6 +52,7 @@ __all__ = [
     "check_ontology_contract",
     "check_writer_offline",
     "check_ontology_writer_contract",
+    "check_ontology_writer_graph_isolation_contract",
     "check_graph_writer_contract",
     "check_vectors_writer_contract",
     "check_graph_writer_has_edges_contract",
@@ -62,6 +63,11 @@ __all__ = [
     "check_graph_writer_delete_node_contract",
     "check_artifact_revision_chain_contract",
     "check_refresh_spec_pull_contract",
+    "check_vectors_writer_has_contract",
+    "check_mesh_artifacts_entitlement_contract",
+    "check_system_of_record_query_contract",
+    "check_provenance_floor_contract",
+    "check_provenance_sources_contract",
 ]
 
 
@@ -543,6 +549,53 @@ def check_ontology_writer_contract(
                   f"mesh resolver) that GRAPH-wrapping every write exists to make impossible")
 
 
+# ── the ontology writer's cross-graph isolation arm, added 0.9.9 ───────────────────────────
+
+
+def check_ontology_writer_graph_isolation_contract(
+    *,
+    call_upsert_into_graph_a: Callable[[], MeshWriteResult],
+    call_ask_graph_a: Callable[[], MeshResult],
+    call_ask_graph_b: Callable[[], MeshResult],
+) -> None:
+    """The ``MeshOntologyWriter`` contract's other half: an upsert into graph A must be invisible
+    from graph B — a DIFFERENT NAMED graph, not Jena's default. :func:`check_ontology_writer_contract`
+    already proves scoped-vs-default isolation; it cannot catch a writer that scopes correctly
+    against the default graph but still leaks across two caller-chosen graphs (the document-graph
+    case this SDK scopes writes by: one graph per document, siblings that must never see each
+    other's upserts).
+
+    ``call_upsert_into_graph_a`` performs one upsert into a known graph ("graph A") for a known
+    ``iri``, already bound by the caller. ``call_ask_graph_a`` and ``call_ask_graph_b`` are both
+    zero-argument :class:`iagent_mesh.interfaces.MeshOntology` ``ask()`` calls for that SAME
+    ``iri`` — one scoped to graph A, one scoped to a DIFFERENT named graph ("graph B") — bound to a
+    PERSON initiator by the caller, run AFTER the upsert.
+    """
+    op = "ontology.upsert (graph isolation)"
+
+    written = call_upsert_into_graph_a()
+    if not written.applied:
+        _fail(op, f"the upsert itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify isolation against")
+
+    a = call_ask_graph_a()
+    b = call_ask_graph_b()
+
+    assert_fixture_discriminates(
+        f"{op} graph A vs graph B ask", a, b, describe=lambda r: r.outcome
+    )
+
+    if a.outcome != "answered":
+        _fail(op, f"asking for the written iri WITHIN graph A produced {a.outcome!r}, not "
+                  f"'answered'. The write claimed to land in graph A and a scoped read cannot "
+                  f"find it there")
+    if b.outcome != "empty":
+        _fail(op, f"asking for the written iri in graph B produced {b.outcome!r}, not 'empty'. "
+                  f"An upsert into graph A leaked into a DIFFERENT NAMED graph — the document-graph "
+                  f"scoping this Protocol exists to guarantee does not hold between two graphs a "
+                  f"caller actually uses, only between a graph and the default one")
+
+
 # ── the graph-writer arm, ruled 2026-09-28 overnight ────────────────────────────────────────
 
 
@@ -898,6 +951,112 @@ def check_vectors_writer_delete_contract(
                          f"MeshGraphWriter.delete_edges applies to a filter matching zero edges")
 
 
+# ── check_vectors_writer_has_contract, added 2026-10-07 — opens v0.9.9 scope, the
+# write_node/has_node/delete_node PARITY ask for MeshVectorsWriter ─────────────────────────────
+
+
+def check_vectors_writer_has_contract(
+    *,
+    call_write: Callable[[], MeshWriteResult],
+    call_has_matching: Callable[[], MeshResult],
+    call_has_not_matching: Callable[[], MeshResult],
+) -> None:
+    """The `has` contract: an existence check must be PROVEN to discriminate written from
+    unwritten, not merely echo the write's own reported outcome — the same "verify the mutation
+    applied" discipline `check_graph_writer_has_node_contract` already applies to a node's
+    `(label, id)`, adapted to this Protocol's `(collection, id)` key. `has` returns `MeshResult`,
+    the same as `has_node`/`has_edges`, so the method's own return value IS the oracle here — no
+    structural introspection callable is needed, unlike `check_vectors_writer_delete_contract`'s
+    `contains_after_delete`, which exists only because `MeshVectors.nominate` is fuzzy and ranked
+    and cannot serve as a deterministic existence oracle the way `has` now can.
+
+    `call_write` writes one object the caller has already bound. `call_has_matching` is a `has`
+    call for that SAME `(collection, id)`, run AFTER the write. `call_has_not_matching` is a `has`
+    call for a `(collection, id)` the fixture never wrote — the negative case.
+    """
+    op = "vectors.has"
+
+    written = call_write()
+    if not written.applied:
+        _fail(op, f"the write itself did not apply: outcome={written.outcome!r} "
+                  f"detail={written.detail!r} — nothing to verify has against")
+
+    present = call_has_matching()
+    absent = call_has_not_matching()
+
+    assert_fixture_discriminates(
+        f"{op} matching vs non-matching (collection, id)", present, absent,
+        describe=lambda r: r.outcome,
+    )
+
+    if present.outcome != "answered":
+        _fail(op, f"a (collection, id) matching the object just written produced "
+                  f"{present.outcome!r}, not 'answered'. The write reported success and has "
+                  f"disagrees")
+    if absent.outcome != "empty":
+        _fail(op, f"a (collection, id) the fixture never wrote produced {absent.outcome!r}, not "
+                  f"'empty'. A check that answers regardless of what was actually written cannot "
+                  f"prove presence OR absence")
+
+
+# ── check_mesh_artifacts_entitlement_contract, added 2026-10-07 — opens v0.9.9 scope for the new
+# MeshArtifacts Protocol ────────────────────────────────────────────────────────────────────────
+
+
+def check_mesh_artifacts_entitlement_contract(
+    *,
+    call_get_as_entitled: Callable[[], MeshResult],
+    call_get_as_unentitled: Callable[[], MeshResult],
+    call_get_absent: Callable[[], MeshResult],
+) -> None:
+    """Proves an implementation's `MeshArtifacts.get` tells "answered" apart from BOTH refusal
+    shapes `MeshResult` is allowed to collapse together — never that it tells "refused" apart
+    from "absent", which the Protocol's own docstring states is not a distinction this contract
+    can assert (the two are observationally identical by design, to close the existence side
+    channel an entitled/unentitled split would otherwise open).
+
+    `call_get_as_entitled` reads one artifact an initiator IS entitled to see — the implementer's
+    fixture must bind this to a real artifact its own fixture wrote, the same "nothing to verify
+    against" discipline every write-then-read arm in this module already applies.
+    `call_get_as_unentitled` reads the SAME artifact as an initiator the fixture constructs to be
+    refused by whatever decider the implementation defers to. `call_get_absent` reads a
+    `(kind, id)` the fixture never wrote, as the entitled initiator — the ordinary absent case,
+    unrelated to entitlement at all.
+
+    **WHAT THIS ARM REFUSES TO ASSERT, STATED SO A CALLER DOES NOT ASK FOR IT BY ACCIDENT:**
+    whether `call_get_as_unentitled` and `call_get_absent` are distinguishable from each other.
+    The Protocol's own docstring rules that out on purpose — asserting it here would make this
+    arm reward an implementation that leaks existence through a side channel the Protocol exists
+    to close. The one thing this arm CAN and does assert: the entitled read actually sees rows,
+    proving entitlement is a real gate and not a no-op that happens to be satisfied for every
+    fixture this implementer wrote.
+    """
+    op = "artifacts.get"
+
+    entitled = call_get_as_entitled()
+    if entitled.outcome != "answered" or not entitled.rows:
+        _fail(op, f"an initiator entitled to the fixture's own artifact got "
+                  f"outcome={entitled.outcome!r}, not 'answered' with rows. Nothing proves "
+                  f"entitlement is a real gate if the one case meant to pass does not")
+
+    unentitled = call_get_as_unentitled()
+    if unentitled.outcome != "empty":
+        _fail(op, f"an initiator NOT entitled to the fixture's own artifact got "
+                  f"outcome={unentitled.outcome!r}, not 'empty'. An implementation returning "
+                  f"'answered' here is not refusing — it is leaking the artifact to a caller "
+                  f"this fixture built specifically to be refused")
+
+    absent = call_get_absent()
+    if absent.outcome != "empty":
+        _fail(op, f"a (kind, id) the fixture never wrote produced outcome={absent.outcome!r}, "
+                  f"not 'empty' — unrelated to entitlement, the ordinary absent case every other "
+                  f"read Protocol in this SDK already distinguishes from 'answered'")
+
+    assert_fixture_discriminates(
+        f"{op} entitled vs unentitled", entitled, unentitled, describe=lambda r: r.outcome
+    )
+
+
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
 # moving the ingest node off Neo4jIngestGraph ───────────────────────────────────────────────
 
@@ -1156,3 +1315,237 @@ def check_refresh_spec_pull_contract(
         _fail(op, f"the resolved pull URL {url!r} does not contain the identity value "
                   f"{identity_value!r}. A pull URL that does not key on this artifact's identity "
                   f"is pulling SOMETHING, not necessarily the fresher arrival for THIS artifact")
+
+
+# ── check_system_of_record_query_contract, added 0.9.9 — lane/saf's proposal 1 (accepted),
+# ADR-0056's connector-shape question ───────────────────────────────────────────────────────
+
+
+def check_system_of_record_query_contract(
+    *,
+    connector: str,
+    returns: Sequence[str],
+    call_query_known: Callable[[], Iterable[dict[str, str]]],
+    call_query_unknown: Callable[[], Iterable[dict[str, str]]],
+    call_lookup_known: Callable[[], Optional[dict[str, str]]],
+) -> None:
+    """Proves a `SystemOfRecordQuery` implementation against `SystemOfRecordConnector`'s own
+    `lookup` rulings, never by building either fixture itself — same "nothing to verify against"
+    discipline every write-then-read arm in this module already applies.
+
+    `call_query_known` queries a value the implementer's fixture connector holds one or more
+    records for; `call_query_unknown` queries a value it holds none for; `call_lookup_known`
+    looks up the SAME known value through the existing single-record `lookup` — the control
+    proving this module's query() sibling leaves lookup()'s one-dict-or-None shape untouched.
+    `connector`/`returns` are the fixture row's own `lookup.connector` / `lookup.returns`, so this
+    arm can check records are keyed by the row's OWN declared fields, not a shape it invents.
+    """
+    op = "systems_of_record.query"
+
+    unknown = call_query_unknown()
+    unknown_first = list(unknown)
+    unknown_second = list(unknown)
+    if unknown_first:
+        _fail(op, f"query() for a value the fixture connector does not hold returned "
+                  f"{unknown_first!r}, not empty — an unknown value must come back as an empty "
+                  f"iterable, the many-record sibling of lookup()'s None, never a third state")
+    if unknown_second != unknown_first:
+        _fail(op, f"iterating the object query() returned for an unknown value produced "
+                  f"{unknown_first!r} on the first pass and {unknown_second!r} on a second pass "
+                  f"over the SAME object — query()'s result must be RE-ITERABLE even when empty")
+
+    known = call_query_known()
+    known_first = list(known)
+    known_second = list(known)
+    if not known_first:
+        _fail(op, "query() for a value the fixture connector DOES hold returned no records — "
+                  "nothing proves query() can ever return a hit if the one case meant to pass "
+                  "does not")
+    if known_second != known_first:
+        _fail(op, f"iterating the object query() returned produced {known_first!r} on the first "
+                  f"pass and {known_second!r} on a second pass over the SAME known value — "
+                  f"query() must return a RE-ITERABLE result (e.g. a list or tuple), not a "
+                  f"one-shot iterator that goes empty the second time a caller counts then cites")
+
+    assert_fixture_discriminates(
+        f"{op} known vs unknown", known_first, unknown_first, describe=lambda r: bool(r)
+    )
+
+    expected_keys = set(returns)
+    citations = []
+    for record in known_first:
+        if "record_id" not in record:
+            _fail(op, f"a record query() returned is {record!r} — missing 'record_id', the key "
+                      f"a caller needs to build the citation f'{{connector}}:{{record_id}}', the "
+                      f"same grammar lookup()'s own evidence already cites a hit with")
+        other_keys = set(record) - {"record_id"}
+        if other_keys != expected_keys:
+            _fail(op, f"a record query() returned has keys {sorted(other_keys)!r} besides "
+                      f"'record_id', not {sorted(expected_keys)!r} from this row's own "
+                      f"lookup.returns — query()'s records must be keyed by the SAME declared "
+                      f"returns lookup()'s single hit already is, not a connector-invented shape")
+        citations.append(f"{connector}:{record['record_id']}")
+
+    if len(set(citations)) != len(citations):
+        _fail(op, f"query() returned records whose citations collide once built as "
+                  f"f'{{connector}}:{{record_id}}': {citations!r} — two distinct records must "
+                  f"not round-trip to the same citation, or a caller citing one silently cites "
+                  f"the other")
+
+    control = call_lookup_known()
+    if not isinstance(control, (dict, type(None))):
+        _fail(op, f"lookup() for the same value this arm queried returned {control!r}, not a "
+                  f"dict-or-None — adding query() as a sibling must leave the origin path "
+                  f"(lookup()) UNCHANGED, never widened into also returning a list")
+
+
+# ── check_provenance_floor_contract / check_provenance_sources_contract, added 0.9.9 — item 2
+# of today's packet. Neither `provenance_floor()` nor `whichPartsDoesThisNoticeAffect` lives in
+# this SDK (both are invincible-agent application functions, confirmed by lookup), and neither
+# implements an SDK Protocol — so these two arms do not admit an implementation the way every
+# other `check_*_contract` in this module does. What this SDK DOES own is the vocabulary both
+# functions are built on: OBTAINED_VIA's ordering, the `promoted` ingest stage (ADR-0041 §5), and
+# ProvenanceBlock's six required fields. These arms state the invariants that vocabulary forces on
+# ANY caller-side function shaped like "the weakest provenance behind an answer" or "the per-source
+# provenance list behind a graph read" — generic to that SHAPE, never to a notice, a PCN, or any
+# other domain name — so a fleet lane can run either arm against its OWN function without this SDK
+# importing or knowing about it ─────────────────────────────────────────────────────────────────
+
+
+def check_provenance_floor_contract(
+    *,
+    unstamped: str,
+    call_floor_of_direct_only: Callable[[], Mapping[str, Any]],
+    call_floor_of_direct_and_user_drop: Callable[[], Mapping[str, Any]],
+    call_floor_of_user_drop_once_promoted: Callable[[], Mapping[str, Any]],
+    call_floor_of_user_drop_with_no_ingest_id: Callable[[], Mapping[str, Any]],
+) -> None:
+    """The WEAKEST-RUNG contract a `provenance_floor`-shaped function must satisfy (ADR-0041 §7:
+    "carries the weakest provenance an answer drew on"), stated against this SDK's own
+    :data:`iagent_mesh.provenance.OBTAINED_VIA` ordering and the ``promoted`` stage
+    :data:`iagent_mesh.ingest.INGEST_STAGES` already names — the generic half such a function
+    owns. A fleet consumer wraps this answer in its own envelope field; the ORDERING and the
+    PROMOTION exclusion are this SDK's vocabulary, not the consumer's to redefine.
+
+    The floor is the WORST thing an answer rests on, not the typical thing: one ``user-drop``
+    source outweighs any number of ``direct`` ones. ``call_floor_of_direct_and_user_drop`` proves
+    that by mixing a single user-drop source into an otherwise-``direct`` fixture; the floor must
+    move to ``user-drop`` regardless of how many stronger sources sit beside it.
+
+    A source stops setting the floor once it is PROMOTED (ADR-0041 §5 — a decision record and a
+    promotion fact landed), not once its rung improves — the rung never changes; promotion is an
+    EXCLUSION, not a re-score. ``call_floor_of_user_drop_once_promoted`` is the same fixture as the
+    mixed case with that one user-drop source added to the implementation's own ``promoted`` set;
+    the floor must revert to whatever the next-weakest UNPROMOTED source is.
+
+    An unpromoted user-drop source missing ``ingest_id`` cannot be cited by id, so it must be
+    counted, not silently dropped — ``call_floor_of_user_drop_with_no_ingest_id`` proves the
+    ``unidentified`` count tracks exactly that source.
+
+    ``unstamped`` is the caller's OWN sentinel for "no real rung to report" — supplied once and
+    compared by equality, this arm never guesses a spelling for it. All four ``call_floor_of_*``
+    callables are the SAME function under test, called against the caller's own fixture sources
+    already built for that one case; this arm only inspects what comes back.
+    """
+    from .provenance import DIRECT, USER_DROP
+
+    op = "provenance.provenance_floor"
+
+    direct_only = call_floor_of_direct_only()
+    if direct_only.get("obtained_via") != DIRECT:
+        _fail(op, f"a set of ALL-direct sources produced a floor of "
+                  f"{direct_only.get('obtained_via')!r}, not {DIRECT!r} — the weakest rung among "
+                  f"an all-direct set is direct itself; reporting {unstamped!r} or anything else "
+                  f"here means the function cannot see real sources at all")
+
+    mixed = call_floor_of_direct_and_user_drop()
+    assert_fixture_discriminates(
+        f"{op} direct-only vs direct+user-drop", direct_only, mixed,
+        describe=lambda r: r.get("obtained_via"),
+    )
+    if mixed.get("obtained_via") != USER_DROP:
+        _fail(op, f"mixing ONE unpromoted user-drop source into an otherwise-direct set produced "
+                  f"a floor of {mixed.get('obtained_via')!r}, not {USER_DROP!r} — the floor "
+                  f"reports the WORST source drawn on, so the single farthest-from-truth source "
+                  f"must set it regardless of how many stronger sources sit alongside it")
+
+    promoted = call_floor_of_user_drop_once_promoted()
+    assert_fixture_discriminates(
+        f"{op} user-drop unpromoted vs promoted", mixed, promoted,
+        # The WHOLE answer, not just `obtained_via` — a broken floor can fix the bookkeeping
+        # (`ingest_ids`) without fixing the rung itself; discriminating on `obtained_via` alone
+        # would never let that specific defect reach the check below that exists to catch it.
+        describe=lambda r: (
+            r.get("obtained_via"), tuple(sorted(r.get("ingest_ids") or ())), r.get("unidentified"),
+        ),
+    )
+    if promoted.get("obtained_via") == USER_DROP:
+        _fail(op, f"promoting the ONLY user-drop source in the set left the floor at "
+                  f"{USER_DROP!r} — a promoted source has a decision record and a promotion fact "
+                  f"landed (ADR-0041 §5); it must stop setting the floor, not keep dragging it "
+                  f"down after the fleet recorded it as reviewed")
+
+    unidentified = call_floor_of_user_drop_with_no_ingest_id()
+    if not unidentified.get("unidentified"):
+        _fail(op, f"a set containing an unpromoted user-drop source with NO ingest_id produced "
+                  f"unidentified={unidentified.get('unidentified')!r} — a source that cannot be "
+                  f"cited by id must be COUNTED, not silently absent from both ingest_ids and "
+                  f"this count")
+    for cited in unidentified.get("ingest_ids") or ():
+        if not cited:
+            _fail(op, f"ingest_ids contains {cited!r} — a source with no ingest_id belongs in "
+                      f"the unidentified COUNT, never as a blank entry in the id list")
+
+
+def check_provenance_sources_contract(
+    *,
+    unstamped: str,
+    call_sources_for_a_stamped_item: Callable[[], Sequence[Mapping[str, Any]]],
+    call_sources_for_a_seeded_item: Callable[[], Sequence[Mapping[str, Any]]],
+) -> None:
+    """The per-source SHAPE a `whichPartsDoesThisNoticeAffect`-shaped verb must satisfy — generic
+    to any verb that walks a graph and reports the provenance BEHIND what it found, never to a
+    notice specifically. Every source that came from a tracked ingest must embed a provenance
+    block this SDK's own :func:`validate_provenance` accepts; every source that did not (a SEEDED
+    row, with no ingest to point back to) must say so with the caller's OWN ``unstamped``
+    sentinel, never a block that is merely missing fields — the same "one sentinel, not a second
+    spelling of absence" discipline :data:`iagent_mesh.provenance.AS_OF_UNKNOWN` already states
+    for a single field, now applied to the whole block.
+
+    ``call_sources_for_a_stamped_item`` is the verb's own source list for something the fixture
+    DOES have tracked provenance for; ``call_sources_for_a_seeded_item`` is the SAME verb's source
+    list for something seeded directly, with no ingest act behind it. Both are the caller's own
+    fixture and the caller's own verb; this arm only inspects what comes back.
+    """
+    from .provenance import ProvenanceIncomplete, validate_provenance
+
+    op = "provenance.sources_of(verb)"
+
+    stamped = call_sources_for_a_stamped_item()
+    if not stamped:
+        _fail(op, "a fixture item that DOES have tracked sources returned an empty source list — "
+                  "nothing to verify the stamped shape against")
+    for i, source in enumerate(stamped):
+        block = source.get("provenance")
+        if block is None or block == unstamped:
+            _fail(op, f"source[{i}]={source!r} for a STAMPED fixture item carries no provenance "
+                      f"block — if this source really has no ingest to point back to, it belongs "
+                      f"in the seeded fixture instead, not silently mixed into the stamped one")
+        try:
+            validate_provenance(block)
+        except ProvenanceIncomplete as exc:
+            _fail(op, f"source[{i}]'s embedded provenance block fails this SDK's own "
+                      f"validate_provenance: {exc}. A verb that reads provenance off a graph node "
+                      f"must read a COMPLETE block or refuse to, never pass through a partial one")
+
+    seeded = call_sources_for_a_seeded_item()
+    if not seeded:
+        _fail(op, "a fixture item that is SEEDED (no ingest to point back to) returned an empty "
+                  "source list — nothing to verify the unstamped shape against")
+    for i, source in enumerate(seeded):
+        if source.get("provenance") != unstamped:
+            _fail(op, f"source[{i}]={source!r} for a SEEDED fixture item carries provenance="
+                      f"{source.get('provenance')!r}, not the caller's own unstamped="
+                      f"{unstamped!r} — a seeded row has no ingest to point back to, and that "
+                      f"absence must be declared with ONE sentinel, not a block missing fields "
+                      f"or a bare None a caller could mistake for 'not yet checked'")

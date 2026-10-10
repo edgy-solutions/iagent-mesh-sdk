@@ -77,12 +77,18 @@ from .conformance import (
     check_graph_writer_key_only_delete_contract,
     check_graph_writer_write_node_contract,
     check_live,
+    check_mesh_artifacts_entitlement_contract,
     check_offline,
     check_ontology_contract,
     check_ontology_writer_contract,
+    check_ontology_writer_graph_isolation_contract,
+    check_provenance_floor_contract,
+    check_provenance_sources_contract,
     check_refresh_spec_pull_contract,
+    check_system_of_record_query_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
+    check_vectors_writer_has_contract,
     check_writer_marker,
     check_writer_offline,
 )
@@ -124,6 +130,7 @@ from .interfaces import (
     EdgeIdentityFilter,
     Embedder,
     Initiator,
+    MeshArtifacts,
     MeshGraph,
     MeshGraphWriter,
     MeshOntology,
@@ -260,6 +267,7 @@ from .systems_of_record import (
     ResolvedBy,
     SystemOfRecord,
     SystemOfRecordConnector,
+    SystemOfRecordQuery,
     UnknownConnector,
     load_systems_of_record,
     match_system_of_record,
@@ -295,6 +303,39 @@ from .maintenance_bridge import (
     SpareRow,
     TaskRef,
     WorkOrder,
+)
+
+# The ADR-0039 case runner record (0.9.9) — `WorkflowCaseRecord` and its nested rows, mirroring
+# `workflow_runner.py`'s own `case: dict` field-for-field, per the two-days packet's item 3.
+# `CaseState` is deliberately absent here too — see the module docstring for why `state` is a
+# different concept from `CaseState`, not just a differently-typed one.
+from .workflow_case import (
+    INPUT_REVISION_PROVENANCES,
+    CaseInputRevision,
+    CaseInstanceRef,
+    CaseTransition,
+    InputRevisionProvenance,
+    WorkflowCaseRecord,
+)
+
+# The ADR-0029 git-asserted process schema ADR-0039 extends (0.9.9) — `WorkflowDefinition` and its
+# eight step kinds, mirroring `workflow_definition.py` field-for-field, per today's packet's item 2.
+# Carries no execution state of its own; see the module docstring for why neither `CaseState` nor
+# `WorkflowCaseRecord.state`/`.terminal` have any counterpart here.
+from .workflow_definition import (
+    CompletionPolicy,
+    DirectCallStep,
+    DispatchFanoutStep,
+    EmitStep,
+    HumanAwaitStep,
+    RenderStep,
+    SignalAwaitStep,
+    SpoOperationStep,
+    Step,
+    WaitStep,
+    WorkflowDefinition,
+    WorkflowDefinitionError,
+    load_workflow_definition,
 )
 
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
@@ -340,12 +381,18 @@ __all__ = [
     "check_graph_writer_key_only_delete_contract",
     "check_graph_writer_write_node_contract",
     "check_live",
+    "check_mesh_artifacts_entitlement_contract",
     "check_offline",
     "check_ontology_contract",
     "check_ontology_writer_contract",
+    "check_ontology_writer_graph_isolation_contract",
+    "check_provenance_floor_contract",
+    "check_provenance_sources_contract",
     "check_refresh_spec_pull_contract",
+    "check_system_of_record_query_contract",
     "check_vectors_writer_contract",
     "check_vectors_writer_delete_contract",
+    "check_vectors_writer_has_contract",
     "check_writer_marker",
     "check_writer_offline",
     "MARKER_ASSERTS",
@@ -358,6 +405,7 @@ __all__ = [
     "EdgeIdentityFilter",
     "Embedder",
     "Initiator",
+    "MeshArtifacts",
     "MeshGraph",
     "MeshGraphWriter",
     "MeshOntology",
@@ -465,6 +513,7 @@ __all__ = [
     "ResolvedBy",
     "SystemOfRecord",
     "SystemOfRecordConnector",
+    "SystemOfRecordQuery",
     "UnknownConnector",
     "load_systems_of_record",
     "match_system_of_record",
@@ -495,4 +544,27 @@ __all__ = [
     "SpareRow",
     "TaskRef",
     "WorkOrder",
+    # the ADR-0039 case runner record (0.9.9) — workflow_runner.py's case dict mirror; CaseState
+    # deliberately absent, and is a different concept from WorkflowCaseRecord.state besides
+    "INPUT_REVISION_PROVENANCES",
+    "CaseInputRevision",
+    "CaseInstanceRef",
+    "CaseTransition",
+    "InputRevisionProvenance",
+    "WorkflowCaseRecord",
+    # the ADR-0029 process schema ADR-0039 extends (0.9.9) — workflow_definition.py's
+    # WorkflowDefinition and its 8 step kinds mirror, no execution state of its own
+    "CompletionPolicy",
+    "DirectCallStep",
+    "DispatchFanoutStep",
+    "EmitStep",
+    "HumanAwaitStep",
+    "RenderStep",
+    "SignalAwaitStep",
+    "SpoOperationStep",
+    "Step",
+    "WaitStep",
+    "WorkflowDefinition",
+    "WorkflowDefinitionError",
+    "load_workflow_definition",
 ]

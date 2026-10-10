@@ -119,9 +119,13 @@ def test_MeshVectorsWriter_declares_write_and_relocate_as_SEPARATE_methods():
     """The hazard ruled against 2026-09-27: one method taking an optional vector would make
     'supply your own vector' look like a normal parameter on the everyday write path. AMENDED
     2026-09-30, on the promotion adapter's own rejection packet back: `delete` joined as genuinely
-    new capability — unlike the graph writer's two needs, nothing here answered it beforehand."""
+    new capability — unlike the graph writer's two needs, nothing here answered it beforehand.
+    AMENDED 2026-10-07, opening v0.9.9 scope: `has` joined as the existence-check sibling that
+    gives this Protocol write/has/delete parity with `MeshGraphWriter`'s own trio, in SHAPE —
+    see `MeshVectorsWriter`'s own docstring for why that parity keeps this Protocol's short
+    names rather than adopting the graph writer's `_node`-suffixed ones."""
     names = {n for n in dir(MeshVectorsWriter) if not n.startswith("_")}
-    assert names == {"write", "relocate", "delete"}
+    assert names == {"write", "relocate", "delete", "has"}
 
 
 def test_write_defaults_vector_required_to_True():

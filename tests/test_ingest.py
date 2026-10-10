@@ -333,6 +333,30 @@ def test_document_branch_forbids_refresh():
         ContentKindRegistration(**{**VALID_REGISTRATION, "refresh": VALID_REFRESH})
 
 
+# ── ContentKindRegistration.parent_link_field, ADDED 0.9.9 (Lane 1's ask) ────────────────
+
+def test_parent_link_field_is_optional_a_flat_kind_declares_none():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.parent_link_field is None
+
+
+def test_a_document_branch_kind_declares_its_parent_link_field():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "parent_link_field": "parent_dmc"})
+    assert row.parent_link_field == "parent_dmc"
+
+
+def test_parent_link_field_blank_string_is_refused_but_none_is_not():
+    with pytest.raises(ValidationError, match="parent_link_field"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "parent_link_field": ""})
+
+
+def test_event_branch_forbids_parent_link_field():
+    """An event kind runs no pass and produces no extracted output for a parent reference to
+    live in — same shape of refusal as seeds_workflow/identity_field's inverse above."""
+    with pytest.raises(ValidationError, match="parent_link_field"):
+        ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "parent_link_field": "parent_dmc"})
+
+
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
 
 def test_a_valid_rev_1_builds_with_no_supersedes():

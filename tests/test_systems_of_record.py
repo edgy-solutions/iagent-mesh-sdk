@@ -12,6 +12,8 @@ from iagent_mesh.systems_of_record import (
     IdentityMatch,
     Origin,
     SystemOfRecord,
+    SystemOfRecordConnector,
+    SystemOfRecordQuery,
     UnknownConnector,
     compose,
     load_systems_of_record,
@@ -98,6 +100,52 @@ def test_match_tests_fields_in_priority_order():
     assert match_system_of_record({"primary": "Z1", "secondary": "A2"}, [row]) is row
     # neither matches.
     assert match_system_of_record({"primary": "Z1", "secondary": "Z2"}, [row]) is None
+
+
+# ── SystemOfRecordQuery — 0.9.9, lane/saf's proposal 1, a SIBLING to SystemOfRecordConnector ──
+
+class _FakeConnectorWithQuery:
+    """A fixture connector carrying both the existing `lookup` and the new `query` — proves the
+    two are siblings on one object, same as a real connector would be, not two unrelated types."""
+
+    def __init__(self) -> None:
+        self._records = [
+            {"owner_domain": "SUSTAINMENT", "program": "F-35", "record_id": "r1"},
+            {"owner_domain": "SUSTAINMENT", "program": "F-16", "record_id": "r2"},
+        ]
+
+    def lookup(self, value: str):
+        return dict(self._records[0]) if value == "PN-9001" else None
+
+    def query(self, value: str):
+        return [dict(r) for r in self._records] if value == "PN-9001" else []
+
+
+def test_a_connector_can_satisfy_both_protocols_at_once():
+    connector = _FakeConnectorWithQuery()
+    assert isinstance(connector, SystemOfRecordConnector)
+    assert isinstance(connector, SystemOfRecordQuery)
+
+
+def test_query_returns_every_record_lookup_only_returns_one():
+    connector = _FakeConnectorWithQuery()
+    hits = list(connector.query("PN-9001"))
+    assert len(hits) == 2
+    assert connector.lookup("PN-9001") == hits[0]
+
+
+def test_query_miss_is_an_empty_iterable_not_none():
+    connector = _FakeConnectorWithQuery()
+    miss = connector.query("PN-UNKNOWN")
+    assert list(miss) == []
+    assert miss is not None
+
+
+def test_query_record_round_trips_to_the_lookup_dot_connector_colon_record_id_citation():
+    connector = _FakeConnectorWithQuery()
+    hit = list(connector.query("PN-9001"))[0]
+    citation = f"sor-events-a:{hit['record_id']}"
+    assert citation == "sor-events-a:r1"
 
 
 # ── connector registry refusal — the "prefix-registry failure class" ────────────────────────

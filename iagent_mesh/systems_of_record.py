@@ -41,7 +41,10 @@ deployment's file, not this package's.
    :class:`SystemOfRecordConnector` — ``lookup(value) -> dict | None``. ``None`` is a miss, a
    present dict is a hit, keyed by the names in :attr:`ConnectorLookup.returns`. One ``Protocol``
    so the sandbox's one fake connector and a real one are the same type, exactly what ia-01 asked
-   for.
+   for. **0.9.9 adds :class:`SystemOfRecordQuery` as a SIBLING, not a widening** — a many-record
+   ``query(value) -> Iterable[dict]`` for a caller (FRACAS, ADR-0056) that needs every record a
+   connector holds for a value, leaving ``lookup``'s one-dict-or-``None`` shape exactly as this
+   ruling states, because the existing resolver assumes exactly one hit.
 4. **``resolved_by`` is a NEW, closed vocabulary, deliberately NOT
    :data:`iagent_mesh.provenance.OBTAINED_VIA`.** ``obtained_via`` measures how far a COPY of an
    assertion travelled from the system that owns it (direct/etl/warehouse/manual-export/
@@ -89,6 +92,7 @@ __all__ = [
     "ConnectorLookup",
     "SystemOfRecord",
     "SystemOfRecordConnector",
+    "SystemOfRecordQuery",
     "UnknownConnector",
     "match_system_of_record",
     "validate_connectors_known",
@@ -287,6 +291,36 @@ class SystemOfRecordConnector(Protocol):
     """
 
     def lookup(self, value: str) -> Optional[dict[str, str]]: ...
+
+
+@runtime_checkable
+class SystemOfRecordQuery(Protocol):
+    """ADDED 0.9.9, lane/saf's proposal 1 (accepted) answering ADR-0056's open question on
+    connector shape for FRACAS "what failed on this part across programs": a MANY-RECORD sibling
+    to :class:`SystemOfRecordConnector`, not a widening of it. ``lookup`` keeps its one-dict-or-
+    ``None`` shape exactly as ruling 3 above states, because the existing resolver assumes exactly
+    one hit (``record[sor.program_field]``) — a caller that needs every record a connector holds
+    for a value, not the system-of-record resolver's single match, uses this Protocol instead.
+
+    ``query(value)`` returns an ITERABLE of dicts, each keyed by the matched
+    :class:`SystemOfRecord`'s ``lookup.returns`` plus a connector-assigned ``record_id`` key
+    identifying that one record within the connector. An empty iterable means "none found" — the
+    many-record sibling of ``lookup``'s ``None``, never a third state — and it must be safely
+    RE-ITERABLE, since a caller may need to pass over it more than once (count, then cite). A
+    connector that cannot reach its source raises instead of returning, the same discipline
+    ``lookup`` already states.
+
+    This module does not format the citation string itself, same as ruling 5 above — a caller
+    citing one of ``query``'s records builds it as ``f"{connector}:{record_id}"`` (the
+    ``lookup.connector`` this row names, plus the record's own ``record_id``), the same grammar
+    :class:`Origin`'s single-record ``evidence[]`` already uses for a ``lookup`` hit. **`Origin`
+    itself is untouched by this Protocol** — a many-record FRACAS answer is not one artifact's
+    origin and gets no `Origin` of its own; only if such an answer is later filed as an artifact
+    does ONE `Origin` get built for that artifact, with per-record citations riding inside its
+    existing ``evidence`` tuple.
+    """
+
+    def query(self, value: str) -> Iterable[dict[str, str]]: ...
 
 
 def match_system_of_record(

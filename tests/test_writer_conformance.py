@@ -24,8 +24,10 @@ from iagent_mesh.conformance import (
     check_graph_writer_key_only_delete_contract,
     check_graph_writer_write_node_contract,
     check_ontology_writer_contract,
+    check_ontology_writer_graph_isolation_contract,
     check_vectors_writer_contract,
     check_vectors_writer_delete_contract,
+    check_vectors_writer_has_contract,
     check_writer_offline,
 )
 from iagent_mesh.interfaces import EdgeIdentity, EdgeIdentityFilter, Initiator
@@ -34,6 +36,7 @@ from iagent_mesh.write_results import MeshWriteResult
 
 PERSON = Initiator(subject="alice", kind="person")
 GRAPH = "ex:graph"
+GRAPH_B = "ex:other-graph"
 IRI = "ex:thing"
 
 
@@ -156,6 +159,71 @@ def test_A_STORE_WHERE_BOTH_ASKS_ARE_ALWAYS_EMPTY_IS_REFUSED_AS_NON_DISCRIMINATI
 
     with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
         _run(AlwaysEmpty())
+
+
+# ── check_ontology_writer_graph_isolation_contract: graph A vs a DIFFERENT NAMED graph B ───
+# (check_ontology_writer_contract above only proves scoped-vs-DEFAULT isolation; it cannot catch
+# a writer that scopes correctly against the default graph but still leaks across two caller-
+# chosen graphs — the document-graph case this SDK scopes writes by.)
+
+def _run_isolation(store) -> None:
+    check_ontology_writer_graph_isolation_contract(
+        call_upsert_into_graph_a=lambda: store.upsert(
+            PERSON, graph=GRAPH, iri=IRI, triples=[f"<{IRI}> a <ex:Class> ."]
+        ),
+        call_ask_graph_a=lambda: store.ask(PERSON, iri=IRI, graph=GRAPH),
+        call_ask_graph_b=lambda: store.ask(PERSON, iri=IRI, graph=GRAPH_B),
+    )
+
+
+def test_B_A_SCOPED_WRITER_NEVER_TOUCHES_A_DIFFERENT_GRAPH():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    _run_isolation(_ScopedOntologyStore())
+
+
+def test_B_A_WRITER_THAT_LEAKS_INTO_A_DIFFERENT_NAMED_GRAPH_IS_CAUGHT():
+    """A write correctly found WITHIN graph A, but also visible from a graph-B ask — scoped
+    against the default graph (it could still pass `check_ontology_writer_contract`'s own arm)
+    but not scoped between two graphs a caller actually uses."""
+
+    class LeaksIntoGraphBToo(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            if graph == GRAPH_B:
+                return MeshResult.failed("simulated: graph B is not actually empty here")
+            return super().ask(initiator, iri=iri, graph=graph)
+
+    with pytest.raises(ConformanceFailure, match=r"ontology\.upsert \(graph isolation\).*graph B.*not 'empty'"):
+        _run_isolation(LeaksIntoGraphBToo())
+
+
+def test_B_A_WRITER_WHOSE_UPSERT_DID_NOT_APPLY_IS_REFUSED_BEFORE_ASKING():
+    class Refuses(_ScopedOntologyStore):
+        def upsert(self, initiator, *, graph, iri, triples):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    with pytest.raises(ConformanceFailure, match=r"ontology\.upsert \(graph isolation\).*did not apply"):
+        _run_isolation(Refuses())
+
+
+def test_B_A_STORE_WHERE_BOTH_GRAPH_ASKS_ALWAYS_ANSWER_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            return MeshResult.answered([iri])
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_isolation(AlwaysAnswers())
+
+
+def test_B_A_STORE_WHERE_BOTH_GRAPH_ASKS_ARE_ALWAYS_EMPTY_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysEmpty(_ScopedOntologyStore):
+        def ask(self, initiator, *, iri, graph=None):
+            initiator.require_person("ask")
+            return MeshResult.empty()
+
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_isolation(AlwaysEmpty())
 
 
 # ── check_writer_offline: the NotImplementedError arm, not yet covered elsewhere ──────────
@@ -678,6 +746,12 @@ class _VectorsStore:
         self._store.pop((collection, id), None)
         return MeshWriteResult.written()
 
+    def has(self, initiator: Initiator, *, collection, id) -> MeshResult:
+        initiator.require_person_or_delegate("vectors.has")
+        if (collection, id) in self._store:
+            return MeshResult.answered([{"collection": collection, "id": id}])
+        return MeshResult.empty()
+
 
 GOOD_VECTOR = [0.1, 0.2, 0.3]
 WRONG_VECTOR = [0.1, 0.2]
@@ -906,6 +980,80 @@ def test_V_DELETE_OF_A_NEVER_WRITTEN_ID_THAT_REFUSES_IS_CAUGHT():
     embedder = _CountingEmbedder(should_fail=False)
     with pytest.raises(ConformanceFailure, match=r"vectors\.delete.*never written.*not an applied"):
         _run_vectors_delete(RefusesOnUnknownId(embedder), embedder)
+
+
+# ── check_vectors_writer_has_contract, added 2026-10-07 — opens v0.9.9 scope, the
+# write_node/has_node/delete_node PARITY ask for MeshVectorsWriter ─────────────────────────────
+
+HAS_COLLECTION = "c"
+HAS_WRITTEN_ID, HAS_NEVER_WRITTEN_ID = "has-written-id", "has-never-written-id"
+
+
+def _run_vectors_has(store, embedder) -> None:
+    check_vectors_writer_has_contract(
+        call_write=lambda: store.write(
+            PERSON, collection=HAS_COLLECTION, id=HAS_WRITTEN_ID, text="t"
+        ),
+        call_has_matching=lambda: store.has(
+            PERSON, collection=HAS_COLLECTION, id=HAS_WRITTEN_ID
+        ),
+        call_has_not_matching=lambda: store.has(
+            PERSON, collection=HAS_COLLECTION, id=HAS_NEVER_WRITTEN_ID
+        ),
+    )
+
+
+def test_V_HAS_A_CONFORMING_VECTORS_WRITER_PASSES():
+    """POSITIVE CONTROL. Without this, every red below could be an arm that refuses everything."""
+    embedder = _CountingEmbedder(should_fail=False)
+    _run_vectors_has(_VectorsStore(embedder), embedder)
+
+
+def test_V_HAS_THAT_ALWAYS_ANSWERS_IS_REFUSED_AS_NON_DISCRIMINATING():
+    class AlwaysAnswers(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            return MeshResult.answered([{"collection": collection, "id": id}])
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"fixture .* does not discriminate"):
+        _run_vectors_has(AlwaysAnswers(embedder), embedder)
+
+
+def test_V_HAS_THAT_CANNOT_FIND_THE_WRITTEN_ID_IS_CAUGHT():
+    class CannotFind(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            if (collection, id) == (HAS_COLLECTION, HAS_WRITTEN_ID):
+                return MeshResult.failed("simulated: the written id is not actually findable")
+            return super().has(initiator, collection=collection, id=id)
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*not 'answered'"):
+        _run_vectors_has(CannotFind(embedder), embedder)
+
+
+def test_V_HAS_THAT_ANSWERS_FOR_A_NEVER_WRITTEN_ID_TOO_IS_CAUGHT():
+    class AnswersForUnwritten(_VectorsStore):
+        def has(self, initiator, *, collection, id):
+            initiator.require_person_or_delegate("vectors.has")
+            if (collection, id) == (HAS_COLLECTION, HAS_NEVER_WRITTEN_ID):
+                return MeshResult.failed("simulated: errors instead of answering empty")
+            return super().has(initiator, collection=collection, id=id)
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*not 'empty'"):
+        _run_vectors_has(AnswersForUnwritten(embedder), embedder)
+
+
+def test_V_HAS_WHEN_THE_WRITE_ITSELF_DID_NOT_APPLY_IS_CAUGHT_BEFORE_CHECKING_HAS():
+    class RefusesWrite(_VectorsStore):
+        def write(self, initiator, *, collection, id, text, domains=(), vector_required=True):
+            return MeshWriteResult.refused("pretend the store is down")
+
+    embedder = _CountingEmbedder(should_fail=False)
+    with pytest.raises(ConformanceFailure, match=r"vectors\.has.*did not apply"):
+        _run_vectors_has(RefusesWrite(embedder), embedder)
 
 
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
