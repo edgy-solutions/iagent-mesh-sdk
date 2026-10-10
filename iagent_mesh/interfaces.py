@@ -785,9 +785,30 @@ class MeshArtifacts(Protocol):
     neither of the first three closes: cortex and OpenDDIL each need to read an artifact by id and
     list artifacts by kind, and each had built its own gateway route to do it, one route per
     shape, kept in sync by hand. That is the same proliferation ``run_any_graph`` reasoning
-    already refuses for a query language, applied to a gateway instead. ``kind`` here is the same
-    vocabulary :attr:`iagent_mesh.ingest.ContentKindRegistration.kind` already names — the legal
-    set of kinds IS the registered rows, not a second vocabulary declared here.
+    already refuses for a query language, applied to a gateway instead.
+
+    **``kind`` IS OPAQUE TO THIS PROTOCOL — corrected 2026-10-08, against the first real caller.**
+    The original text here claimed ``kind`` was exactly
+    :attr:`iagent_mesh.ingest.ContentKindRegistration.kind`'s vocabulary, the legal set of kinds
+    being the registered rows and nothing else. That claim does not survive the first consumer:
+    :class:`iagent_mesh.ingest.ContentKindRegistration` is an INGEST door by construction — ``kind``
+    there is matched against an arriving ``IngestRequest.content_kind``, and every field on that row
+    (``passes``, ``outputs``, ``identity_field``) presumes something that arrives and gets
+    extracted. A PRODUCED artifact — an answer, a decision, anything this fleet emits rather than
+    ingests — cannot honestly register a ``ContentKindRegistration`` row; nothing arrived for it to
+    declare a door, a pass or an identity field over. Mandating that registry as the only source of
+    ``kind`` values would make this Protocol unable to express the artifacts cortex's own `get`
+    route reads today.
+
+    So, the same way :attr:`iagent_mesh.ingest.ContentKindRegistration.kind` is itself "opaque to
+    this module — never parsed, only compared for equality" — ``kind`` here carries that same
+    opaqueness one level up: THIS Protocol never parses it either, and does not mandate where it
+    comes from. Registered ``ContentKindRegistration`` rows are ONE valid source (the ingest case,
+    and still the only one this SDK ships anything for); a deployment reading PRODUCED artifacts
+    through this Protocol declares its own stable kind strings for them (e.g. an
+    ``"answer-artifact"`` kind naming a fleet's answer/decision output) the same way it already
+    owns its ``ContentKindRegistration`` rows — this SDK ships no registry for either source, and
+    does not need a second one to admit both.
 
     **READ-ONLY, the same posture as MeshGraph/MeshOntology/MeshVectors** — nothing here holds a
     driver, and this Protocol has no write half. An artifact's own arrival is the ingest layer's

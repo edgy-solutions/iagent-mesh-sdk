@@ -471,9 +471,21 @@ avoid.
 **Not one of the three above — a fourth, added later**, for a gap neither of
 the first three closes: cortex and OpenDDIL each need to read an artifact by id
 and list artifacts by kind, and each had built its own gateway route to do it,
-one route per shape, kept in sync by hand. `kind` is the same vocabulary
-`iagent_mesh.ingest.ContentKindRegistration.kind` already names — the legal set
-of kinds IS the registered rows, not a second vocabulary declared here.
+one route per shape, kept in sync by hand.
+
+**`kind` is opaque to this Protocol — corrected 2026-10-08.** The original
+text here claimed `kind` was exactly
+`iagent_mesh.ingest.ContentKindRegistration.kind`'s vocabulary. That does not
+survive the first real caller: `ContentKindRegistration` is an INGEST door by
+construction, and a PRODUCED artifact (an answer, a decision — anything this
+fleet emits rather than ingests) cannot honestly register one of its rows.
+`kind` here carries the same opaqueness `ContentKindRegistration.kind` itself
+already claims, one level up: this Protocol never parses it and does not
+mandate where it comes from. Registered `ContentKindRegistration` rows are
+*one* valid source (the ingest case); a deployment reading produced artifacts
+through this Protocol declares its own stable kind strings for them the same
+way it already owns its `ContentKindRegistration` rows — see the ruling at the
+end of this section for the first real case this landed against.
 
 `MODES = ()`.
 
@@ -519,6 +531,23 @@ the same day (`invincible-agent/sessions/
 §8 can be built against this spec directly — it ships the shape, not an
 implementation, so this section's "none exist yet" stays accurate until §8
 lands and actually calls `get`/`list_by_kind`.
+
+**Overtaken the same day.** `invincible-agent/lane/01-roll22`'s
+`src/iagent/artifact_reads.py::GatewayArtifacts` reached this Protocol first —
+not through §8, serving the pre-existing `GET /artifacts/{artifact_id}` route
+instead. What it reads is an **answer artifact**, a fleet-produced output, not
+an ingested kind, which is what surfaced the `kind`-vocabulary defect
+corrected above: no `ContentKindRegistration` row can honestly describe
+something that was never ingested. Lane 1 shipped a declared departure,
+`ANSWER_ARTIFACT_KIND = "answer-artifact"`, pending this ruling — **ruling:
+yes**, `MeshArtifacts` covers produced artifacts; `"answer-artifact"` is a
+sanctioned kind string, not a departure to walk back. Their second note, an
+extra optional `authz_id` kwarg on `GatewayArtifacts` (their owner check keys
+on JWT `sub`, their delegate map on `authz_id`, and `Initiator` only carries
+the former) — stays a local, structurally-compatible departure for now.
+Widening `Initiator` itself to carry both is a bigger change against this
+SDK's own "identity carried opaque, from ONE claim" posture and needs its own
+proposal; it is not part of this ruling or this release.
 
 ---
 
