@@ -66,6 +66,8 @@ __all__ = [
     "check_vectors_writer_has_contract",
     "check_mesh_artifacts_entitlement_contract",
     "check_system_of_record_query_contract",
+    "check_provenance_floor_contract",
+    "check_provenance_sources_contract",
 ]
 
 
@@ -1395,3 +1397,155 @@ def check_system_of_record_query_contract(
         _fail(op, f"lookup() for the same value this arm queried returned {control!r}, not a "
                   f"dict-or-None — adding query() as a sibling must leave the origin path "
                   f"(lookup()) UNCHANGED, never widened into also returning a list")
+
+
+# ── check_provenance_floor_contract / check_provenance_sources_contract, added 0.9.9 — item 2
+# of today's packet. Neither `provenance_floor()` nor `whichPartsDoesThisNoticeAffect` lives in
+# this SDK (both are invincible-agent application functions, confirmed by lookup), and neither
+# implements an SDK Protocol — so these two arms do not admit an implementation the way every
+# other `check_*_contract` in this module does. What this SDK DOES own is the vocabulary both
+# functions are built on: OBTAINED_VIA's ordering, the `promoted` ingest stage (ADR-0041 §5), and
+# ProvenanceBlock's six required fields. These arms state the invariants that vocabulary forces on
+# ANY caller-side function shaped like "the weakest provenance behind an answer" or "the per-source
+# provenance list behind a graph read" — generic to that SHAPE, never to a notice, a PCN, or any
+# other domain name — so a fleet lane can run either arm against its OWN function without this SDK
+# importing or knowing about it ─────────────────────────────────────────────────────────────────
+
+
+def check_provenance_floor_contract(
+    *,
+    unstamped: str,
+    call_floor_of_direct_only: Callable[[], Mapping[str, Any]],
+    call_floor_of_direct_and_user_drop: Callable[[], Mapping[str, Any]],
+    call_floor_of_user_drop_once_promoted: Callable[[], Mapping[str, Any]],
+    call_floor_of_user_drop_with_no_ingest_id: Callable[[], Mapping[str, Any]],
+) -> None:
+    """The WEAKEST-RUNG contract a `provenance_floor`-shaped function must satisfy (ADR-0041 §7:
+    "carries the weakest provenance an answer drew on"), stated against this SDK's own
+    :data:`iagent_mesh.provenance.OBTAINED_VIA` ordering and the ``promoted`` stage
+    :data:`iagent_mesh.ingest.INGEST_STAGES` already names — the generic half such a function
+    owns. A fleet consumer wraps this answer in its own envelope field; the ORDERING and the
+    PROMOTION exclusion are this SDK's vocabulary, not the consumer's to redefine.
+
+    The floor is the WORST thing an answer rests on, not the typical thing: one ``user-drop``
+    source outweighs any number of ``direct`` ones. ``call_floor_of_direct_and_user_drop`` proves
+    that by mixing a single user-drop source into an otherwise-``direct`` fixture; the floor must
+    move to ``user-drop`` regardless of how many stronger sources sit beside it.
+
+    A source stops setting the floor once it is PROMOTED (ADR-0041 §5 — a decision record and a
+    promotion fact landed), not once its rung improves — the rung never changes; promotion is an
+    EXCLUSION, not a re-score. ``call_floor_of_user_drop_once_promoted`` is the same fixture as the
+    mixed case with that one user-drop source added to the implementation's own ``promoted`` set;
+    the floor must revert to whatever the next-weakest UNPROMOTED source is.
+
+    An unpromoted user-drop source missing ``ingest_id`` cannot be cited by id, so it must be
+    counted, not silently dropped — ``call_floor_of_user_drop_with_no_ingest_id`` proves the
+    ``unidentified`` count tracks exactly that source.
+
+    ``unstamped`` is the caller's OWN sentinel for "no real rung to report" — supplied once and
+    compared by equality, this arm never guesses a spelling for it. All four ``call_floor_of_*``
+    callables are the SAME function under test, called against the caller's own fixture sources
+    already built for that one case; this arm only inspects what comes back.
+    """
+    from .provenance import DIRECT, USER_DROP
+
+    op = "provenance.provenance_floor"
+
+    direct_only = call_floor_of_direct_only()
+    if direct_only.get("obtained_via") != DIRECT:
+        _fail(op, f"a set of ALL-direct sources produced a floor of "
+                  f"{direct_only.get('obtained_via')!r}, not {DIRECT!r} — the weakest rung among "
+                  f"an all-direct set is direct itself; reporting {unstamped!r} or anything else "
+                  f"here means the function cannot see real sources at all")
+
+    mixed = call_floor_of_direct_and_user_drop()
+    assert_fixture_discriminates(
+        f"{op} direct-only vs direct+user-drop", direct_only, mixed,
+        describe=lambda r: r.get("obtained_via"),
+    )
+    if mixed.get("obtained_via") != USER_DROP:
+        _fail(op, f"mixing ONE unpromoted user-drop source into an otherwise-direct set produced "
+                  f"a floor of {mixed.get('obtained_via')!r}, not {USER_DROP!r} — the floor "
+                  f"reports the WORST source drawn on, so the single farthest-from-truth source "
+                  f"must set it regardless of how many stronger sources sit alongside it")
+
+    promoted = call_floor_of_user_drop_once_promoted()
+    assert_fixture_discriminates(
+        f"{op} user-drop unpromoted vs promoted", mixed, promoted,
+        # The WHOLE answer, not just `obtained_via` — a broken floor can fix the bookkeeping
+        # (`ingest_ids`) without fixing the rung itself; discriminating on `obtained_via` alone
+        # would never let that specific defect reach the check below that exists to catch it.
+        describe=lambda r: (
+            r.get("obtained_via"), tuple(sorted(r.get("ingest_ids") or ())), r.get("unidentified"),
+        ),
+    )
+    if promoted.get("obtained_via") == USER_DROP:
+        _fail(op, f"promoting the ONLY user-drop source in the set left the floor at "
+                  f"{USER_DROP!r} — a promoted source has a decision record and a promotion fact "
+                  f"landed (ADR-0041 §5); it must stop setting the floor, not keep dragging it "
+                  f"down after the fleet recorded it as reviewed")
+
+    unidentified = call_floor_of_user_drop_with_no_ingest_id()
+    if not unidentified.get("unidentified"):
+        _fail(op, f"a set containing an unpromoted user-drop source with NO ingest_id produced "
+                  f"unidentified={unidentified.get('unidentified')!r} — a source that cannot be "
+                  f"cited by id must be COUNTED, not silently absent from both ingest_ids and "
+                  f"this count")
+    for cited in unidentified.get("ingest_ids") or ():
+        if not cited:
+            _fail(op, f"ingest_ids contains {cited!r} — a source with no ingest_id belongs in "
+                      f"the unidentified COUNT, never as a blank entry in the id list")
+
+
+def check_provenance_sources_contract(
+    *,
+    unstamped: str,
+    call_sources_for_a_stamped_item: Callable[[], Sequence[Mapping[str, Any]]],
+    call_sources_for_a_seeded_item: Callable[[], Sequence[Mapping[str, Any]]],
+) -> None:
+    """The per-source SHAPE a `whichPartsDoesThisNoticeAffect`-shaped verb must satisfy — generic
+    to any verb that walks a graph and reports the provenance BEHIND what it found, never to a
+    notice specifically. Every source that came from a tracked ingest must embed a provenance
+    block this SDK's own :func:`validate_provenance` accepts; every source that did not (a SEEDED
+    row, with no ingest to point back to) must say so with the caller's OWN ``unstamped``
+    sentinel, never a block that is merely missing fields — the same "one sentinel, not a second
+    spelling of absence" discipline :data:`iagent_mesh.provenance.AS_OF_UNKNOWN` already states
+    for a single field, now applied to the whole block.
+
+    ``call_sources_for_a_stamped_item`` is the verb's own source list for something the fixture
+    DOES have tracked provenance for; ``call_sources_for_a_seeded_item`` is the SAME verb's source
+    list for something seeded directly, with no ingest act behind it. Both are the caller's own
+    fixture and the caller's own verb; this arm only inspects what comes back.
+    """
+    from .provenance import ProvenanceIncomplete, validate_provenance
+
+    op = "provenance.sources_of(verb)"
+
+    stamped = call_sources_for_a_stamped_item()
+    if not stamped:
+        _fail(op, "a fixture item that DOES have tracked sources returned an empty source list — "
+                  "nothing to verify the stamped shape against")
+    for i, source in enumerate(stamped):
+        block = source.get("provenance")
+        if block is None or block == unstamped:
+            _fail(op, f"source[{i}]={source!r} for a STAMPED fixture item carries no provenance "
+                      f"block — if this source really has no ingest to point back to, it belongs "
+                      f"in the seeded fixture instead, not silently mixed into the stamped one")
+        try:
+            validate_provenance(block)
+        except ProvenanceIncomplete as exc:
+            _fail(op, f"source[{i}]'s embedded provenance block fails this SDK's own "
+                      f"validate_provenance: {exc}. A verb that reads provenance off a graph node "
+                      f"must read a COMPLETE block or refuse to, never pass through a partial one")
+
+    seeded = call_sources_for_a_seeded_item()
+    if not seeded:
+        _fail(op, "a fixture item that is SEEDED (no ingest to point back to) returned an empty "
+                  "source list — nothing to verify the unstamped shape against")
+    for i, source in enumerate(seeded):
+        if source.get("provenance") != unstamped:
+            _fail(op, f"source[{i}]={source!r} for a SEEDED fixture item carries provenance="
+                      f"{source.get('provenance')!r}, not the caller's own unstamped="
+                      f"{unstamped!r} — a seeded row has no ingest to point back to, and that "
+                      f"absence must be declared with ONE sentinel, not a block missing fields "
+                      f"or a bare None a caller could mistake for 'not yet checked'")
