@@ -40,6 +40,36 @@ which is exactly what that sentinel is for. ``standing`` for a user-dropped clai
 consumer that reasons over :data:`OBTAINED_VIA` by position or exhaustiveness must be re-checked
 when this tuple grows. It has now grown once, here.
 
+── `steward-corrected`, THE SIXTH RUNG, RULED BY invincible-agent/lane/01's steward-correction
+packet, 2026-10-10 ─────────────────────────────────────────────────────────────────────────────
+A steward retyping a field that automated extraction got wrong is still not the authoritative
+system — they are a human intermediary correcting a READING of it, the same kind of hop
+``manual-export``/``user-drop`` already are, not a peer ranking by how trustworthy the correction
+turns out to be (ADR-0035 §5's own warning: distance from truth, not a ranking of peers, applies
+here too — an evidence-backed correction is not exempt from it). ``steward-corrected`` extends
+the tuple at the same far end as ``user-drop``: the two rungs with no machine-direct path to the
+authoritative system at all.
+
+Two more optional fields ride on :class:`ProvenanceBlock` for this rung and no other:
+``corrected_by`` (who) and ``extracted_value`` (what automated extraction produced before the
+correction, kept for audit — the corrected value itself is just the field's own current content,
+never a second copy here). They ride together, and only under this rung: a block whose
+``obtained_via`` is ``steward-corrected`` must carry both; a block under any other rung must
+carry neither. The pairing IS the "this row was corrected" fact — a stray ``corrected_by`` on a
+``direct`` block would assert a correction that never happened.
+
+A sixth value is, again, a change to the closed ordered tuple ADR-0041's Consequences section
+already warned would need re-checking. This module's own
+:func:`iagent_mesh.conformance.check_provenance_floor_contract` and
+:func:`iagent_mesh.conformance.check_provenance_sources_contract` reason over :data:`OBTAINED_VIA`
+by NAME (``DIRECT``, ``USER_DROP``), not by exhaustive position or count, so neither needed a
+source change for this growth — but any fleet consumer that enumerates all rungs by position
+still owes itself the same re-check this docstring keeps repeating.
+
+:class:`ExtractionDefect`, below, is the companion record the same ruling names: filed once per
+correction to the extraction pipeline's own admin queue, independent of what rides in the graph
+row's ``ProvenanceBlock`` — the audit trail back to the pipeline, not a second copy of the stamp.
+
 ── `ingest_id`, ADDED 2026-09-30 ON THE v0.9.5 CUT ORDER ───────────────────────────────────────
 The promotion store (ia-74/lane/74's `IngestGraph`/`IngestIndexes`) keys its cleanup on this one
 field: a promotion or rejection deletes "everything whose block carries the id" by scoping
@@ -63,6 +93,7 @@ __all__ = [
     "WAREHOUSE",
     "MANUAL_EXPORT",
     "USER_DROP",
+    "STEWARD_CORRECTED",
     "OBTAINED_VIA",
     "ObtainedVia",
     "AS_OF_UNKNOWN",
@@ -70,6 +101,7 @@ __all__ = [
     "PROV_GENERATED_AT",
     "ProvenanceIncomplete",
     "ProvenanceBlock",
+    "ExtractionDefect",
     "make_provenance",
     "validate_provenance",
     "require_provenance",
@@ -78,12 +110,13 @@ __all__ = [
 
 # HOW the claim was obtained — the degradation path, ordered nearest-to-truth. The ORDER is
 # meaningful (it is distance from the authoritative system), not cosmetic. `user-drop` is the
-# fifth rung, added at the far end per ADR-0041 §2 — see the module docstring.
-DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP = (
-    "direct", "etl", "warehouse", "manual-export", "user-drop")
-OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP)
+# fifth rung, added at the far end per ADR-0041 §2; `steward-corrected` is the sixth, added at
+# the same far end per the 2026-10-10 steward-correction ruling — see the module docstring.
+DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED = (
+    "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected")
+OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
 
-#: The same five values as a ``Literal`` for pydantic field typing — mirrors
+#: The same six values as a ``Literal`` for pydantic field typing — mirrors
 #: ``SlotDecl.kind: Literal[SLOT_KINDS]`` in :mod:`iagent_mesh.graph_manifest`, the house pattern
 #: for "one tuple is both the runtime membership check and the static type."
 ObtainedVia = Literal[OBTAINED_VIA]  # type: ignore[valid-type]
@@ -161,6 +194,16 @@ class ProvenanceBlock(BaseModel):
     ingest to point back to. **This is the field a promotion/rejection cleanup scopes its graph
     delete by** (`EdgeIdentityFilter(key=ingest_id)` against `MeshGraphWriter.delete_edges`) — see
     the module docstring's "ingest_id, ADDED 2026-09-30" section."""
+    corrected_by: Optional[str] = None
+    """Who corrected this claim — set if and only if ``obtained_via`` is
+    :data:`STEWARD_CORRECTED`. See the module docstring's "steward-corrected, THE SIXTH RUNG"
+    section. Opaque, carried verbatim — this field does not parse it."""
+    extracted_value: Optional[str] = None
+    """What automated extraction produced for this claim BEFORE the correction, preserved for
+    audit. Set if and only if ``obtained_via`` is :data:`STEWARD_CORRECTED`. May be blank — "the
+    extraction produced nothing" is itself a legitimate defect to record, not an omission this
+    field refuses. The corrected value is not duplicated here; it is whatever this claim's own
+    field already holds."""
 
     @field_validator("authoritative_source", "as_of", "ingested_at", "ingest_run", "standing")
     @classmethod
@@ -169,6 +212,16 @@ class ProvenanceBlock(BaseModel):
             raise ValueError(
                 f"ProvenanceBlock.{info.field_name}='' — every field of provenance is required "
                 f"at write; a claim that cannot say where it came from doesn't get written"
+            )
+        return v
+
+    @field_validator("corrected_by")
+    @classmethod
+    def _corrected_by_is_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                "ProvenanceBlock.corrected_by='   ' — set it to who corrected the claim, or "
+                "leave it unset; a blank value is neither"
             )
         return v
 
@@ -182,11 +235,28 @@ class ProvenanceBlock(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _corrected_fields_ride_only_with_steward_corrected(self) -> "ProvenanceBlock":
+        if self.obtained_via == STEWARD_CORRECTED:
+            if self.corrected_by is None or self.extracted_value is None:
+                raise ValueError(
+                    "ProvenanceBlock(obtained_via='steward-corrected') requires both "
+                    "corrected_by and extracted_value — a correction with no corrector or no "
+                    "record of what it replaced is not an auditable correction"
+                )
+        elif self.corrected_by is not None or self.extracted_value is not None:
+            raise ValueError(
+                f"ProvenanceBlock.obtained_via={self.obtained_via!r} but corrected_by/"
+                f"extracted_value is set — those two fields assert 'this row was corrected', "
+                f"which only obtained_via='steward-corrected' can be true of"
+            )
+        return self
+
     def as_dict(self) -> dict:
         """The wire shape :func:`make_provenance` itself returns — a plain dict with
-        ``derived_from``/``ingest_id`` present only when set, matching the original
-        ``iagent.provenance`` builder's output exactly so a consumer written against either shape
-        reads the same keys.
+        ``derived_from``/``ingest_id``/``corrected_by``/``extracted_value`` present only when
+        set, matching the original ``iagent.provenance`` builder's output exactly so a consumer
+        written against either shape reads the same keys.
         """
         block = {
             "authoritative_source": self.authoritative_source,
@@ -200,13 +270,86 @@ class ProvenanceBlock(BaseModel):
             block["derived_from"] = self.derived_from
         if self.ingest_id:
             block["ingest_id"] = self.ingest_id
+        if self.corrected_by is not None:
+            block["corrected_by"] = self.corrected_by
+        if self.extracted_value is not None:
+            block["extracted_value"] = self.extracted_value
         return block
+
+
+class ExtractionDefect(BaseModel):
+    """The admin-queue record invincible-agent/lane/01's steward-correction ruling (2026-10-10)
+    names beside ``obtained_via='steward-corrected'``: filed once per correction, independent of
+    what rides in the graph row's own :class:`ProvenanceBlock` — the audit trail back to the
+    extraction pipeline, not a second copy of the stamp. The ruling names doc-tools' admin/7f
+    queue as where this lands; this model only validates the shape, same as every other
+    record family here.
+
+    GENERIC TO ANY ARTIFACT A STEWARD CORRECTS — never to a notice, a PCN, or any other domain
+    name, the same discipline :mod:`iagent_mesh.conformance`'s provenance-floor arms already
+    state for a verb shape. The ruling's own field names (``notice``, ``extracted``, ``corrected``)
+    are invincible-agent's domain vocabulary; this model generalizes them to ``artifact_id``,
+    ``extracted_value`` and ``corrected_value`` so a deployment maps its own domain field onto
+    this shape rather than this SDK learning a domain term.
+
+    No ``corrected_by`` here, unlike :class:`ProvenanceBlock`'s field of the same name: the
+    review-resolve task that produces one of these already carries its actor (an
+    ``Initiator``/``on_behalf_of`` on the task act) — duplicating identity onto this record too
+    would be a second place for it to drift from the task's own.
+
+    THIS SDK DOES NOT FILE OR QUEUE ANYTHING. A deployment's own review-resolve path mints one of
+    these per correction and routes it to its own admin queue.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_id: str
+    """The ingested item the correction applies to — opaque to this model, the same discipline
+    :class:`iagent_mesh.interfaces.MeshArtifacts`'s own ``id`` already states."""
+    pin_digest: str
+    """Identifies the extractor pin active when the defective extraction ran — the ruling's own
+    reason a new pin is a RE-extraction trigger: the ETag does not move, so the pin is the only
+    thing that distinguishes a re-extraction from a no-op."""
+    extracted_value: str
+    """What automated extraction produced, before correction. Blank is a legitimate value here —
+    "extraction produced nothing" is itself the defect being filed, not an omission this field
+    refuses."""
+    corrected_value: str
+    """What the steward corrected it to."""
+    evidence: tuple[str, ...] = ()
+    """Cites what backs the correction — a page/section of the source document, a pin digest,
+    anything machine-checkable. Same grammar, and the same non-empty requirement, as
+    :attr:`iagent_mesh.systems_of_record.Origin.evidence` states for ``resolved_by='record'``: a
+    correction with nothing cited is indistinguishable from a guess wearing a corrected label."""
+
+    @field_validator("artifact_id", "pin_digest", "corrected_value")
+    @classmethod
+    def _required_string_is_present(cls, v: str, info) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                f"ExtractionDefect.{info.field_name}='' — required; a defect record that cannot "
+                f"say which artifact, which pin, or what it was corrected TO is not a record "
+                f"anyone downstream can act on"
+            )
+        return v
+
+    @field_validator("evidence")
+    @classmethod
+    def _evidence_is_nonempty(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if not v:
+            raise ValueError(
+                "ExtractionDefect.evidence=() — a correction with nothing cited is "
+                "indistinguishable from a guess wearing a corrected label"
+            )
+        return v
 
 
 def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Optional[str],
                      ingested_at: Any, ingest_run: str, standing: str,
                      derived_from: Optional[str] = None,
-                     ingest_id: Optional[str] = None) -> dict:
+                     ingest_id: Optional[str] = None,
+                     corrected_by: Optional[str] = None,
+                     extracted_value: Optional[str] = None) -> dict:
     """Build the block. Every field is required; there are no convenient defaults.
 
     THE BUILDER DOC-TOOLS IMPORTS. Returns a plain ``dict`` — the wire shape every consumer
@@ -240,6 +383,17 @@ def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Opti
             "sensor and source object that produced it, and the lineage stops at this row")
     if not standing:
         raise ProvenanceIncomplete("standing is required (the source's rung AT WRITE TIME)")
+    if obtained_via == STEWARD_CORRECTED:
+        if not corrected_by or extracted_value is None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-corrected' requires both corrected_by and "
+                "extracted_value — a correction with no corrector or no record of what it "
+                "replaced is not an auditable correction")
+    elif corrected_by is not None or extracted_value is not None:
+        raise ProvenanceIncomplete(
+            f"obtained_via={obtained_via!r} but corrected_by/extracted_value was supplied — "
+            f"those two fields assert 'this row was corrected', which only "
+            f"obtained_via='steward-corrected' can be true of")
     block = {
         "authoritative_source": authoritative_source,
         "obtained_via": obtained_via,
@@ -252,6 +406,10 @@ def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Opti
         block["derived_from"] = derived_from      # -> prov:wasDerivedFrom on serialization
     if ingest_id:
         block["ingest_id"] = ingest_id            # scopes a promotion/rejection cleanup delete
+    if corrected_by:
+        block["corrected_by"] = corrected_by
+    if extracted_value is not None:
+        block["extracted_value"] = extracted_value
     return block
 
 
@@ -268,6 +426,19 @@ def validate_provenance(block: Any) -> None:
             f"already contains claims nobody can place")
     if block["obtained_via"] not in OBTAINED_VIA:
         raise ProvenanceIncomplete(f"bad obtained_via {block['obtained_via']!r}")
+    corrected_by = block.get("corrected_by")
+    extracted_value = block.get("extracted_value")
+    if block["obtained_via"] == STEWARD_CORRECTED:
+        if not corrected_by or extracted_value is None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-corrected' requires both corrected_by and "
+                "extracted_value — a correction with no corrector or no record of what it "
+                "replaced is not an auditable correction")
+    elif corrected_by is not None or extracted_value is not None:
+        raise ProvenanceIncomplete(
+            f"obtained_via={block['obtained_via']!r} but corrected_by/extracted_value is "
+            f"present — those two fields assert 'this row was corrected', which only "
+            f"obtained_via='steward-corrected' can be true of")
 
 
 def require_provenance(assertion: dict, *, key: str = "provenance") -> dict:

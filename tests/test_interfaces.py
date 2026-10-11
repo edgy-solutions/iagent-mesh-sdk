@@ -24,6 +24,7 @@ from iagent_mesh.interfaces import (
     MeshGraph,
     MeshOntology,
     MeshVectors,
+    ResolveInstanceRequest,
     ServiceIdentityRefused,
 )
 from iagent_mesh.results import MeshResult
@@ -670,3 +671,48 @@ I.marker_is_stale(m, n)
             if any(a.name == "marker_is_stale" for a in node.names):
                 found["import"] = True
     assert all(found.values()), f"the reader cannot see: {[k for k,v in found.items() if not v]}"
+
+
+# ── ResolveInstanceRequest, generalizing invincible-agent PR #38's settled wire shape ──────────
+
+def test_resolve_instance_request_builds_from_identifier_alone():
+    req = ResolveInstanceRequest(identifier="HAZ-1004")
+    assert req.identifier == "HAZ-1004"
+    assert req.query == ""
+    assert req.user_email == ""
+    assert req.entitled_domains == ()
+
+
+def test_resolve_instance_request_carries_the_caller_and_the_grant():
+    req = ResolveInstanceRequest(
+        identifier="HAZ-1004", query="who owns this", user_email="alice@example.com",
+        entitled_domains=("SUSTAINMENT", "MAINTENANCE"),
+    )
+    assert req.user_email == "alice@example.com"
+    assert req.entitled_domains == ("SUSTAINMENT", "MAINTENANCE")
+
+
+def test_resolve_instance_request_empty_caller_is_legal_not_refused():
+    """Empty user_email/entitled_domains is how 'no caller' is represented — PR #38's own point:
+    an explicit empty value, never a field withheld. Construction must not refuse it."""
+    req = ResolveInstanceRequest(identifier="HAZ-1004")
+    assert req.user_email == ""
+    assert req.entitled_domains == ()
+
+
+def test_resolve_instance_request_refuses_a_blank_identifier():
+    with pytest.raises(Exception):
+        ResolveInstanceRequest(identifier="   ")
+
+
+def test_resolve_instance_request_requires_identifier():
+    with pytest.raises(Exception):
+        ResolveInstanceRequest()
+
+
+def test_resolve_instance_request_is_frozen_and_forbids_extra_fields():
+    req = ResolveInstanceRequest(identifier="HAZ-1004")
+    with pytest.raises(Exception):
+        req.identifier = "HAZ-1005"
+    with pytest.raises(Exception):
+        ResolveInstanceRequest(identifier="HAZ-1004", domain="MAINTENANCE")

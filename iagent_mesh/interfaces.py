@@ -69,6 +69,7 @@ __all__ = [
     "DelegateIdentityRefused",
     "MeshGraph",
     "MeshOntology",
+    "ResolveInstanceRequest",
     "MeshVectors",
     "MeshArtifacts",
     "MESH_COLLECTION_META",
@@ -432,6 +433,47 @@ class MeshOntology(Protocol):
         TYPES INTACT IS THE POINT: the SELECT executor drops them, so a typed read has to be a
         CONSTRUCT and parse rather than a SELECT and guess.
         """
+
+
+class ResolveInstanceRequest(BaseModel):
+    """The wire shape of a ``mesh:resolveInstance`` provider call — generalizes
+    invincible-agent/lane/74's PR #38 (commit ``251f4097``, 2026-10-10), which settled these exact
+    field names across every call site (``_call_resolver``, ``/resolve``, ``/fill_slots``) after
+    gov's origin-at-read report: a provider holding origin-scoped instances cannot gate on a
+    caller it was never told, so ``user_email``/``entitled_domains`` now ride on every provider
+    POST, empty when the asker named nobody — "no caller" arrives as an explicit value, never as a
+    field the provider was not sent.
+
+    THIS MODEL DOES NOT GATE. Same division PR #38 itself draws ("RECEIVED, NOT YET GATED ON"):
+    this is the wire shape a resolver receives, not the authorization decision over it — that
+    decision is the provider's own, the same way :class:`MeshOntology`'s own read methods carry an
+    :class:`Initiator` but enforce nothing about it themselves.
+
+    ``entitled_domains`` is the caller's GRANT, never a ranking signal — PR #38's own distinction
+    between ``entitled_domains`` (what the caller may see) and an ``asked_domains``-shaped ranking
+    hint that a provider may additionally take, which this model does not carry because ranking is
+    per-provider, not a wire-identity concern. ``identifier`` is the only required field: the thing
+    being resolved. Empty ``user_email`` and empty ``entitled_domains`` are both legal — they are
+    how "no caller" is represented, not a validation failure.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    identifier: str
+    query: str = ""
+    user_email: str = ""
+    entitled_domains: tuple[str, ...] = ()
+
+    @field_validator("identifier")
+    @classmethod
+    def _identifier_is_present(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "ResolveInstanceRequest.identifier='' — required; this is the thing being "
+                "resolved, and a request naming nothing to resolve is not a narrower request, it "
+                "is a missing one"
+            )
+        return v
 
 
 #: THE MARKER COLLECTION. A carrier that is OURS BY CONSTRUCTION, ruled 2026-09-14 over an

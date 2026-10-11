@@ -355,6 +355,32 @@ real caller: the result rows are typed Turtle text, read for CONFIRMATION
 site found is in this SDK's own test fixtures. Stated honestly rather than
 invented: a worked example needs a real caller, and none exists yet for `ask`.
 
+#### `ResolveInstanceRequest` — the wire shape of a `mesh:resolveInstance` call, added 0.9.10
+
+`identifier` (required), `query`, `user_email`, `entitled_domains`. Frozen,
+`extra="forbid"`, same house pattern as `EdgeIdentity`/`EdgeIdentityFilter`.
+
+This is not a `MeshOntology` method and admits no conformance arm — it has no
+SDK-side Protocol to implement, because resolving a named entity to a class
+instance is a deployment-specific capability (`invincible-agent`'s
+`/resolve_instance` providers), not a reader this SDK's own substrate wraps.
+The model exists so a deployment has a typed, version-pinned contract for that
+call's wire shape instead of re-deriving it ad hoc, generalizing
+`invincible-agent/lane/74`'s PR #38 (commit `251f4097`, 2026-10-10): every
+provider POST now carries `user_email`/`entitled_domains`, empty when the
+caller named nobody, so "no caller" arrives as an explicit value rather than a
+field withheld. **This model carries the wire shape only — it does not gate.**
+The authorization decision over what a provider returns stays the provider's
+own, the same division `MeshOntology`'s own read methods draw by accepting an
+`Initiator` without enforcing anything about it themselves.
+
+```python
+ResolveInstanceRequest(
+    identifier="HAZ-1004", query="who owns this",
+    user_email="alice@example.com", entitled_domains=("SUSTAINMENT",),
+)
+```
+
 ### `MeshVectors` — semantic lookup within a declared collection and domain
 
 `MODES = ("hybrid", "bm25")`.
@@ -1271,6 +1297,7 @@ was deployed.
 from iagent_mesh.interfaces import (
     Initiator, ServiceIdentityRefused, DelegateIdentityRefused,
     MeshGraph, MeshOntology, MeshVectors, MeshArtifacts,
+    ResolveInstanceRequest,
     MESH_COLLECTION_META, CollectionMarker, CorruptCollectionMarker,
     collection_marker, read_collection_marker, marker_predates_collection,
     MARKER_ASSERTS, MARKER_DOES_NOT_ASSERT,

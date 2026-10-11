@@ -19,8 +19,10 @@ from iagent_mesh.provenance import (
     ETL,
     MANUAL_EXPORT,
     OBTAINED_VIA,
+    STEWARD_CORRECTED,
     USER_DROP,
     WAREHOUSE,
+    ExtractionDefect,
     ProvenanceBlock,
     ProvenanceIncomplete,
     is_stale,
@@ -77,16 +79,24 @@ def test_ingest_id_appears_only_when_set():
     assert "ingest_id" not in ProvenanceBlock(**VALID).as_dict()
 
 
-# ── the ordered tuple, and `user-drop` as its fifth, farthest rung (ADR-0041 §2) ──────────
+# ── the ordered tuple, `user-drop` its fifth rung (ADR-0041 §2), `steward-corrected` its ────
+# sixth (invincible-agent/lane/01's steward-correction ruling, 2026-10-10) ──────────────────
 
-def test_obtained_via_is_the_five_rung_tuple_ruled_by_adr_0041():
-    """Pinned to the exact tuple ADR-0041 §2 rules, not a re-derivation of it — the order is
+def test_obtained_via_is_the_six_rung_tuple_ruled_by_adr_0041_and_the_steward_ruling():
+    """Pinned to the exact tuple both rulings produce, not a re-derivation of it — the order is
     meaningful (nearest-to-truth first) and this is the contract, not an implementation detail."""
-    assert OBTAINED_VIA == (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP)
-    assert OBTAINED_VIA == ("direct", "etl", "warehouse", "manual-export", "user-drop")
-    assert OBTAINED_VIA[-1] == USER_DROP, (
-        "user-drop must be the FARTHEST rung — it is the degradation path a hand-carried "
-        "document travelled, not a peer of etl or warehouse"
+    assert OBTAINED_VIA == (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
+    assert OBTAINED_VIA == (
+        "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected",
+    )
+    assert OBTAINED_VIA[-1] == STEWARD_CORRECTED, (
+        "steward-corrected must be the FARTHEST rung — a steward retyping a value is a human "
+        "intermediary correcting a reading, not the authoritative system itself, the same "
+        "kind of hop user-drop already is"
+    )
+    assert OBTAINED_VIA[-2] == USER_DROP, (
+        "user-drop must still be the SECOND-farthest rung — appending steward-corrected after "
+        "it must not have reordered what was already there"
     )
 
 
@@ -96,6 +106,100 @@ def test_user_drop_is_a_legal_obtained_via_on_both_entry_points():
     assert block["obtained_via"] == "user-drop"
     ProvenanceBlock(**{**VALID, "obtained_via": USER_DROP, "as_of": AS_OF_UNKNOWN,
                         "standing": "supervised"})  # does not raise
+
+
+# ── `steward-corrected`, its `corrected_by`/`extracted_value` pairing, both entry points ──
+
+_STEWARD_VALID = {
+    **VALID, "obtained_via": STEWARD_CORRECTED,
+    "corrected_by": "bob", "extracted_value": "F-16",
+}
+
+
+def test_steward_corrected_is_a_legal_obtained_via_on_both_entry_points():
+    block = make_provenance(**_STEWARD_VALID)
+    assert block["obtained_via"] == "steward-corrected"
+    assert block["corrected_by"] == "bob"
+    assert block["extracted_value"] == "F-16"
+    ProvenanceBlock(**_STEWARD_VALID)  # does not raise
+
+
+def test_extracted_value_may_be_blank_the_defect_can_be_that_nothing_was_extracted():
+    block = make_provenance(**{**_STEWARD_VALID, "extracted_value": ""})
+    assert block["extracted_value"] == ""
+    pb = ProvenanceBlock(**{**_STEWARD_VALID, "extracted_value": ""})
+    assert pb.as_dict()["extracted_value"] == ""
+
+
+def test_corrected_by_and_extracted_value_are_REQUIRED_together_under_steward_corrected():
+    for missing in ("corrected_by", "extracted_value"):
+        bad = {k: v for k, v in _STEWARD_VALID.items() if k != missing}
+        with pytest.raises(ProvenanceIncomplete, match=missing):
+            make_provenance(**bad)
+        with pytest.raises(ValidationError):
+            ProvenanceBlock(**bad)
+
+
+def test_corrected_by_and_extracted_value_are_REFUSED_under_any_other_rung():
+    for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP):
+        bad = {**VALID, "obtained_via": rung, "corrected_by": "bob", "extracted_value": "x"}
+        if rung == USER_DROP:
+            bad["as_of"] = AS_OF_UNKNOWN
+            bad["standing"] = "supervised"
+        with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+            make_provenance(**bad)
+        with pytest.raises(ValidationError):
+            ProvenanceBlock(**bad)
+
+
+def test_validate_provenance_enforces_the_same_pairing_on_the_dict_path():
+    validate_provenance(make_provenance(**_STEWARD_VALID))  # does not raise
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        validate_provenance({**VALID, "corrected_by": "bob", "extracted_value": "x"})
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        validate_provenance({**_STEWARD_VALID, "corrected_by": None})
+
+
+# ── ExtractionDefect, the companion admin-queue record the same ruling names ──────────────
+
+_DEFECT_VALID = dict(
+    artifact_id="artifact-1",
+    pin_digest="pin-2026-10-10-001",
+    extracted_value="F-35",
+    corrected_value="F-16",
+    evidence=("pin:pin-2026-10-10-001",),
+)
+
+
+def test_extraction_defect_builds_from_the_valid_fixture():
+    d = ExtractionDefect(**_DEFECT_VALID)
+    assert d.corrected_value == "F-16"
+    assert d.evidence == ("pin:pin-2026-10-10-001",)
+
+
+def test_extraction_defect_extracted_value_may_be_blank():
+    """Same discipline as `ProvenanceBlock.extracted_value`: "nothing was extracted" is itself
+    the defect, not an omission this field refuses."""
+    ExtractionDefect(**{**_DEFECT_VALID, "extracted_value": ""})  # does not raise
+
+
+def test_extraction_defect_required_strings_cannot_be_blank():
+    for field in ("artifact_id", "pin_digest", "corrected_value"):
+        with pytest.raises(ValidationError):
+            ExtractionDefect(**{**_DEFECT_VALID, field: ""})
+
+
+def test_extraction_defect_evidence_is_required_non_empty():
+    with pytest.raises(ValidationError, match="evidence"):
+        ExtractionDefect(**{**_DEFECT_VALID, "evidence": ()})
+
+
+def test_extraction_defect_is_frozen_and_forbids_extra_fields():
+    d = ExtractionDefect(**_DEFECT_VALID)
+    with pytest.raises(ValidationError):
+        d.corrected_value = "something-else"  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        ExtractionDefect(**_DEFECT_VALID, corrected_by="bob")  # type: ignore[call-arg]
 
 
 def test_an_unknown_obtained_via_is_refused_on_both_entry_points():
