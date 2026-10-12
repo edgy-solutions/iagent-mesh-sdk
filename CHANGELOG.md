@@ -6,11 +6,18 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## Unreleased — `lane/ca-0.9.10`
+## 0.9.10 — 2026-10-12
 
-On a lane branch, not tagged — per this cycle's own governing instruction, no tag until Lane 1
-asks. `pyproject.toml`'s `version` is unchanged at `0.9.9` on this branch; it only moves at the
-next release ceremony on `master`.
+**Tag re-pointed.** `v0.9.10` was first cut directly at `lane/ca-0.9.10`'s tip (`c85258f`),
+per this cycle's "no tag until Lane 1 asks" governing instruction — but `pyproject.toml` stays
+pinned to its fork value on a lane branch by this file's own rule above, so that tag pointed at
+a commit still reporting `0.9.9`. invincible-agent/lane/01's rev-188 packet (filed in
+`sessions/2026-10-11-packet-to-ca-tag-0-9-10-for-rev-188.md`) named the real consequence: rev
+188 pins the SDK by importing it and reading its version string, so a tag whose package still
+says `0.9.9` doesn't pin what its name claims. Ran the release ceremony properly instead: folded
+`lane/ca-0.9.10` into `master`, bumped `pyproject.toml` here, and moved the `v0.9.10` tag off
+`c85258f` onto this cut's own version-bump commit. The two lane commits this brings in
+(`b1b7f96`, `c85258f`) are unchanged by the re-point.
 
 ### Added
 - `Initiator.authz_id` — a second opaque identity claim, for deployments whose authorization
