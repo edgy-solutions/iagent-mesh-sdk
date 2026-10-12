@@ -80,10 +80,12 @@ who = Initiator(subject="alice@example.com", kind="person")
 | `subject` | `str` | The authorization identity, **opaque**. Whatever claim your deployment keys on — an email, an employee id, a Keycloak name. The SDK never parses it. |
 | `kind` | `"person"` \| `"service"` \| `"delegate"` | **Declared, never sniffed.** |
 | `on_behalf_of` | `str \| None` | Who a **delegate** is accountable to. Required (non-blank) when `kind == "delegate"`, refused otherwise. **Provenance, never a gate input** — no guard reads it. |
+| `authz_id` | `str \| None` | A second opaque identity claim, for deployments whose authorization decider keys on a different claim than `subject`. Added 2026-10-10 for invincible-agent's `GatewayArtifacts` (owner check on `subject`, delegate map on `authz_id`). Unconstrained by `kind` — no proposal yet says which kinds require or forbid it. |
 
 The model is frozen and forbids extra fields. An empty or whitespace `subject` is
 refused at construction: *an anonymous read is not a read with a missing name, it
-is a read nobody can be held to.*
+is a read nobody can be held to.* `authz_id`, when set, is held to the same
+non-blank rule; omit the field (leave it `None`) rather than binding it empty.
 
 `"delegate"` (added 2026-09-27) is a non-human session acting under its **own**
 entitlements — a lane worktree, a scheduled job — distinct from a `"service"`
@@ -353,6 +355,32 @@ real caller: the result rows are typed Turtle text, read for CONFIRMATION
 site found is in this SDK's own test fixtures. Stated honestly rather than
 invented: a worked example needs a real caller, and none exists yet for `ask`.
 
+#### `ResolveInstanceRequest` — the wire shape of a `mesh:resolveInstance` call, added 0.9.10
+
+`identifier` (required), `query`, `user_email`, `entitled_domains`. Frozen,
+`extra="forbid"`, same house pattern as `EdgeIdentity`/`EdgeIdentityFilter`.
+
+This is not a `MeshOntology` method and admits no conformance arm — it has no
+SDK-side Protocol to implement, because resolving a named entity to a class
+instance is a deployment-specific capability (`invincible-agent`'s
+`/resolve_instance` providers), not a reader this SDK's own substrate wraps.
+The model exists so a deployment has a typed, version-pinned contract for that
+call's wire shape instead of re-deriving it ad hoc, generalizing
+`invincible-agent/lane/74`'s PR #38 (commit `251f4097`, 2026-10-10): every
+provider POST now carries `user_email`/`entitled_domains`, empty when the
+caller named nobody, so "no caller" arrives as an explicit value rather than a
+field withheld. **This model carries the wire shape only — it does not gate.**
+The authorization decision over what a provider returns stays the provider's
+own, the same division `MeshOntology`'s own read methods draw by accepting an
+`Initiator` without enforcing anything about it themselves.
+
+```python
+ResolveInstanceRequest(
+    identifier="HAZ-1004", query="who owns this",
+    user_email="alice@example.com", entitled_domains=("SUSTAINMENT",),
+)
+```
+
 ### `MeshVectors` — semantic lookup within a declared collection and domain
 
 `MODES = ("hybrid", "bm25")`.
@@ -515,6 +543,17 @@ absent→`empty`, and the arm's own `assert_fixture_discriminates` call is
 between entitled and unentitled only — never between unentitled and absent,
 because that distinction is the one this Protocol rules out, not one a
 fixture simply failed to supply.
+
+**`check_mesh_artifacts_list_by_kind_contract`, added 2026-10-10** is the
+list-route sibling, same binary shape applied to `list_by_kind`: entitled to
+the fixture's own artifacts under `kind`→`answered` with rows, entitled to
+NONE of them→`empty`, a `kind` never written under at all→`empty`. It does
+**not** assert anything about a partially-entitled caller's row count —
+`list_by_kind`'s own docstring rules that returning fewer rows than the
+kind's full registered set is the correct, intended shape of a scoped list,
+not a gap; a caller diffing against the full set to detect what it is
+"missing" is misreading entitlement scope as a defect, and this contract does
+not reward trying.
 
 #### Worked examples: none exist yet (surveyed 2026-10-07)
 
@@ -1258,6 +1297,7 @@ was deployed.
 from iagent_mesh.interfaces import (
     Initiator, ServiceIdentityRefused, DelegateIdentityRefused,
     MeshGraph, MeshOntology, MeshVectors, MeshArtifacts,
+    ResolveInstanceRequest,
     MESH_COLLECTION_META, CollectionMarker, CorruptCollectionMarker,
     collection_marker, read_collection_marker, marker_predates_collection,
     MARKER_ASSERTS, MARKER_DOES_NOT_ASSERT,
@@ -1270,6 +1310,8 @@ from iagent_mesh.conformance import (
     check_ontology_contract, assert_fixture_discriminates, ConformanceFailure,
     check_writer_offline, check_ontology_writer_contract,
     check_vectors_writer_has_contract, check_mesh_artifacts_entitlement_contract,
+    check_mesh_artifacts_list_by_kind_contract, check_system_of_record_query_contract,
+    check_system_of_record_query_independence_contract,
 )
 from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 

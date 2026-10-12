@@ -6,6 +6,70 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## Unreleased — `lane/ca-0.9.10`
+
+On a lane branch, not tagged — per this cycle's own governing instruction, no tag until Lane 1
+asks. `pyproject.toml`'s `version` is unchanged at `0.9.9` on this branch; it only moves at the
+next release ceremony on `master`.
+
+### Added
+- `Initiator.authz_id` — a second opaque identity claim, for deployments whose authorization
+  decider keys on a different claim than `subject` (e.g. invincible-agent's `GatewayArtifacts`:
+  owner check on `subject`, delegate map on `authz_id`). Unconstrained by `kind`, unlike
+  `on_behalf_of` — no proposal yet says which kinds require or forbid it.
+- `check_mesh_artifacts_list_by_kind_contract` — the list-route sibling of
+  `check_mesh_artifacts_entitlement_contract`: proves `list_by_kind` scopes by entitlement
+  (entitled→rows, entitled-to-none→empty, absent kind→empty) without asserting anything about a
+  partially-entitled caller's row count, which the Protocol's own docstring rules is a correctly
+  scoped list's intended shape, not a gap.
+- `check_system_of_record_query_independence_contract` — proves one `SystemOfRecordQuery`
+  connector instance answers two different values independently: querying B must not perturb a
+  later re-query of A, and each result stays its own re-iterable collection. `query()` takes no
+  `Initiator`, so this is not an entitlement arm — per-caller scoping for this Protocol is the
+  caller's own concern (confirmed against lane/saf's FRACAS consumer).
+
+- `OBTAINED_VIA.STEWARD_CORRECTED` (`"steward-corrected"`) — a sixth rung, appended at the same
+  far end as `user-drop`: a steward retyping a value automated extraction got wrong is a human
+  intermediary correcting a reading, not the authoritative system itself, the same kind of hop
+  `manual-export`/`user-drop` already are. Ruled by invincible-agent/lane/01's steward-correction
+  packet (2026-10-10), which superseded its own same-night draft asking for a terminal-reject
+  retry path instead.
+- `ProvenanceBlock.corrected_by` / `ProvenanceBlock.extracted_value` — ride together, and only
+  under `obtained_via='steward-corrected'`: who corrected the claim, and what automated
+  extraction produced before the correction (the corrected value is just the field's own current
+  content, never duplicated). Enforced on both entry points (`make_provenance`,
+  `ProvenanceBlock`) and the dict re-check path (`validate_provenance`).
+- `ExtractionDefect` — the admin-queue record the same ruling names, filed once per correction
+  independent of what rides in the graph row's own `ProvenanceBlock`: `artifact_id`, `pin_digest`,
+  `extracted_value`, `corrected_value`, `evidence` (non-empty, same grammar as `Origin.evidence`).
+  Generalizes the ruling's own domain field names (`notice`, `extracted`, `corrected`) to this
+  SDK's generic vocabulary — no `notice`, no PCN, anywhere in this surface. No `corrected_by`
+  here: the review-resolve task that mints one already carries its actor.
+- `check_provenance_floor_contract` / `check_provenance_sources_contract` needed no change for
+  this growth — both reason over `OBTAINED_VIA` by name (`DIRECT`, `USER_DROP`), not by
+  exhaustive position or count.
+- `ResolveInstanceRequest` — the wire shape of a `mesh:resolveInstance` provider call:
+  `identifier` (required), `query`, `user_email`, `entitled_domains`. Generalizes
+  invincible-agent/lane/74's PR #38 (commit `251f4097`, 2026-10-10), which settled these exact
+  field names across every call site after gov's origin-at-read report: a provider holding
+  origin-scoped instances cannot gate on a caller it was never told. This model carries the wire
+  shape only — it does not gate; empty `user_email`/`entitled_domains` is how "no caller" is
+  represented, not a validation failure.
+
+### Coordination (no code change in this repo)
+- Packet to `invincible-agent/lane/01` naming `frontend_version` as the field `InterviewRequest`
+  needs to declare to unblock cortex-ui's `feat/frontend-version-on-ask` worktree — that model is
+  owned by `invincible-agent/src/iagent/gateway.py`, not this SDK; nothing here to change.
+- `safety:onPlatform` ("ontology bundle" ask) — investigated and does not apply here: this SDK
+  has no ontology-bundle concept at all (`schemas/` holds one unrelated JSON schema; nothing else
+  ships or bundles an ontology). The property belongs to invincible-agent's own
+  `safety_extension.ttl`, and the hazard-shape work that would have declared it was PARKED by an
+  architect ruling the same day (2026-10-10) — only the name (`platform`, not `program`) survived.
+  Nothing to do in this repo.
+- `user_email`/`entitled_domains` on `ResolveInstanceRequest` — PR #38 (above) already closes the
+  gap on the invincible-agent side with these exact field names; no residual to packet back to
+  lane/74.
+
 ## 0.9.9 — 2026-10-09
 
 First tagged cut since v0.9.8; v0.9.7 was requested but never actually tagged, so several items

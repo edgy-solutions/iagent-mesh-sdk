@@ -1186,7 +1186,7 @@ wheels = [
 
 [[package]]
 name = "iagent-mesh"
-version = "0.9.8"
+version = "0.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "acryl-datahub" },
