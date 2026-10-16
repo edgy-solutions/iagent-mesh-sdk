@@ -6,6 +6,25 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## Unreleased — `lane/ca-0.9.11`
+
+### Added
+- `ContentKindRegistration.id_namespaces` — generalizes invincible-agent/lane/74's PR #51
+  (`register_engine_to_mesh(..., id_namespaces=[...])`, architect-ruled 2026-10-12) to this SDK's
+  one registration surface: the ID prefixes a kind's own instances carry (e.g. `("HAZ-", "CSI-")`),
+  validated the same way PR #51's registrar does (each entry at least 2 characters, no
+  whitespace), plus the uniqueness check `passes`/`outputs` already enforce. Defaults to `()` —
+  every kind before this field existed, and any kind whose identifiers carry no stable prefix.
+  This module does not match or arbitrate on a contested prefix, same split `identity_field` and
+  `parent_link_field` already draw: it declares the prefixes, not how a caller resolves them.
+
+### Coordination (no code change in this repo)
+- `extraction_defect` producer/SDK-model mismatch (rev 188, invincible-agent/lane/01) — the
+  architect's ruling stands from 0.9.10: Lane 1 aligns `defect_task()`'s payload to this SDK's
+  `ExtractionDefect`, this SDK does not widen to the decision-shaped payload Lane 1 recommended in
+  their 2026-10-12 contract-fork packet. Recorded here because that packet explicitly asked for
+  the widening and this cycle's instruction confirms the ruling held, not because anything changed.
+
 ## 0.9.10 — 2026-10-12
 
 **Tag re-pointed.** `v0.9.10` was first cut directly at `lane/ca-0.9.10`'s tip (`c85258f`),

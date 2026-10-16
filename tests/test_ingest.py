@@ -357,6 +357,41 @@ def test_event_branch_forbids_parent_link_field():
         ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "parent_link_field": "parent_dmc"})
 
 
+# ── ContentKindRegistration.id_namespaces, ADDED 0.9.11 (generalizes lane/74's PR #51) ────
+
+def test_id_namespaces_defaults_to_empty_a_kind_claims_no_prefix():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.id_namespaces == ()
+
+
+def test_a_kind_declares_its_id_namespaces():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "id_namespaces": ("HAZ-", "CSI-")})
+    assert row.id_namespaces == ("HAZ-", "CSI-")
+
+
+def test_id_namespaces_entry_under_two_characters_is_refused():
+    with pytest.raises(ValidationError, match="id_namespaces"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "id_namespaces": ("H",)})
+
+
+def test_id_namespaces_entry_with_whitespace_is_refused():
+    with pytest.raises(ValidationError, match="id_namespaces"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "id_namespaces": ("HAZ ",)})
+
+
+def test_id_namespaces_repeat_is_refused_same_as_passes_and_outputs():
+    with pytest.raises(ValidationError, match="id_namespaces"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "id_namespaces": ("HAZ-", "HAZ-")})
+
+
+def test_event_branch_may_declare_id_namespaces():
+    """Unlike parent_link_field, id_namespaces names a property of the kind's identifiers
+    themselves, not of an extracted output an event kind never produces — so nothing forbids it
+    here."""
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "id_namespaces": ("EVT-",)})
+    assert row.id_namespaces == ("EVT-",)
+
+
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
 
 def test_a_valid_rev_1_builds_with_no_supersedes():

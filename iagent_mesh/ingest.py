@@ -292,6 +292,18 @@ class ContentKindRegistration(BaseModel):
     the parent, not how a caller resolves that name to the parent's own node. Forbidden for
     ``branch="event"`` rows — see ``_branch_shape_is_consistent`` below."""
 
+    id_namespaces: tuple[str, ...] = ()
+    """ADDED 0.9.11. Generalizes invincible-agent/lane/74's PR #51 (``register_engine_to_mesh``'s
+    ``id_namespaces`` argument, ruled by the architect 2026-10-12) to this SDK's one registration
+    surface: the ID prefixes this kind's own instances carry, e.g. ``("HAZ-", "CSI-")`` for a kind
+    whose extracted identifiers are always hazard or safety-critical-item numbers. ``()`` (the
+    default) means this kind declares no prefix — every kind before this field existed, and any
+    kind whose identifiers carry no stable prefix to claim. THIS MODULE DOES NOT MATCH OR ARBITRATE
+    ON IT, same split :attr:`identity_field` and :attr:`parent_link_field` already state: it only
+    declares which prefixes a kind's instances own, not how a caller resolves a contested prefix
+    (PR #51's own fan-out rule — a contested prefix keeps every declarer — lives where the
+    resolving happens, not here)."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
@@ -313,7 +325,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("passes", "outputs")
+    @field_validator("passes", "outputs", "id_namespaces")
     @classmethod
     def _sequence_is_unique(cls, v: tuple[str, ...], info) -> tuple[str, ...]:
         seen = [x for i, x in enumerate(v) if x in v[:i]]
@@ -321,6 +333,18 @@ class ContentKindRegistration(BaseModel):
             raise ValueError(
                 f"ContentKindRegistration.{info.field_name} repeats {sorted(set(seen))}"
             )
+        return v
+
+    @field_validator("id_namespaces")
+    @classmethod
+    def _namespaces_are_bare_prefixes(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for prefix in v:
+            if len(prefix) < 2 or any(ch.isspace() for ch in prefix):
+                raise ValueError(
+                    f"ContentKindRegistration.id_namespaces entry {prefix!r} — PR #51's own rule: "
+                    f"each prefix is at least 2 characters with no whitespace, or it cannot start "
+                    f"a token of a lookup term"
+                )
         return v
 
     @model_validator(mode="after")
