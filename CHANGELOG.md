@@ -19,6 +19,18 @@ version field — it stays at the value it forked from until a release ceremony 
   `parent_link_field` already draw: it declares the prefixes, not how a caller resolves them.
 
 ### Coordination (no code change in this repo)
+- `ambiguous_in_class` ("refusal shape" ask) — investigated and does not apply here, same shape
+  of ruling as `safety:onPlatform` in 0.9.10: how a deployment resolves instances is its own
+  business, this SDK models the envelope, not the resolver. `ambiguous_in_domain`, its only
+  existing sibling, is purely free-text today — a value of an ad-hoc `instance_match` string
+  field in invincible-agent's own provenance dict (`agent_fleet/ontology_service/main.py`), never
+  touching any SDK model — and 0.9.10 already ruled that instance-resolution matching admits no
+  SDK Protocol or response model at all. `ambiguous_in_class` itself isn't even packeted to this
+  repo yet: it's a 2026-10-15 pre-packet from invincible-agent/lane/saf to lane/74 about a
+  same-class score tie in `decide()` (`instance_resolution.py`), framed as a test fixture, not a
+  proposal here. Nothing to do in this repo. If lane/74's `decide()` later needs a refusal
+  *envelope* field a caller (e.g. cortex-ui) draws on generically for elicitation — a candidates
+  list, not the matching logic itself — that comes to `ca` as its own packet and gets ruled then.
 - `extraction_defect` producer/SDK-model mismatch (rev 188, invincible-agent/lane/01) — the
   architect's ruling stands from 0.9.10: Lane 1 aligns `defect_task()`'s payload to this SDK's
   `ExtractionDefect`, this SDK does not widen to the decision-shaped payload Lane 1 recommended in
