@@ -9,6 +9,12 @@ version field — it stays at the value it forked from until a release ceremony 
 ## Unreleased — `lane/ca-0.9.11`
 
 ### Added
+- `EvidenceRef` (`iagent_mesh/provenance.py`) / `ExtractionDefect.evidence_ref` — a structured
+  sibling to `evidence`'s free-form strings: `page` (1-indexed) and `bbox` (`x0,y0,x1,y1`), for a
+  source that has pages and coordinates to cite and a caller (e.g. a PDF viewer) that can jump
+  straight to the region. `None` by default — `evidence` stays the required, always-present
+  citation; this is the optional, additional, machine-locatable one. Tests only this cycle; no
+  producer wires it yet.
 - `ContentKindRegistration.id_namespaces` — generalizes invincible-agent/lane/74's PR #51
   (`register_engine_to_mesh(..., id_namespaces=[...])`, architect-ruled 2026-10-12) to this SDK's
   one registration surface: the ID prefixes a kind's own instances carry (e.g. `("HAZ-", "CSI-")`),
@@ -19,6 +25,13 @@ version field — it stays at the value it forked from until a release ceremony 
   `parent_link_field` already draw: it declares the prefixes, not how a caller resolves them.
 
 ### Coordination (no code change in this repo)
+- `ingest_id`/`notice_id` on "the task payload type" — paused, not enough spec. No generic
+  task-payload envelope model exists in this SDK; `TaskKind` (`task_kinds.py`) is a
+  vocabulary/declaration row whose own docstring mandates "generic at birth... nothing may name
+  a domain," so the fields don't belong there. `ingest_id`/`notice_id` together exist only in
+  invincible-agent's own consumer code (`gateway.py`, `decision_record.py`); no packet in either
+  repo originates this ask or names what a new envelope model needs beyond these two fields.
+  Needs a packet before this repo designs a new model from nothing.
 - `ambiguous_in_class` ("refusal shape" ask) — investigated and does not apply here, same shape
   of ruling as `safety:onPlatform` in 0.9.10: how a deployment resolves instances is its own
   business, this SDK models the envelope, not the resolver. `ambiguous_in_domain`, its only

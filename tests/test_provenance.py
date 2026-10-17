@@ -22,6 +22,7 @@ from iagent_mesh.provenance import (
     STEWARD_CORRECTED,
     USER_DROP,
     WAREHOUSE,
+    EvidenceRef,
     ExtractionDefect,
     ProvenanceBlock,
     ProvenanceIncomplete,
@@ -200,6 +201,48 @@ def test_extraction_defect_is_frozen_and_forbids_extra_fields():
         d.corrected_value = "something-else"  # type: ignore[misc]
     with pytest.raises(ValidationError):
         ExtractionDefect(**_DEFECT_VALID, corrected_by="bob")  # type: ignore[call-arg]
+
+
+# ── EvidenceRef, ADDED 0.9.11 — the structured sibling to evidence ───────────────────────
+
+_REF_VALID = dict(page=3, bbox=(10.0, 20.0, 110.0, 70.0))
+
+
+def test_evidence_ref_builds_from_the_valid_fixture():
+    ref = EvidenceRef(**_REF_VALID)
+    assert ref.page == 3
+    assert ref.bbox == (10.0, 20.0, 110.0, 70.0)
+
+
+def test_evidence_ref_page_must_be_at_least_one():
+    with pytest.raises(ValidationError, match="page"):
+        EvidenceRef(**{**_REF_VALID, "page": 0})
+
+
+def test_evidence_ref_bbox_must_have_positive_area():
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 10.0, 70.0)})  # x1 == x0
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 5.0, 70.0)})  # x1 < x0
+
+
+def test_evidence_ref_is_frozen_and_forbids_extra_fields():
+    ref = EvidenceRef(**_REF_VALID)
+    with pytest.raises(ValidationError):
+        ref.page = 4  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        EvidenceRef(**_REF_VALID, note="x")  # type: ignore[call-arg]
+
+
+def test_extraction_defect_evidence_ref_defaults_to_none():
+    d = ExtractionDefect(**_DEFECT_VALID)
+    assert d.evidence_ref is None
+
+
+def test_extraction_defect_accepts_a_structured_evidence_ref_alongside_evidence():
+    d = ExtractionDefect(**{**_DEFECT_VALID, "evidence_ref": _REF_VALID})
+    assert d.evidence_ref == EvidenceRef(**_REF_VALID)
+    assert d.evidence == ("pin:pin-2026-10-10-001",)  # unchanged, still required
 
 
 def test_an_unknown_obtained_via_is_refused_on_both_entry_points():

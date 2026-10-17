@@ -277,6 +277,49 @@ class ProvenanceBlock(BaseModel):
         return block
 
 
+class EvidenceRef(BaseModel):
+    """ADDED 0.9.11. A structured, machine-locatable citation into the source document — which
+    page, and a bounding box on that page — for a caller that can jump straight to the region
+    (e.g. a PDF viewer rendering the citation inline) rather than parsing one of
+    :attr:`ExtractionDefect.evidence`'s free-form strings. A sibling, not a replacement:
+    ``evidence`` stays the required, always-present citation; ``evidence_ref`` is the optional,
+    structured one for a source that actually has pages and coordinates to cite.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    page: int
+    """1-indexed page number, matching how a PDF viewer or a human reader names a page — not
+    0-indexed, which would require every consumer to add 1 before rendering a citation."""
+    bbox: tuple[float, float, float, float]
+    """``(x0, y0, x1, y1)`` — the box's lower-left and upper-right corners, in the source
+    document's own coordinate space. This model does not define or constrain that coordinate
+    space (points, pixels, or a normalized unit square are all legitimate); it only requires the
+    box to be well-formed."""
+
+    @field_validator("page")
+    @classmethod
+    def _page_is_at_least_one(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                f"EvidenceRef.page={v} — pages are 1-indexed; a page before the first page is "
+                f"not a citation, it is a mistake"
+            )
+        return v
+
+    @field_validator("bbox")
+    @classmethod
+    def _bbox_is_well_formed(cls, v: tuple[float, float, float, float]
+                              ) -> tuple[float, float, float, float]:
+        x0, y0, x1, y1 = v
+        if not (x1 > x0 and y1 > y0):
+            raise ValueError(
+                f"EvidenceRef.bbox={v!r} — (x1, y1) must be strictly greater than (x0, y0), or "
+                f"the box has zero or negative area and cites nothing"
+            )
+        return v
+
+
 class ExtractionDefect(BaseModel):
     """The admin-queue record invincible-agent/lane/01's steward-correction ruling (2026-10-10)
     names beside ``obtained_via='steward-corrected'``: filed once per correction, independent of
@@ -321,6 +364,13 @@ class ExtractionDefect(BaseModel):
     anything machine-checkable. Same grammar, and the same non-empty requirement, as
     :attr:`iagent_mesh.systems_of_record.Origin.evidence` states for ``resolved_by='record'``: a
     correction with nothing cited is indistinguishable from a guess wearing a corrected label."""
+    evidence_ref: Optional[EvidenceRef] = None
+    """ADDED 0.9.11. The structured sibling to ``evidence`` above — a page/bbox citation, for a
+    source that has pages and coordinates to cite. ``None`` (the default) means this correction
+    cites nothing more locatable than ``evidence``'s own strings, true of every defect before
+    this field existed and of any source (a spreadsheet cell, a database row) with no page or
+    bounding box to name. This field does not relax ``evidence``'s own non-empty requirement —
+    the two are independent; a correction can carry a structured ref with or without one."""
 
     @field_validator("artifact_id", "pin_digest", "corrected_value")
     @classmethod
