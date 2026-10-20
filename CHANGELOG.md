@@ -49,6 +49,19 @@ version field — it stays at the value it forked from until a release ceremony 
   `ExtractionDefect`, this SDK does not widen to the decision-shaped payload Lane 1 recommended in
   their 2026-10-12 contract-fork packet. Recorded here because that packet explicitly asked for
   the widening and this cycle's instruction confirms the ruling held, not because anything changed.
+- `header_edits` and `leaf`/`leaf_source` ("the review types" ask, 2026-10-20) — ruled out, same
+  shape as `ambiguous_in_class` above: `HumanTaskActRequest`, `header_edits`' decision-gating
+  (`promoted`-only, one entry per field) and `leaf`/`leaf_source`'s `_review_leaf` heuristic are
+  invincible-agent's own review-task HTTP API (`gateway.py`), not mesh substrate vocabulary — this
+  SDK models the envelope, not the resolver, the same line 0.9.10/0.9.11 already drew for
+  instance-resolution matching. `HeaderEdit.field` (`mfr`/`notice_id`/`notice_date`) and `leaf`
+  (`pcn`/`pdn`) are concrete domain vocabulary besides: generalizing them into this SDK would mean
+  inventing a "review types" family from nothing to host values the SDK's own `generic at birth`
+  discipline refuses to carry. The provenance is also weaker than every prior drop this cycle: the
+  source, invincible-agent's `lane/01-197`, is not yet on that repo's `master`. The SDK's own
+  responsibility in this area already ends at `ExtractionDefect`/`EvidenceRef` (this cycle's first
+  drop) — each `header_edits`/`row_edits` correction files one of those, independent of the wire
+  shape that carries it to the server. Nothing to do in this repo.
 
 ## 0.9.10 — 2026-10-12
 
