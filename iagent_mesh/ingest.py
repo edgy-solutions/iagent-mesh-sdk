@@ -304,6 +304,38 @@ class ContentKindRegistration(BaseModel):
     (PR #51's own fan-out rule — a contested prefix keeps every declarer — lives where the
     resolving happens, not here)."""
 
+    arrives_as: tuple[str, ...] = ()
+    """ADDED 0.9.11, architect ruling 2026-10-21 (the "leaf rule"). The arrival formats this
+    kind's instances can come in AS — e.g. ``("pdf",)`` for a kind extracted from a dropped PDF,
+    ``("xml",)`` for one extracted from an XML drop (``s1000d``'s own format), or ``("event",)``
+    for a ``branch="event"`` kind's own arrival channel. A kind may name more than one, e.g. a
+    kind extractable from either a PDF or an XML drop. ``()`` (the default) means this kind
+    declares no drop format — every kind before this field existed, and an event kind whose
+    instances never arrive from a drop at all (e.g. ``maintenance-fault-event``, which seeds a
+    workflow from its own channel, not a file picker).
+
+    **AN OPEN VOCABULARY, NOT A CLOSED ENUM** — same reason :attr:`kind` itself is a bare
+    ``str``: a new arrival format (``"cad"``, a scanner's own export format, ...) is a fact about
+    a kind this module has no business refusing to hold. ``_arrival_formats_are_bare_tokens``
+    checks only that an entry is non-blank with no whitespace, not that it is drawn from the
+    ruling's own three examples.
+
+    **OPTIONAL FOR EVERY BRANCH AND EVERY `domain`, NO EXCEPTIONS** — same ruling
+    :attr:`domain` itself drew (0.9.7, architect-corrected): an earlier draft that REQUIRED a
+    field on every domain-declaring kind is the exact hazard that correction identified. A
+    ``branch="event"`` row is free to declare ``("event",)``, more, or nothing — this module
+    does not infer or enforce what an event kind's own arrival channel is called from its
+    branch, the same split it already draws for :attr:`id_namespaces` on an event row.
+
+    **THIS MODULE DOES NOT OFFER LEAVES.** The ruling: "the leaves offered for a drop are the
+    domain-declaring kinds [i.e. :attr:`domain` is set] whose ``arrives_as`` includes the drop's
+    format" — e.g. for a PDF drop, every kind with ``domain`` set and ``"pdf"`` in
+    ``arrives_as`` (``pcn``, ``pdn``, and ``work-instruction`` all qualify; ``s1000d`` does not,
+    it only arrives as ``xml``). That selection is doc-tools'/invincible-agent's own code to
+    write against these two fields — this module only declares which formats a kind can arrive
+    as, same split :attr:`domain`, :attr:`identity_field`, and :attr:`id_namespaces` already draw
+    between declaring a fact about a kind and resolving or arbitrating on it."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
@@ -325,7 +357,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("passes", "outputs", "id_namespaces")
+    @field_validator("passes", "outputs", "id_namespaces", "arrives_as")
     @classmethod
     def _sequence_is_unique(cls, v: tuple[str, ...], info) -> tuple[str, ...]:
         seen = [x for i, x in enumerate(v) if x in v[:i]]
@@ -344,6 +376,18 @@ class ContentKindRegistration(BaseModel):
                     f"ContentKindRegistration.id_namespaces entry {prefix!r} — PR #51's own rule: "
                     f"each prefix is at least 2 characters with no whitespace, or it cannot start "
                     f"a token of a lookup term"
+                )
+        return v
+
+    @field_validator("arrives_as")
+    @classmethod
+    def _arrival_formats_are_bare_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for fmt in v:
+            if not fmt.strip() or any(ch.isspace() for ch in fmt):
+                raise ValueError(
+                    f"ContentKindRegistration.arrives_as entry {fmt!r} — a format token is "
+                    f"non-blank with no whitespace, or it cannot be compared against a drop's "
+                    f"own format"
                 )
         return v
 

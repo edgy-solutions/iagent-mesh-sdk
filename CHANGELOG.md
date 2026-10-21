@@ -48,10 +48,31 @@ version field — it stays at the value it forked from until a release ceremony 
   every kind before this field existed, and any kind whose identifiers carry no stable prefix.
   This module does not match or arbitrate on a contested prefix, same split `identity_field` and
   `parent_link_field` already draw: it declares the prefixes, not how a caller resolves them.
+- `ContentKindRegistration.arrives_as` — architect's "leaf rule" ruling, 2026-10-21 (refines the
+  Coordination note below): the arrival formats a kind's instances can come in as, e.g.
+  `("pdf",)`, `("xml",)`, `("event",)`, a kind may name more than one. Defaults to `()` — every
+  kind before this field existed, and an event kind that never arrives from a drop at all (e.g.
+  `maintenance-fault-event`). Validated the same shape as `id_namespaces`/`passes`/`outputs`:
+  each entry non-blank with no whitespace, no repeats. Combined with `domain`, this is the full
+  leaf rule: "the leaves offered for a drop are the domain-declaring kinds whose `arrives_as`
+  includes the drop's format" (e.g. a PDF drop offers every kind with `domain` set and `"pdf"`
+  in `arrives_as` — `pcn`, `pdn`, `work-instruction`; not `s1000d`, which only arrives as `xml`).
+  This module does not offer leaves or select from the registry — same split every field above
+  already draws — ca adds the field, 7f fills in `KIND_MAPPING`'s rows with it, after the dry
+  run (`pcn|pdn` stands as the literal list through Thursday's freeze).
+  - **2026-10-21, invincible-agent/lane/01 asked three questions about this field; answered in a
+    reply packet, no code change beyond what already shipped above**: (1) is `"cad"` allowed
+    beside the ruling's three examples — yes, this is an open vocabulary, not a closed enum, same
+    as `kind` itself; the validator only checks non-blank/no-whitespace. (2) should it be required
+    for a domain-declaring kind — no, optional for every kind regardless of `domain`, same ruling
+    `domain` itself drew in 0.9.7 ("an earlier draft... required it on every kind, which is
+    exactly the hazard... identified"). (3) must a `branch="event"` row say exactly `("event",)` —
+    no, this module infers nothing from `branch`, same split already drawn for `id_namespaces` on
+    an event row.
 
 ### Coordination (no code change in this repo)
-- **2026-10-21, "leaf types ... registry-driven, never a literal list"** (architect directive,
-  item 2, same packet as the `bbox`-Optional ruling above) — invincible-agent's `_review_leaf`
+- **2026-10-21, "leaf types ... registry-driven, never a literal list"** (first of two architect
+  directives on this; the second, above, adds `arrives_as`) — invincible-agent's `_review_leaf`
   hand-maintains `_LEAVES = ("pcn", "pdn")`; the ruling asks it to read the allowed leaves from
   the content-kind registry's "domain-declaring kinds" instead, after the dry run (`pcn|pdn`
   stands as-is through Thursday's freeze). This SDK already ships the surface that makes that

@@ -392,6 +392,55 @@ def test_event_branch_may_declare_id_namespaces():
     assert row.id_namespaces == ("EVT-",)
 
 
+# ── ContentKindRegistration.arrives_as, ADDED 0.9.11 (architect's "leaf rule", 2026-10-21) ──
+
+def test_arrives_as_defaults_to_empty_a_kind_declares_no_drop_format():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.arrives_as == ()
+
+
+def test_a_kind_declares_its_arrival_formats():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "arrives_as": ("pdf", "xml")})
+    assert row.arrives_as == ("pdf", "xml")
+
+
+def test_arrives_as_entry_with_whitespace_is_refused():
+    with pytest.raises(ValidationError, match="arrives_as"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "arrives_as": ("pd f",)})
+
+
+def test_arrives_as_blank_entry_is_refused():
+    with pytest.raises(ValidationError, match="arrives_as"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "arrives_as": ("",)})
+
+
+def test_arrives_as_repeat_is_refused_same_as_passes_and_outputs():
+    with pytest.raises(ValidationError, match="arrives_as"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "arrives_as": ("pdf", "pdf")})
+
+
+def test_event_branch_may_declare_arrives_as():
+    """An event kind whose instances DO arrive from a drop (unlike maintenance-fault-event,
+    which never does) still only declares a property of itself — nothing forbids it here, same
+    split id_namespaces already draws for an event-branch row."""
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "arrives_as": ("event",)})
+    assert row.arrives_as == ("event",)
+
+
+def test_event_branch_is_not_forced_to_declare_arrives_as_exactly_event():
+    """arrives_as is a fact about input format, not a consequence of branch — an event row may
+    declare nothing, same as any other optional field this module does not infer from branch."""
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.arrives_as == ()
+
+
+def test_arrives_as_is_an_open_vocabulary_not_a_closed_enum():
+    """The ruling names pdf/xml/event as examples, not an exhaustive set — invincible-agent's
+    lane/01 asked whether e.g. "cad" is allowed; this module never restricted the entry set."""
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "arrives_as": ("cad",)})
+    assert row.arrives_as == ("cad",)
+
+
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
 
 def test_a_valid_rev_1_builds_with_no_supersedes():
