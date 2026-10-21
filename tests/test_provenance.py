@@ -263,6 +263,19 @@ def test_evidence_ref_note_must_not_be_blank_when_given():
         EvidenceRef(**_REF_VALID, note="   ")
 
 
+def test_evidence_ref_bbox_may_be_null():
+    # the architect's second 2026-10-21 ruling: null bbox means "stated on this page, no box
+    # we can draw" — page stays required, bbox alone may be omitted.
+    ref = EvidenceRef(page=3, bbox=None)
+    assert ref.page == 3
+    assert ref.bbox is None
+
+
+def test_evidence_ref_page_is_still_required_when_bbox_is_null():
+    with pytest.raises(ValidationError, match="page"):
+        EvidenceRef(bbox=None)  # type: ignore[call-arg]
+
+
 def test_extraction_defect_evidence_ref_defaults_to_none():
     d = ExtractionDefect(**_DEFECT_VALID)
     assert d.evidence_ref is None

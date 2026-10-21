@@ -295,11 +295,16 @@ class EvidenceRef(BaseModel):
 
     **``note``, RULED 2026-10-21** (architect, same dry-run decision, item 4): this SDK's shape
     won over the BFF's own free-string ``evidence_ref`` on row/header edits — the BFF's string
-    becomes ``note`` on this model rather than this model loosening ``page``/``bbox`` into an
-    optional pair. A steward working from a table cell who has no bbox to give still cites
-    *something* through ``note``; ``page``/``bbox`` stay required for the machine-locatable case
-    this model exists for. The BFF (invincible-agent/lane/01-202) runs its own mirror of this
-    shape until it imports this SDK at a version that carries this field.
+    becomes ``note`` on this model. The BFF (invincible-agent/lane/01-202) runs its own mirror of
+    this shape until it imports this SDK at a version that carries this field.
+
+    **``bbox`` is Optional, RULED 2026-10-21 (second ruling, same day)**: ``page`` may not be
+    null — ``bbox`` may. A null ``bbox`` means "stated on this page, no box we can draw": a
+    citation the source only places on a page, not at a drawable region of it. A card rendering
+    this jumps to the page with no outline and labels it "on page N, no box", rather than
+    fabricating a box or refusing the citation outright. A derived field carries no
+    ``evidence_ref`` at all (ruled separately) — a null ``bbox`` is for a citation that IS
+    page-located but has no finer locus, not for the absence of a citation.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -307,12 +312,13 @@ class EvidenceRef(BaseModel):
     page: int
     """1-indexed page number, matching how a PDF viewer or a human reader names a page — not
     0-indexed, which would require every consumer to add 1 before rendering a citation."""
-    bbox: tuple[float, float, float, float]
+    bbox: Optional[tuple[float, float, float, float]] = None
     """``(x0, y0, x1, y1)``, each a fraction of the page in ``0..1``, origin TOP-LEFT: ``(x0, y0)``
     is the box's upper-left corner, ``(x1, y1)`` its lower-right corner — ``y`` increases
     DOWNWARD the page, not the bottom-left/upward convention a PDF's own content stream uses.
     Unit-free: a fraction of the page means the same thing regardless of the source's native DPI,
-    point size, or pixel grid, which is why no ``units`` field exists on this model at all."""
+    point size, or pixel grid, which is why no ``units`` field exists on this model at all.
+    ``None`` means the citation is page-located but has no drawable region — not "no citation"."""
     note: Optional[str] = None
     """ADDED 2026-10-21. Free-form text alongside the structured ``page``/``bbox`` citation — the
     BFF's own free-string ``evidence_ref`` (e.g. ``"page 1 column header 'Customer Part
@@ -342,8 +348,10 @@ class EvidenceRef(BaseModel):
 
     @field_validator("bbox")
     @classmethod
-    def _bbox_is_well_formed(cls, v: tuple[float, float, float, float]
-                              ) -> tuple[float, float, float, float]:
+    def _bbox_is_well_formed(cls, v: Optional[tuple[float, float, float, float]]
+                              ) -> Optional[tuple[float, float, float, float]]:
+        if v is None:
+            return v
         x0, y0, x1, y1 = v
         if not all(0.0 <= c <= 1.0 for c in v):
             raise ValueError(

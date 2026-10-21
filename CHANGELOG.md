@@ -29,10 +29,17 @@ version field — it stays at the value it forked from until a release ceremony 
     item 4 of the same dry-run decision. invincible-agent/lane/01 found `evidence_ref` carrying
     two shapes under one name: a required free string on its BFF (row/header edits, e.g. `"page 1
     column header 'Customer Part Number'"`) vs. this SDK's `{page, bbox}` struct. The architect
-    ruled this SDK's shape wins; the BFF's string becomes `note` here rather than `page`/`bbox`
-    loosening into an optional pair. The BFF (lane/01-202) runs its own mirror of this shape,
-    accepting both the struct and the legacy string, until it imports this SDK at a version
-    carrying `note`.
+    ruled this SDK's shape wins; the BFF's string becomes `note` here. The BFF (lane/01-202) runs
+    its own mirror of this shape, accepting both the struct and the legacy string, until it
+    imports this SDK at a version carrying `note`.
+  - **2026-10-21, `bbox` is now `Optional[tuple[float, float, float, float]] = None`** (a second,
+    later ruling the same day, superseding the line above that had `page`/`bbox` both staying
+    required) — `page` may not be null, `bbox` may: a null `bbox` means "stated on this page, no
+    box we can draw," for a citation the source only places on a page, not at a drawable region
+    of it. A card rendering this jumps to the page with no outline and labels it "on page N, no
+    box," rather than fabricating a box or refusing the citation. A derived field still carries no
+    `evidence_ref` at all (ruled separately, unaffected) — null `bbox` is for a citation that IS
+    page-located but has no finer locus, not for the absence of a citation.
 - `ContentKindRegistration.id_namespaces` — generalizes invincible-agent/lane/74's PR #51
   (`register_engine_to_mesh(..., id_namespaces=[...])`, architect-ruled 2026-10-12) to this SDK's
   one registration surface: the ID prefixes a kind's own instances carry (e.g. `("HAZ-", "CSI-")`),
@@ -43,6 +50,17 @@ version field — it stays at the value it forked from until a release ceremony 
   `parent_link_field` already draw: it declares the prefixes, not how a caller resolves them.
 
 ### Coordination (no code change in this repo)
+- **2026-10-21, "leaf types ... registry-driven, never a literal list"** (architect directive,
+  item 2, same packet as the `bbox`-Optional ruling above) — invincible-agent's `_review_leaf`
+  hand-maintains `_LEAVES = ("pcn", "pdn")`; the ruling asks it to read the allowed leaves from
+  the content-kind registry's "domain-declaring kinds" instead, after the dry run (`pcn|pdn`
+  stands as-is through Thursday's freeze). This SDK already ships the surface that makes that
+  possible: `ContentKindRegistration.domain` (0.9.7) is exactly "the kind's HOME audience" —
+  filtering registry rows on `domain is not None` IS "domain-declaring kinds, read from the
+  registry." No new field, no change here: this module ships no rows to filter (`docs/outbound`
+  disclaimer on `ContentKindRegistration`: "THIS SDK DOES NOT SHIP ANY ROWS... lives in
+  doc-tools, not here") — the registry-driven read is doc-tools'/invincible-agent's own code to
+  write, against a field this SDK already has.
 - `ingest_id`/`notice_id` on "the task payload type" — paused, not enough spec. No generic
   task-payload envelope model exists in this SDK; `TaskKind` (`task_kinds.py`) is a
   vocabulary/declaration row whose own docstring mandates "generic at birth... nothing may name
