@@ -15,6 +15,24 @@ version field — it stays at the value it forked from until a release ceremony 
   straight to the region. `None` by default — `evidence` stays the required, always-present
   citation; this is the optional, additional, machine-locatable one. Tests only this cycle; no
   producer wires it yet.
+  - **2026-10-21, `bbox`'s coordinate convention is now RULED, not open**: architect directive to
+    doc-tools/7f, cortex-ui/master and this SDK together — `bbox` is a page fraction, `0..1`,
+    origin TOP-LEFT (`(x0,y0)` upper-left, `(x1,y1)` lower-right, `y` increasing downward),
+    unit-free by construction, the same everywhere `evidence_ref` appears, so no sibling `units`
+    key ever rides beside it. `_bbox_is_well_formed` now rejects any coordinate outside `0..1` —
+    a producer measuring in layout pixels or word-layer points (e.g. `gateway.py`'s own
+    `_evidence_ref` dict, which carries `"units": "pt"|"px"` today) converts to this page-fraction
+    space before constructing one. This replaces the original docstring's "points, pixels, or a
+    normalized unit square are all legitimate" — that was never shipped to a producer, so nothing
+    outside this SDK's own tests observed the prior, unconstrained shape.
+  - **2026-10-21, `EvidenceRef.note`** (`Optional[str] = None`, must be non-blank when given) —
+    item 4 of the same dry-run decision. invincible-agent/lane/01 found `evidence_ref` carrying
+    two shapes under one name: a required free string on its BFF (row/header edits, e.g. `"page 1
+    column header 'Customer Part Number'"`) vs. this SDK's `{page, bbox}` struct. The architect
+    ruled this SDK's shape wins; the BFF's string becomes `note` here rather than `page`/`bbox`
+    loosening into an optional pair. The BFF (lane/01-202) runs its own mirror of this shape,
+    accepting both the struct and the legacy string, until it imports this SDK at a version
+    carrying `note`.
 - `ContentKindRegistration.id_namespaces` — generalizes invincible-agent/lane/74's PR #51
   (`register_engine_to_mesh(..., id_namespaces=[...])`, architect-ruled 2026-10-12) to this SDK's
   one registration surface: the ID prefixes a kind's own instances carry (e.g. `("HAZ-", "CSI-")`),

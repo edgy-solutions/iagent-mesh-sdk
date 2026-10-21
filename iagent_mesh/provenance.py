@@ -284,6 +284,22 @@ class EvidenceRef(BaseModel):
     :attr:`ExtractionDefect.evidence`'s free-form strings. A sibling, not a replacement:
     ``evidence`` stays the required, always-present citation; ``evidence_ref`` is the optional,
     structured one for a source that actually has pages and coordinates to cite.
+
+    **Coordinate convention, RULED 2026-10-21** (architect directive to doc-tools/7f,
+    cortex-ui/master, this SDK): ``bbox`` is page-fraction, ``0..1``, origin TOP-LEFT — unit-free
+    by construction, the same everywhere ``evidence_ref`` appears, so no sibling ``units`` key
+    ever rides beside it. A producer that measures in layout pixels or word-layer points (e.g.
+    ``gateway.py``'s own ``_evidence_ref`` dict today, which carries ``"units": "pt"|"px"``)
+    converts to this page-fraction space BEFORE constructing one of these — this model refuses to
+    carry the unconverted value or a unit tag for it.
+
+    **``note``, RULED 2026-10-21** (architect, same dry-run decision, item 4): this SDK's shape
+    won over the BFF's own free-string ``evidence_ref`` on row/header edits — the BFF's string
+    becomes ``note`` on this model rather than this model loosening ``page``/``bbox`` into an
+    optional pair. A steward working from a table cell who has no bbox to give still cites
+    *something* through ``note``; ``page``/``bbox`` stay required for the machine-locatable case
+    this model exists for. The BFF (invincible-agent/lane/01-202) runs its own mirror of this
+    shape until it imports this SDK at a version that carries this field.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -292,10 +308,17 @@ class EvidenceRef(BaseModel):
     """1-indexed page number, matching how a PDF viewer or a human reader names a page — not
     0-indexed, which would require every consumer to add 1 before rendering a citation."""
     bbox: tuple[float, float, float, float]
-    """``(x0, y0, x1, y1)`` — the box's lower-left and upper-right corners, in the source
-    document's own coordinate space. This model does not define or constrain that coordinate
-    space (points, pixels, or a normalized unit square are all legitimate); it only requires the
-    box to be well-formed."""
+    """``(x0, y0, x1, y1)``, each a fraction of the page in ``0..1``, origin TOP-LEFT: ``(x0, y0)``
+    is the box's upper-left corner, ``(x1, y1)`` its lower-right corner — ``y`` increases
+    DOWNWARD the page, not the bottom-left/upward convention a PDF's own content stream uses.
+    Unit-free: a fraction of the page means the same thing regardless of the source's native DPI,
+    point size, or pixel grid, which is why no ``units`` field exists on this model at all."""
+    note: Optional[str] = None
+    """ADDED 2026-10-21. Free-form text alongside the structured ``page``/``bbox`` citation — the
+    BFF's own free-string ``evidence_ref`` (e.g. ``"page 1 column header 'Customer Part
+    Number'"``) lands here, not as a second, looser shape for this model. ``None`` by default;
+    when given, must be non-blank — a blank ``note`` is indistinguishable from omitting it, so
+    this model refuses the ambiguity rather than silently accepting it."""
 
     @field_validator("page")
     @classmethod
@@ -307,11 +330,27 @@ class EvidenceRef(BaseModel):
             )
         return v
 
+    @field_validator("note")
+    @classmethod
+    def _note_is_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                "EvidenceRef.note='   ' — set it to the cited text, or leave it unset; a blank "
+                "value is neither"
+            )
+        return v
+
     @field_validator("bbox")
     @classmethod
     def _bbox_is_well_formed(cls, v: tuple[float, float, float, float]
                               ) -> tuple[float, float, float, float]:
         x0, y0, x1, y1 = v
+        if not all(0.0 <= c <= 1.0 for c in v):
+            raise ValueError(
+                f"EvidenceRef.bbox={v!r} — every coordinate is a page fraction in 0..1 (the "
+                f"2026-10-21 ruling); a value outside that range is unconverted pixel/point "
+                f"geometry, not a citation this model accepts"
+            )
         if not (x1 > x0 and y1 > y0):
             raise ValueError(
                 f"EvidenceRef.bbox={v!r} — (x1, y1) must be strictly greater than (x0, y0), or "

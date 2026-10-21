@@ -204,14 +204,16 @@ def test_extraction_defect_is_frozen_and_forbids_extra_fields():
 
 
 # ── EvidenceRef, ADDED 0.9.11 — the structured sibling to evidence ───────────────────────
+# bbox is a page fraction, 0..1, origin top-left (architect ruling 2026-10-21) — the fixture's
+# coordinates are fractions of the page, never layout pixels or points.
 
-_REF_VALID = dict(page=3, bbox=(10.0, 20.0, 110.0, 70.0))
+_REF_VALID = dict(page=3, bbox=(0.1, 0.2, 0.6, 0.7))
 
 
 def test_evidence_ref_builds_from_the_valid_fixture():
     ref = EvidenceRef(**_REF_VALID)
     assert ref.page == 3
-    assert ref.bbox == (10.0, 20.0, 110.0, 70.0)
+    assert ref.bbox == (0.1, 0.2, 0.6, 0.7)
 
 
 def test_evidence_ref_page_must_be_at_least_one():
@@ -221,9 +223,19 @@ def test_evidence_ref_page_must_be_at_least_one():
 
 def test_evidence_ref_bbox_must_have_positive_area():
     with pytest.raises(ValidationError, match="bbox"):
-        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 10.0, 70.0)})  # x1 == x0
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 0.1, 0.7)})  # x1 == x0
     with pytest.raises(ValidationError, match="bbox"):
-        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 5.0, 70.0)})  # x1 < x0
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 0.05, 0.7)})  # x1 < x0
+
+
+def test_evidence_ref_bbox_must_be_a_page_fraction():
+    # the 2026-10-21 ruling: 0..1 only — anything outside is unconverted pixel/point geometry.
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (-0.1, 0.2, 0.6, 0.7)})  # x0 < 0
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 1.6, 0.7)})  # x1 > 1
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 110.0, 70.0)})  # layout pixels, unconverted
 
 
 def test_evidence_ref_is_frozen_and_forbids_extra_fields():
@@ -231,7 +243,24 @@ def test_evidence_ref_is_frozen_and_forbids_extra_fields():
     with pytest.raises(ValidationError):
         ref.page = 4  # type: ignore[misc]
     with pytest.raises(ValidationError):
-        EvidenceRef(**_REF_VALID, note="x")  # type: ignore[call-arg]
+        EvidenceRef(**_REF_VALID, bogus="x")  # type: ignore[call-arg]
+
+
+def test_evidence_ref_note_defaults_to_none():
+    ref = EvidenceRef(**_REF_VALID)
+    assert ref.note is None
+
+
+def test_evidence_ref_accepts_the_bff_s_free_string_as_note():
+    # the architect's 2026-10-21 ruling: the SDK's {page, bbox} shape wins; the BFF's own free
+    # string lands here as `note`, not as a second, looser shape for this model.
+    ref = EvidenceRef(**_REF_VALID, note="page 1 column header 'Customer Part Number'")
+    assert ref.note == "page 1 column header 'Customer Part Number'"
+
+
+def test_evidence_ref_note_must_not_be_blank_when_given():
+    with pytest.raises(ValidationError, match="note"):
+        EvidenceRef(**_REF_VALID, note="   ")
 
 
 def test_extraction_defect_evidence_ref_defaults_to_none():
