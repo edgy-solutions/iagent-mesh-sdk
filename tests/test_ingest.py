@@ -441,6 +441,66 @@ def test_arrives_as_is_an_open_vocabulary_not_a_closed_enum():
     assert row.arrives_as == ("cad",)
 
 
+# ── ContentKindRegistration.review_shape, ADDED 0.9.11 (architect's Q1 ruling, 2026-10-21) ──
+
+def test_review_shape_defaults_to_none_a_kind_declares_no_review_card():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.review_shape is None
+
+
+def test_a_kind_declares_notice_review_shape():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "review_shape": "notice"})
+    assert row.review_shape == "notice"
+
+
+def test_a_kind_declares_document_review_shape():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "review_shape": "document"})
+    assert row.review_shape == "document"
+
+
+def test_review_shape_rejects_a_value_outside_the_closed_set():
+    with pytest.raises(ValidationError, match="review_shape"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "review_shape": "ledger"})
+
+
+def test_event_branch_may_declare_review_shape():
+    """Lane 1 asked whether a branch="event" row must leave review_shape unset, since an event
+    kind never reaches a promotion review. Ruled the same as domain/arrives_as: optional for
+    every branch, not forbidden for one — the field goes unused for an event row, not refused."""
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "review_shape": "notice"})
+    assert row.review_shape == "notice"
+
+
+def test_event_branch_is_not_forced_to_declare_review_shape():
+    row = ContentKindRegistration(**VALID_EVENT_REGISTRATION)
+    assert row.review_shape is None
+
+
+# ── ContentKindRegistration.label, ADDED 0.9.11 (architect ruling, closes cortex/7f's gap) ──
+
+def test_label_defaults_to_none_a_kind_declares_no_display_name():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.label is None
+
+
+def test_a_kind_declares_its_display_label():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "label": "Work Instruction"})
+    assert row.label == "Work Instruction"
+
+
+def test_label_blank_is_refused_same_as_domain_and_seeds_workflow():
+    with pytest.raises(ValidationError, match="label"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "label": ""})
+
+
+def test_label_may_contain_spaces_unlike_arrives_as_entries():
+    """label is a display string, not a token compared against a drop's own format — it is
+    validated for non-blank only, the same shape domain/seeds_workflow/identity_field already
+    take, not arrives_as's no-whitespace rule."""
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "label": "Product Change Notice"})
+    assert row.label == "Product Change Notice"
+
+
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
 
 def test_a_valid_rev_1_builds_with_no_supersedes():

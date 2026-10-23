@@ -69,6 +69,29 @@ version field — it stays at the value it forked from until a release ceremony 
     exactly the hazard... identified"). (3) must a `branch="event"` row say exactly `("event",)` —
     no, this module infers nothing from `branch`, same split already drawn for `id_namespaces` on
     an event row.
+  - **2026-10-22, architect confirmed directly, no divergence**: "`arrives_as`: tuple, empty by
+    default (empty = offered for no format), and `cad` is a legal value" — matches what shipped
+    above exactly. Also: "'Open vocabulary' is fine for now; if a typo'd format ever reaches the
+    registry, we close it to an enum then" — a deliberate, acknowledged-provisional choice; the
+    trigger for tightening it is a typo reaching the registry, not a design preference.
+- `ContentKindRegistration.review_shape` — architect's "Q1" ruling, 2026-10-21, same leaf-rule
+  cycle as `arrives_as`: `Literal["notice", "document"] | None`, naming which review card a
+  promotion task opens for this kind's instances (`notice` for pcn/pdn's existing card,
+  `document` for work-instruction and later kinds; the `document` reader itself is not yet
+  built). `None` by default — every kind before this field existed, and any kind that never
+  reaches a promotion task. invincible-agent/lane/01 left open whether a `branch="event"` row
+  must leave it unset ("your call") — ruled optional for every branch, no exceptions, same
+  precedent `domain` and `arrives_as` already drew: an unused declaration on an event row, not a
+  forbidden one.
+- `ContentKindRegistration.label` — architect ruling, 2026-10-21/22, closing a gap cortex-ui and
+  doc-tools/7f both hit building against `arrives_as`: the registry had no human-readable name to
+  serve alongside an offered leaf, so a reader fell back to upper-casing `kind` (correct for
+  `PCN`, wrong for `work-instruction` → `WORK-INSTRUCTION`). `label: str | None = None` — this
+  kind's own display name (e.g. `"Work Instruction"`). `None` by default; a caller with nothing
+  to show falls back to `kind` itself, same as today. Optional for every kind, no exceptions, same
+  "ruled optional, not required" precedent as `domain`/`arrives_as`/`review_shape` above — a
+  display convenience, not a gate. This module does not render anything; it only declares the
+  string.
 
 ### Coordination (no code change in this repo)
 - **2026-10-21, "leaf types ... registry-driven, never a literal list"** (first of two architect

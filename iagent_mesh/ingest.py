@@ -336,6 +336,46 @@ class ContentKindRegistration(BaseModel):
     as, same split :attr:`domain`, :attr:`identity_field`, and :attr:`id_namespaces` already draw
     between declaring a fact about a kind and resolving or arbitrating on it."""
 
+    review_shape: Optional[Literal["notice", "document"]] = None
+    """ADDED 0.9.11, architect ruling 2026-10-21 ("Q1"): "Each kind declares review_shape in the
+    registry: ``notice`` (pcn, pdn: today's card) or ``document`` (work-instruction, and later
+    others)." The value picks which review card a promotion task opens for this kind's
+    instances — a notice's header fields and parts table, or a document's own (as yet unbuilt)
+    reader — and which reject codes the act accepts. ``None`` (the default) means this kind
+    declares no review card: every kind before this field existed, and any kind that never
+    reaches a promotion task.
+
+    **OPTIONAL FOR EVERY BRANCH, NO EXCEPTIONS** — invincible-agent/lane/01 asked whether a
+    ``branch="event"`` row must leave it ``None``, since an event kind never gets a promotion
+    review: "your call." Ruled the same as :attr:`domain` and :attr:`arrives_as` before it —
+    optional for every kind regardless of branch, not forbidden for one. An event kind that sets
+    it declares a fact that happens to go unused (same as an event kind free to set `domain`
+    though it is never promoted); a branch-specific prohibition here would be the first exception
+    to a pattern this module has now drawn three times running, for a case nobody asked to carry
+    a different answer.
+
+    **THIS MODULE DOES NOT PICK THE CARD, SAME SPLIT EVERY FIELD ABOVE DRAWS.** The BFF reads
+    this value to choose which reader renders; this field only names the choice."""
+
+    label: Optional[str] = None
+    """ADDED 0.9.11, architect ruling 2026-10-21, closing a gap cortex-ui and doc-tools/7f both
+    hit: the registry had no human-readable name to serve alongside an offered leaf, so a reader
+    was reduced to upper-casing :attr:`kind` (giving ``PCN``, but ``WORK-INSTRUCTION`` for
+    ``work-instruction``). ``label`` is this kind's own display name, e.g. ``"PCN"`` or
+    ``"Work Instruction"`` — shown wherever a kind is offered as a choice (a leaf picker, a
+    candidate, a review card's heading). ``None`` (the default) means this kind declares no
+    display name — every kind before this field existed; a caller that still needs something to
+    show falls back to :attr:`kind` itself, the same way it always has.
+
+    **OPTIONAL FOR EVERY KIND, NO EXCEPTIONS** — same "ruled optional, not required" precedent
+    :attr:`domain` drew in 0.9.7 and :attr:`arrives_as`/:attr:`review_shape` repeat above: this
+    is a display convenience, not a gate, and nothing should refuse to register a kind for
+    lacking a pretty name.
+
+    **THIS MODULE DOES NOT RENDER ANYTHING.** It declares the string; a leaf picker, a status
+    chip, or a review card's own template decides where and how it is shown — same split
+    every field above draws between declaring a fact about a kind and consuming it."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
@@ -347,7 +387,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("seeds_workflow", "identity_field", "domain", "parent_link_field")
+    @field_validator("seeds_workflow", "identity_field", "domain", "parent_link_field", "label")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
