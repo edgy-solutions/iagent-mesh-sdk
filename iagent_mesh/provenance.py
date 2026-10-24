@@ -70,6 +70,20 @@ still owes itself the same re-check this docstring keeps repeating.
 correction to the extraction pipeline's own admin queue, independent of what rides in the graph
 row's ``ProvenanceBlock`` — the audit trail back to the pipeline, not a second copy of the stamp.
 
+── `steward-entered`, THE SEVENTH AND LAST RUNG, RULED BY THE ARCHITECT ON 208's EMPTY-NOTICE
+TASK, 2026-10-23 ──────────────────────────────────────────────────────────────────────────────
+A steward hand-entering a part that no extraction ever produced — not correcting a reading, there
+is no reading to correct. ``steward-corrected`` still has an extraction underneath it;
+``steward-entered`` has only the steward and the page they named. That is the farthest hop this
+vocabulary names, which is why the ruling places it after ``steward-corrected`` and calls it the
+last rung: every degradation path this module distinguishes is now named, and the graph tells a
+corrected row from an entered row only by ``obtained_via`` — which is the point, not a gap to
+close later.
+
+A seventh value is, once more, a change to the closed ordered tuple ADR-0041's Consequences
+section already warned would need re-checking — see invincible-agent/lane/01's 2026-10-23 packet
+for this repo's own consumers that reason over :data:`OBTAINED_VIA` by position or count.
+
 ── `ingest_id`, ADDED 2026-09-30 ON THE v0.9.5 CUT ORDER ───────────────────────────────────────
 The promotion store (ia-74/lane/74's `IngestGraph`/`IngestIndexes`) keys its cleanup on this one
 field: a promotion or rejection deletes "everything whose block carries the id" by scoping
@@ -94,6 +108,7 @@ __all__ = [
     "MANUAL_EXPORT",
     "USER_DROP",
     "STEWARD_CORRECTED",
+    "STEWARD_ENTERED",
     "OBTAINED_VIA",
     "ObtainedVia",
     "AS_OF_UNKNOWN",
@@ -111,12 +126,15 @@ __all__ = [
 # HOW the claim was obtained — the degradation path, ordered nearest-to-truth. The ORDER is
 # meaningful (it is distance from the authoritative system), not cosmetic. `user-drop` is the
 # fifth rung, added at the far end per ADR-0041 §2; `steward-corrected` is the sixth, added at
-# the same far end per the 2026-10-10 steward-correction ruling — see the module docstring.
-DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED = (
-    "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected")
-OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
+# the same far end per the 2026-10-10 steward-correction ruling; `steward-entered` is the
+# seventh AND LAST, ruled 2026-10-23 — see the module docstring.
+DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED, STEWARD_ENTERED = (
+    "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected",
+    "steward-entered")
+OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED,
+                STEWARD_ENTERED)
 
-#: The same six values as a ``Literal`` for pydantic field typing — mirrors
+#: The same seven values as a ``Literal`` for pydantic field typing — mirrors
 #: ``SlotDecl.kind: Literal[SLOT_KINDS]`` in :mod:`iagent_mesh.graph_manifest`, the house pattern
 #: for "one tuple is both the runtime membership check and the static type."
 ObtainedVia = Literal[OBTAINED_VIA]  # type: ignore[valid-type]

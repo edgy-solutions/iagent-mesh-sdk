@@ -20,6 +20,7 @@ from iagent_mesh.provenance import (
     MANUAL_EXPORT,
     OBTAINED_VIA,
     STEWARD_CORRECTED,
+    STEWARD_ENTERED,
     USER_DROP,
     WAREHOUSE,
     EvidenceRef,
@@ -81,23 +82,32 @@ def test_ingest_id_appears_only_when_set():
 
 
 # ── the ordered tuple, `user-drop` its fifth rung (ADR-0041 §2), `steward-corrected` its ────
-# sixth (invincible-agent/lane/01's steward-correction ruling, 2026-10-10) ──────────────────
+# sixth (invincible-agent/lane/01's steward-correction ruling, 2026-10-10), `steward-entered` ─
+# its seventh AND LAST (the architect's 2026-10-23 ruling on 208's empty-notice task) ─────────
 
-def test_obtained_via_is_the_six_rung_tuple_ruled_by_adr_0041_and_the_steward_ruling():
-    """Pinned to the exact tuple both rulings produce, not a re-derivation of it — the order is
-    meaningful (nearest-to-truth first) and this is the contract, not an implementation detail."""
-    assert OBTAINED_VIA == (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
+def test_obtained_via_is_the_seven_rung_tuple_ruled_by_adr_0041_and_the_steward_rulings():
+    """Pinned to the exact tuple all three rulings produce, not a re-derivation of it — the
+    order is meaningful (nearest-to-truth first) and this is the contract, not an implementation
+    detail."""
+    assert OBTAINED_VIA == (
+        DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED, STEWARD_ENTERED,
+    )
     assert OBTAINED_VIA == (
         "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected",
+        "steward-entered",
     )
-    assert OBTAINED_VIA[-1] == STEWARD_CORRECTED, (
-        "steward-corrected must be the FARTHEST rung — a steward retyping a value is a human "
-        "intermediary correcting a reading, not the authoritative system itself, the same "
-        "kind of hop user-drop already is"
+    assert OBTAINED_VIA[-1] == STEWARD_ENTERED, (
+        "steward-entered must be the FARTHEST rung — an entered row has only the steward and "
+        "a page, not even a reading to correct, which the 2026-10-23 ruling names as the last "
+        "rung this vocabulary needs"
     )
-    assert OBTAINED_VIA[-2] == USER_DROP, (
-        "user-drop must still be the SECOND-farthest rung — appending steward-corrected after "
-        "it must not have reordered what was already there"
+    assert OBTAINED_VIA[-2] == STEWARD_CORRECTED, (
+        "steward-corrected must still be the SECOND-farthest rung — appending steward-entered "
+        "after it must not have reordered what was already there"
+    )
+    assert OBTAINED_VIA[-3] == USER_DROP, (
+        "user-drop must still be the THIRD-farthest rung — appending steward-corrected and "
+        "steward-entered after it must not have reordered what was already there"
     )
 
 
@@ -107,6 +117,14 @@ def test_user_drop_is_a_legal_obtained_via_on_both_entry_points():
     assert block["obtained_via"] == "user-drop"
     ProvenanceBlock(**{**VALID, "obtained_via": USER_DROP, "as_of": AS_OF_UNKNOWN,
                         "standing": "supervised"})  # does not raise
+
+
+def test_steward_entered_is_a_legal_obtained_via_on_both_entry_points():
+    """No parallel path: steward-entered rides through the SAME constructor as every other
+    rung, with no fields of its own — unlike steward-corrected, it pairs with nothing."""
+    block = make_provenance(**{**VALID, "obtained_via": STEWARD_ENTERED})
+    assert block["obtained_via"] == "steward-entered"
+    ProvenanceBlock(**{**VALID, "obtained_via": STEWARD_ENTERED})  # does not raise
 
 
 # ── `steward-corrected`, its `corrected_by`/`extracted_value` pairing, both entry points ──
@@ -142,7 +160,7 @@ def test_corrected_by_and_extracted_value_are_REQUIRED_together_under_steward_co
 
 
 def test_corrected_by_and_extracted_value_are_REFUSED_under_any_other_rung():
-    for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP):
+    for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_ENTERED):
         bad = {**VALID, "obtained_via": rung, "corrected_by": "bob", "extracted_value": "x"}
         if rung == USER_DROP:
             bad["as_of"] = AS_OF_UNKNOWN
