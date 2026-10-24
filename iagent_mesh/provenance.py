@@ -80,6 +80,14 @@ last rung: every degradation path this module distinguishes is now named, and th
 corrected row from an entered row only by ``obtained_via`` — which is the point, not a gap to
 close later.
 
+One optional field rides on :class:`ProvenanceBlock` for this rung, and the pairing is NOT the
+same shape ``steward-corrected`` draws (RULED, same day, confirmed directly to both lanes):
+``corrected_by`` (who entered it) is REQUIRED under ``steward-entered``, the same as under
+``steward-corrected`` — an entered row still names a person. ``extracted_value`` is FORBIDDEN
+under ``steward-entered``, the opposite of ``steward-corrected``'s requirement — there is no
+extraction for an entered row to differ from, so a value here would assert a reading that never
+happened. Every other rung still forbids both fields, unchanged.
+
 A seventh value is, once more, a change to the closed ordered tuple ADR-0041's Consequences
 section already warned would need re-checking — see invincible-agent/lane/01's 2026-10-23 packet
 for this repo's own consumers that reason over :data:`OBTAINED_VIA` by position or count.
@@ -213,15 +221,18 @@ class ProvenanceBlock(BaseModel):
     delete by** (`EdgeIdentityFilter(key=ingest_id)` against `MeshGraphWriter.delete_edges`) — see
     the module docstring's "ingest_id, ADDED 2026-09-30" section."""
     corrected_by: Optional[str] = None
-    """Who corrected this claim — set if and only if ``obtained_via`` is
-    :data:`STEWARD_CORRECTED`. See the module docstring's "steward-corrected, THE SIXTH RUNG"
-    section. Opaque, carried verbatim — this field does not parse it."""
+    """Who corrected OR entered this claim — required when ``obtained_via`` is
+    :data:`STEWARD_CORRECTED` or :data:`STEWARD_ENTERED`, forbidden under every other rung. See
+    the module docstring's "steward-corrected, THE SIXTH RUNG" and "steward-entered, THE SEVENTH
+    AND LAST RUNG" sections. Opaque, carried verbatim — this field does not parse it."""
     extracted_value: Optional[str] = None
     """What automated extraction produced for this claim BEFORE the correction, preserved for
-    audit. Set if and only if ``obtained_via`` is :data:`STEWARD_CORRECTED`. May be blank — "the
-    extraction produced nothing" is itself a legitimate defect to record, not an omission this
-    field refuses. The corrected value is not duplicated here; it is whatever this claim's own
-    field already holds."""
+    audit. Required when ``obtained_via`` is :data:`STEWARD_CORRECTED`, FORBIDDEN when it is
+    :data:`STEWARD_ENTERED` — an entered row has no prior extraction to differ from — and under
+    every other rung. May be blank under ``steward-corrected`` — "the extraction produced
+    nothing" is itself a legitimate defect to record, not an omission this field refuses. The
+    corrected value is not duplicated here; it is whatever this claim's own field already
+    holds."""
 
     @field_validator("authoritative_source", "as_of", "ingested_at", "ingest_run", "standing")
     @classmethod
@@ -254,7 +265,7 @@ class ProvenanceBlock(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _corrected_fields_ride_only_with_steward_corrected(self) -> "ProvenanceBlock":
+    def _corrected_fields_ride_only_with_steward_corrected_or_entered(self) -> "ProvenanceBlock":
         if self.obtained_via == STEWARD_CORRECTED:
             if self.corrected_by is None or self.extracted_value is None:
                 raise ValueError(
@@ -262,11 +273,24 @@ class ProvenanceBlock(BaseModel):
                     "corrected_by and extracted_value — a correction with no corrector or no "
                     "record of what it replaced is not an auditable correction"
                 )
+        elif self.obtained_via == STEWARD_ENTERED:
+            if self.corrected_by is None:
+                raise ValueError(
+                    "ProvenanceBlock(obtained_via='steward-entered') requires corrected_by — "
+                    "an entered row still names who entered it, even with no prior reading to "
+                    "correct"
+                )
+            if self.extracted_value is not None:
+                raise ValueError(
+                    "ProvenanceBlock(obtained_via='steward-entered') forbids extracted_value — "
+                    "there was no extraction for an entered row to differ from"
+                )
         elif self.corrected_by is not None or self.extracted_value is not None:
             raise ValueError(
                 f"ProvenanceBlock.obtained_via={self.obtained_via!r} but corrected_by/"
-                f"extracted_value is set — those two fields assert 'this row was corrected', "
-                f"which only obtained_via='steward-corrected' can be true of"
+                f"extracted_value is set — those two fields assert 'this row was corrected or "
+                f"entered by a steward', which only obtained_via='steward-corrected'/"
+                f"'steward-entered' can be true of"
             )
         return self
 
@@ -504,11 +528,20 @@ def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Opti
                 "obtained_via='steward-corrected' requires both corrected_by and "
                 "extracted_value — a correction with no corrector or no record of what it "
                 "replaced is not an auditable correction")
+    elif obtained_via == STEWARD_ENTERED:
+        if not corrected_by:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' requires corrected_by — an entered row still "
+                "names who entered it, even with no prior reading to correct")
+        if extracted_value is not None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' forbids extracted_value — there was no "
+                "extraction for an entered row to differ from")
     elif corrected_by is not None or extracted_value is not None:
         raise ProvenanceIncomplete(
             f"obtained_via={obtained_via!r} but corrected_by/extracted_value was supplied — "
-            f"those two fields assert 'this row was corrected', which only "
-            f"obtained_via='steward-corrected' can be true of")
+            f"those two fields assert 'this row was corrected or entered by a steward', which "
+            f"only obtained_via='steward-corrected'/'steward-entered' can be true of")
     block = {
         "authoritative_source": authoritative_source,
         "obtained_via": obtained_via,
@@ -549,11 +582,21 @@ def validate_provenance(block: Any) -> None:
                 "obtained_via='steward-corrected' requires both corrected_by and "
                 "extracted_value — a correction with no corrector or no record of what it "
                 "replaced is not an auditable correction")
+    elif block["obtained_via"] == STEWARD_ENTERED:
+        if not corrected_by:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' requires corrected_by — an entered row still "
+                "names who entered it, even with no prior reading to correct")
+        if extracted_value is not None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' forbids extracted_value — there was no "
+                "extraction for an entered row to differ from")
     elif corrected_by is not None or extracted_value is not None:
         raise ProvenanceIncomplete(
             f"obtained_via={block['obtained_via']!r} but corrected_by/extracted_value is "
-            f"present — those two fields assert 'this row was corrected', which only "
-            f"obtained_via='steward-corrected' can be true of")
+            f"present — those two fields assert 'this row was corrected or entered by a "
+            f"steward', which only obtained_via='steward-corrected'/'steward-entered' can be "
+            f"true of")
 
 
 def require_provenance(assertion: dict, *, key: str = "provenance") -> dict:

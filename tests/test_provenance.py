@@ -119,12 +119,38 @@ def test_user_drop_is_a_legal_obtained_via_on_both_entry_points():
                         "standing": "supervised"})  # does not raise
 
 
+_ENTERED_VALID = {**VALID, "obtained_via": STEWARD_ENTERED, "corrected_by": "alice"}
+
+
 def test_steward_entered_is_a_legal_obtained_via_on_both_entry_points():
-    """No parallel path: steward-entered rides through the SAME constructor as every other
-    rung, with no fields of its own — unlike steward-corrected, it pairs with nothing."""
-    block = make_provenance(**{**VALID, "obtained_via": STEWARD_ENTERED})
+    """steward-entered rides through the SAME constructor as every other rung — no parallel
+    path — but its own pairing is the MIRROR of steward-corrected's: corrected_by required,
+    extracted_value forbidden (confirmed by the architect, same day, to both lanes)."""
+    block = make_provenance(**_ENTERED_VALID)
     assert block["obtained_via"] == "steward-entered"
-    ProvenanceBlock(**{**VALID, "obtained_via": STEWARD_ENTERED})  # does not raise
+    assert block["corrected_by"] == "alice"
+    assert "extracted_value" not in block
+    pb = ProvenanceBlock(**_ENTERED_VALID)  # does not raise
+    assert pb.as_dict()["corrected_by"] == "alice"
+    assert "extracted_value" not in pb.as_dict()
+
+
+def test_steward_entered_requires_corrected_by():
+    bad = {k: v for k, v in _ENTERED_VALID.items() if k != "corrected_by"}
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        make_provenance(**bad)
+    with pytest.raises(ValidationError):
+        ProvenanceBlock(**bad)
+
+
+def test_steward_entered_forbids_extracted_value():
+    """The mirror image of steward-corrected's requirement — there was no extraction for an
+    entered row to differ from."""
+    bad = {**_ENTERED_VALID, "extracted_value": "F-16"}
+    with pytest.raises(ProvenanceIncomplete, match="extracted_value"):
+        make_provenance(**bad)
+    with pytest.raises(ValidationError):
+        ProvenanceBlock(**bad)
 
 
 # ── `steward-corrected`, its `corrected_by`/`extracted_value` pairing, both entry points ──
@@ -160,7 +186,10 @@ def test_corrected_by_and_extracted_value_are_REQUIRED_together_under_steward_co
 
 
 def test_corrected_by_and_extracted_value_are_REFUSED_under_any_other_rung():
-    for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_ENTERED):
+    """steward-entered is excluded here — its own pairing (corrected_by required, extracted_value
+    forbidden) is the mirror of this one, not a member of it. See the steward-entered tests
+    above."""
+    for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP):
         bad = {**VALID, "obtained_via": rung, "corrected_by": "bob", "extracted_value": "x"}
         if rung == USER_DROP:
             bad["as_of"] = AS_OF_UNKNOWN
@@ -177,6 +206,14 @@ def test_validate_provenance_enforces_the_same_pairing_on_the_dict_path():
         validate_provenance({**VALID, "corrected_by": "bob", "extracted_value": "x"})
     with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
         validate_provenance({**_STEWARD_VALID, "corrected_by": None})
+
+
+def test_validate_provenance_enforces_the_steward_entered_pairing_on_the_dict_path():
+    validate_provenance(make_provenance(**_ENTERED_VALID))  # does not raise
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        validate_provenance({**VALID, "obtained_via": STEWARD_ENTERED})
+    with pytest.raises(ProvenanceIncomplete, match="extracted_value"):
+        validate_provenance({**_ENTERED_VALID, "extracted_value": "F-16"})
 
 
 # ── ExtractionDefect, the companion admin-queue record the same ruling names ──────────────

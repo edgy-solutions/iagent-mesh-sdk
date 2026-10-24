@@ -96,12 +96,16 @@ version field — it stays at the value it forked from until a release ceremony 
   2026-10-23, the seventh `obtained_via` rung and, per the ruling, the LAST one: a steward
   hand-entering a part no extraction ever produced, farther from truth than `steward-corrected`
   (which still has an extraction underneath it to correct). Appended to `OBTAINED_VIA` /
-  `ObtainedVia` at the far end, exported next to `STEWARD_CORRECTED`. No paired fields of its
-  own — unlike `steward-corrected`'s `corrected_by`/`extracted_value`, this rung rides through
+  `ObtainedVia` at the far end, exported next to `STEWARD_CORRECTED`. Rides through
   `make_provenance`/`ProvenanceBlock`'s existing constructor with no parallel path, per
-  invincible-agent/lane/01's 2026-10-23 packet. invincible-agent's own graph-write side (208)
-  decides separately what else an entered row carries (`evidence_ref`, `extraction_defect`, an
-  actor field) — that is their shape to fill in, not this module's.
+  invincible-agent/lane/01's 2026-10-23 packet. Has its own paired-field rule — the architect's
+  direct 2026-10-23 confirmation: `corrected_by` is REQUIRED (there was a steward, name them)
+  and `extracted_value` is FORBIDDEN (there was no extraction for an entered row to differ
+  from) — the mirror image of `steward-corrected`'s pairing, not the same one. Enforced on all
+  three call sites (`ProvenanceBlock`'s validator, `make_provenance`, `validate_provenance`'s
+  dict path). invincible-agent's own graph-write side (208) decides separately what else an
+  entered row carries (`evidence_ref`, `extraction_defect`) — that is their shape to fill in,
+  not this module's.
 
 ### Coordination (no code change in this repo)
 - **2026-10-21, "leaf types ... registry-driven, never a literal list"** (first of two architect
@@ -152,15 +156,11 @@ version field — it stays at the value it forked from until a release ceremony 
   responsibility in this area already ends at `ExtractionDefect`/`EvidenceRef` (this cycle's first
   drop) — each `header_edits`/`row_edits` correction files one of those, independent of the wire
   shape that carries it to the server. Nothing to do in this repo.
-- `steward-entered` and `corrected_by` — the 2026-10-23 ruling's own wording ("the page the
-  steward named as evidence_ref {page, bbox: null}, corrected_by set") reads as if an entered
-  row's `ProvenanceBlock` also carries `corrected_by`. Not built that way: `corrected_by` /
-  `extracted_value` still ride ONLY under `steward-corrected` (`_corrected_fields_ride_only_with_
-  steward_corrected`) — invincible-agent/lane/01's own packet asking for `steward-entered` lists
-  four concrete asks for this module and none of them touch that pairing validator, so this SDK
-  takes that omission as deliberate rather than widening the pairing uninvited. Flagged back in
-  the tag-sha reply rather than guessed into code; if 208 actually needs `corrected_by` to ride
-  with `steward-entered`, that is a fifth ask, not an inference from the ruling's prose.
+- `steward-entered` and `corrected_by` — RESOLVED, moved out of Coordination: this was an open
+  question in ca's first reply (the four explicit asks didn't touch the pairing validator, but
+  the ruling's own prose implied `corrected_by` should ride). The architect's direct 2026-10-23
+  follow-up confirmed reading (b) — `corrected_by` required, `extracted_value` forbidden under
+  `steward-entered` — and that is now code, not a flag; see the `STEWARD_ENTERED` entry above.
 
 ## 0.9.10 — 2026-10-12
 
