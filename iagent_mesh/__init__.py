@@ -188,6 +188,11 @@ from .provenance import (
     validate_provenance,
 )
 
+# THE REFUSAL ENVELOPE, RE-EXPORTED AT ROOT for the same reason `provenance` is — a denied
+# authorization decision gov and fin both adopt only resolves to one shape if it comes from one
+# import path. Architect directive, 2026-10-24.
+from .refusal import Refusal
+
 # THE INGEST WIRE SHAPES, RE-EXPORTED AT ROOT for the same reason `provenance` is — `IngestRequest`
 # is meant to be one wire shape two repos agree on, which only holds if it resolves from one
 # import path. `compose`/`validate_dir` here are NOT promoted bare (they would collide with
@@ -457,6 +462,8 @@ __all__ = [
     "make_provenance",
     "require_provenance",
     "validate_provenance",
+    # the refusal envelope (architect directive, 2026-10-24 — gov and fin both adopt this shape)
+    "Refusal",
     # the ingest wire shapes (ADR-0021 content-kind selection / ADR-0041 user-drop ingest)
     "CONTENT_KIND_BRANCHES",
     "INGEST_STAGES",

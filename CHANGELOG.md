@@ -106,6 +106,17 @@ version field — it stays at the value it forked from until a release ceremony 
   dict path). invincible-agent's own graph-write side (208) decides separately what else an
   entered row carries (`evidence_ref`, `extraction_defect`) — that is their shape to fill in,
   not this module's.
+- `Refusal` (new module, `iagent_mesh/refusal.py`) — architect directive, 2026-10-24: a typed
+  envelope for a denied authorization decision, for gov and fin to adopt. Four fields:
+  `policy_id` (which policy refused), `missing_binding` (what grant was absent), `grantable_by`
+  (who could grant it), `candidates: tuple[str, ...] = ()` (what else to try — may be empty, a
+  dead end is itself informative, not an omission this field refuses). All four are opaque
+  tokens — this module validates shape (non-blank, frozen, `extra="forbid"`) and nothing else;
+  it does not decide, grant, or resolve anything, the same envelope/resolver split
+  `ambiguous_in_class` (Coordination, below) predicted this ask would eventually take. Not wired
+  into `MeshResult` — the directive asked for a standalone model, not a new outcome variant; a
+  caller that wants one inside `MeshResult.failed(detail=...)` serializes it there itself.
+  Exported at root (`from iagent_mesh import Refusal`), same pattern as `ExtractionDefect`.
 
 ### Coordination (no code change in this repo)
 - **2026-10-21, "leaf types ... registry-driven, never a literal list"** (first of two architect
@@ -135,9 +146,9 @@ version field — it stays at the value it forked from until a release ceremony 
   SDK Protocol or response model at all. `ambiguous_in_class` itself isn't even packeted to this
   repo yet: it's a 2026-10-15 pre-packet from invincible-agent/lane/saf to lane/74 about a
   same-class score tie in `decide()` (`instance_resolution.py`), framed as a test fixture, not a
-  proposal here. Nothing to do in this repo. If lane/74's `decide()` later needs a refusal
-  *envelope* field a caller (e.g. cortex-ui) draws on generically for elicitation — a candidates
-  list, not the matching logic itself — that comes to `ca` as its own packet and gets ruled then.
+  proposal here. Nothing to do in this repo for `decide()` itself. **2026-10-24 — the predicted
+  envelope field arrived, as a direct ruling rather than a packet**: see the `Refusal` entry
+  above. `decide()`'s own matching logic is unaffected; only the envelope moved.
 - `extraction_defect` producer/SDK-model mismatch (rev 188, invincible-agent/lane/01) — the
   architect's ruling stands from 0.9.10: Lane 1 aligns `defect_task()`'s payload to this SDK's
   `ExtractionDefect`, this SDK does not widen to the decision-shaped payload Lane 1 recommended in
@@ -161,6 +172,13 @@ version field — it stays at the value it forked from until a release ceremony 
   the ruling's own prose implied `corrected_by` should ride). The architect's direct 2026-10-23
   follow-up confirmed reading (b) — `corrected_by` required, `extracted_value` forbidden under
   `steward-entered` — and that is now code, not a flag; see the `STEWARD_ENTERED` entry above.
+- `document` in the content-kind vocabulary and `review_shape` enum (2026-10-24 directive) —
+  **already shipped, no code change**: `CONTENT_KIND_BRANCHES = ("document", "event")`
+  (`ingest.py:136`, `"document"` is even `ContentKindRegistration.branch`'s default) since the
+  content-kind-branch work, and `review_shape: Literal["notice", "document"] | None` since
+  `149e491` (2026-10-22, the leaf-rule cycle above). Flagging rather than silently treating as
+  done, in case the directive meant a third place this repo hasn't found — nothing else in this
+  module names a closed `document`/`notice`-shaped vocabulary that's missing the value.
 
 ## 0.9.10 — 2026-10-12
 
