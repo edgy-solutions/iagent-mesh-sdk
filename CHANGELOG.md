@@ -6,6 +6,69 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.12 — 2026-10-30
+
+### Added
+- `WorkflowDefinition` step kinds gain an optional `stage: Optional[str] = None`, plus a
+  definition-level validator; `EmitStep.disposes` — both from the architect's 2026-10-30
+  "adoption program" directive.
+- `normalize_mpn` (new `iagent_mesh/normalize.py` — no existing normalization module to extend).
+  Generalizes doc-tools `notice_identity.py:138`'s `normalize_component`, the one correct
+  producer; no ambiguity to resolve.
+- `Refusal.to_terminal()` / `.from_terminal()` — specced by two already-written stopgaps on
+  unmerged invincible-agent PR branches (`agent_fleet/utils/terminal_refusal.py`,
+  `src/iagent/authz/refusal.py`), both naming this exact future SDK API: `"refusal:" +
+  json.dumps({policy_id, missing_binding, grantable_by, candidates})`, a Restate `TerminalError`
+  message payload. Resolves the open ruling-1 question from the 2026-10-25 policy-refusal-rule
+  packet.
+- The four ADR-0060 shapes as **types only** — `PersistenceDescriptor`/`PersistedClass`,
+  `DocumentManifest`, `ArtifactRef`, `BlobRef` (new `iagent_mesh/persistence.py`) — inert,
+  unwired, per ADR-0060 draft `11be1ec4` §5, which settles field shapes as this lane's to name
+  while §6's behavioral items stay open for the architect.
+- `ContentKindRegistration.persists: Optional[PersistenceDescriptor] = None`
+  (`iagent_mesh/ingest.py`) — same "optional for every branch" precedent as `domain`/`label`/
+  `review_shape`/`arrives_as`; no interaction with the existing `_branch_shape_is_consistent`
+  validator.
+- `vision_timeout` joins `REASON_CODES` (`iagent_mesh/ingest.py`), alongside new
+  `RESERVED_TO_LANE_1`, `EMITTABLE_CODES` and `REASON_CODE_SLUG_RE` — a reason-code slug, not a
+  duration constant (that's the pre-existing, explicitly distinct `timeout`, which stays in
+  `RESERVED_TO_LANE_1` and out of `EMITTABLE_CODES`). Generalizes doc-tools 7f's
+  `ingest_failure.py` `REASON_CODES` stopgap vocabulary.
+- `ExportProfileHeader` (new `iagent_mesh/export_profile.py`) — `name`, `format` (open `str`),
+  `granularity` (open `str`), `label`, `kinds`. Named by the architect as the SDK's one canonical
+  header shape across three existing producers (PR #148; PR #144/#143; lane/01's PR #151/#158)
+  that had disagreed on `scope` vs. `granularity` as the axis name — `granularity` wins here;
+  `format`/`granularity` stay open strings rather than `Literal`s so naming the canonical shape
+  doesn't also close off a future producer's value.
+- `MeshGraph.is_safety_critical` (`iagent_mesh/interfaces.py`) — a bare, docstring-only Protocol
+  method. **Type now, route later**: the one real decision-maker today is a static, domain-scoped
+  list (`agent_fleet/safety_agent/safety_critical.py`, PR #125) whose own test bans a second
+  implementation of this decision, so no implementation ships here. Waits on a concrete
+  `MeshGraph` client (see "Not in this cut," below) and an explicit producer wiring.
+- `ContentKindRegistration.review_shape` widens from `Optional[Literal["notice", "document"]]`
+  to `Optional[str]` — **reopened 2026-10-30, reversing 2026-10-21's Q1 ruling on purpose**: a
+  registry (`policy/review_shapes/<shape>.yaml`, platform seed + overlay) is now the
+  deny-by-default boundary instead of a closed `Literal`, so this SDK's declaration no longer
+  needs to enumerate every shape a future registry row might add. The realness-check moves from
+  SDK declaration time to whichever layer serves the registry (BFF/leaf-picker).
+- `ReviewCoverage`, `ReviewCoverageGroup`, `ReviewCoverageSharedFact`, `ReviewShapeRule`,
+  `ReviewShapeRow` (new `iagent_mesh/review_coverage.py`) — typed from invincible-agent/lane/01's
+  concrete 0.4.73 wire answer to cortex-ui's five blocking questions on the `parts`→`items`
+  rename: `review_shape`/`item_kind` move to the top level (once per record, not per group);
+  `groups`/`shared` carry open-`str` `rule` ids resolved against the same shape registry;
+  `ReviewCoverageSharedFact.bbox` reuses `EvidenceRef.bbox`'s page-fraction, top-left-origin,
+  `0..1` convention (ruled 2026-10-21) via an identical, non-`Optional` validator twin — pydantic
+  validators can't be shared across two different `BaseModel` subclasses. `ReviewShapeRow` types
+  the registry row itself (`review_shape`, `item_kind`, `rules_version`, `params`, `rules`).
+
+### Not in this cut — spec only
+- Concrete remote clients for `MeshGraph`/`MeshVectors`/`MeshOntology` over the invincible-agent
+  gateway. Verified the gateway has no generic REST surface for any of the three protocols today
+  (`grep -ncE "weaviate|SPARQL|sparql" invincible-agent/src/iagent/gateway.py` → `0`; a raw Neo4j
+  driver and 14 bespoke Cypher call sites instead) — cross-repo infrastructure work, not an
+  SDK-only task. Spec written and filed instead:
+  `sessions/2026-10-30-spec-v0-9-13-concrete-remote-clients.md`. Deferred to 0.9.13.
+
 ## 0.9.11 — 2026-10-29
 
 ### Added
