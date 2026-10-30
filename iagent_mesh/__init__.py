@@ -374,6 +374,18 @@ from .persistence import (
     PersistenceDescriptor,
 )
 
+# The review-coverage record (architect directive, 2026-10-30) and the review-shape registry row
+# it is validated against — typed exactly per Lane 1's wire-answer packet to cortex-ui (see the
+# module docstring for the packet path). Re-exported at root for the same reason `provenance` is:
+# "ca types it, the BFF imports it" only resolves to one shape from one import path.
+from .review_coverage import (
+    ReviewCoverage,
+    ReviewCoverageGroup,
+    ReviewCoverageSharedFact,
+    ReviewShapeRow,
+    ReviewShapeRule,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -628,4 +640,10 @@ __all__ = [
     "DocumentManifest",
     "PersistedClass",
     "PersistenceDescriptor",
+    # the review-coverage record and review-shape registry row (architect directive, 2026-10-30)
+    "ReviewCoverage",
+    "ReviewCoverageGroup",
+    "ReviewCoverageSharedFact",
+    "ReviewShapeRow",
+    "ReviewShapeRule",
 ]
