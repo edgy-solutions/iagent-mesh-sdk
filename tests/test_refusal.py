@@ -50,3 +50,51 @@ def test_refusal_is_frozen_and_forbids_extra_fields():
         r.policy_id = "something-else"  # type: ignore[misc]
     with pytest.raises(ValidationError):
         Refusal(**VALID, decided_by="bob")  # type: ignore[call-arg]
+
+
+# ── to_terminal / from_terminal ─────────────────────────────────────────────────────────────
+
+def test_to_terminal_and_from_terminal_round_trip():
+    r = Refusal(**VALID)
+    rebuilt = Refusal.from_terminal(r.to_terminal())
+    assert rebuilt == r
+
+
+def test_to_terminal_is_deterministic():
+    r = Refusal(**VALID)
+    assert r.to_terminal() == r.to_terminal()
+
+
+def test_to_terminal_serializes_empty_candidates_as_an_empty_list_not_omitted():
+    r = Refusal(**{**VALID, "candidates": ()})
+    assert '"candidates":[]' in r.to_terminal()
+
+
+def test_from_terminal_returns_none_for_a_non_string():
+    assert Refusal.from_terminal(12345) is None
+    assert Refusal.from_terminal(None) is None
+    assert Refusal.from_terminal(["refusal:", "x"]) is None
+
+
+def test_from_terminal_returns_none_for_a_string_with_no_prefix():
+    assert Refusal.from_terminal("not a refusal at all") is None
+
+
+def test_from_terminal_returns_none_for_invalid_json():
+    assert Refusal.from_terminal("refusal:not json") is None
+
+
+def test_from_terminal_returns_none_for_a_json_array_not_an_object():
+    import json
+    assert Refusal.from_terminal("refusal:" + json.dumps([1, 2, 3])) is None
+
+
+def test_from_terminal_returns_none_for_a_blank_required_field():
+    import json
+    assert Refusal.from_terminal("refusal:" + json.dumps({"policy_id": ""})) is None
+
+
+def test_from_terminal_returns_none_for_a_dict_missing_a_required_key():
+    import json
+    body = {k: v for k, v in VALID.items() if k != "grantable_by"}
+    assert Refusal.from_terminal("refusal:" + json.dumps(body)) is None

@@ -350,6 +350,21 @@ from .workflow_definition import (
     load_workflow_definition,
 )
 
+# Generic text normalization for identity comparison — no domain knowledge, see the module
+# docstring for why no corporate-suffix/revision-dot handling belongs here.
+from .normalize import normalize_mpn
+
+# ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
+# architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
+# might eventually agree on only resolves to one thing from one import path.
+from .persistence import (
+    ArtifactRef,
+    BlobRef,
+    DocumentManifest,
+    PersistedClass,
+    PersistenceDescriptor,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -588,4 +603,12 @@ __all__ = [
     "WorkflowDefinition",
     "WorkflowDefinitionError",
     "load_workflow_definition",
+    # generic text normalization for identity comparison
+    "normalize_mpn",
+    # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
+    "ArtifactRef",
+    "BlobRef",
+    "DocumentManifest",
+    "PersistedClass",
+    "PersistenceDescriptor",
 ]

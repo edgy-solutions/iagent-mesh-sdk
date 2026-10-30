@@ -58,6 +58,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .declarations import DeclarationError, compose_rows, load_rows
 from .interfaces import Initiator
+from .persistence import PersistenceDescriptor
 from .provenance import ProvenanceBlock
 
 __all__ = [
@@ -375,6 +376,19 @@ class ContentKindRegistration(BaseModel):
     **THIS MODULE DOES NOT RENDER ANYTHING.** It declares the string; a leaf picker, a status
     chip, or a review card's own template decides where and how it is shown — same split
     every field above draws between declaring a fact about a kind and consuming it."""
+
+    persists: Optional[PersistenceDescriptor] = None
+    """ADDED per ADR-0060, types only (0.9.12). This kind's persistence descriptor — where each
+    output class lives and what a generated read verb may expose about it. ``None`` (the
+    default) means this kind declares no persistence descriptor: every kind before this field
+    existed, and any kind ADR-0060's behavior has not yet been ruled on for.
+
+    **THIS FIELD DOES NOT INTERACT WITH `branch`, AND NOTHING BELOW ENFORCES IT.** Same "ruled
+    optional, not required, no exceptions" precedent :attr:`domain`/:attr:`arrives_as`/
+    :attr:`label` draw: :func:`_branch_shape_is_consistent` does not reference it, so an
+    ``event`` row is as free to carry one as a ``document`` row. See
+    :mod:`iagent_mesh.persistence`'s own module docstring — this is a type, not behavior; the
+    origin-rule/verb-generation machinery ADR-0060 describes is unbuilt."""
 
     @field_validator("kind")
     @classmethod

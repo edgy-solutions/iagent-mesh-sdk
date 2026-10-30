@@ -105,6 +105,78 @@ def test_default_promise_names_still_collide_if_step_ids_matched_elsewhere():
         )
 
 
+def test_stage_is_accepted_on_step_0_of_any_kind():
+    d = _definition(
+        domain_stages=["intake"],
+        steps=[{"kind": "wait", "id": "w", "seconds": 1, "stage": "intake"}],
+    )
+    assert d.steps[0].stage == "intake"
+
+
+def test_stage_is_accepted_on_a_non_grouped_human_await_not_at_index_0():
+    d = _definition(
+        domain_stages=["review"],
+        steps=[
+            {"kind": "wait", "id": "w", "seconds": 1},
+            {"kind": "human_await", "id": "a", "audience": "promotion:X", "stage": "review"},
+        ],
+    )
+    assert d.steps[1].stage == "review"
+
+
+def test_stage_is_rejected_on_a_grouped_human_await_not_at_index_0():
+    with pytest.raises(ValidationError, match="neither index 0 nor"):
+        _definition(
+            domain_stages=["review"],
+            steps=[
+                {"kind": "wait", "id": "w", "seconds": 1},
+                {
+                    "kind": "human_await", "id": "a", "audience": "promotion:X",
+                    "stage": "review", "completion": {"mode": "grouped"},
+                },
+            ],
+        )
+
+
+def test_stage_is_rejected_on_a_non_step_0_non_human_await_step():
+    with pytest.raises(ValidationError, match="neither index 0 nor"):
+        _definition(
+            domain_stages=["review"],
+            steps=[
+                {"kind": "wait", "id": "w", "seconds": 1},
+                {"kind": "wait", "id": "w2", "seconds": 2, "stage": "review"},
+            ],
+        )
+
+
+def test_stage_is_rejected_when_not_present_in_domain_stages():
+    with pytest.raises(ValidationError, match="is not in definition"):
+        _definition(
+            domain_stages=[],
+            steps=[{"kind": "wait", "id": "w", "seconds": 1, "stage": "intake"}],
+        )
+    with pytest.raises(ValidationError, match="is not in definition"):
+        _definition(
+            domain_stages=["other"],
+            steps=[{"kind": "wait", "id": "w", "seconds": 1, "stage": "intake"}],
+        )
+
+
+def test_stage_none_never_triggers_the_validator_on_any_step_or_position():
+    d = _definition(
+        domain_stages=[],
+        steps=[
+            {"kind": "wait", "id": "w", "seconds": 1},
+            {
+                "kind": "human_await", "id": "a", "audience": "promotion:X",
+                "completion": {"mode": "grouped"},
+            },
+        ],
+    )
+    assert d.steps[0].stage is None
+    assert d.steps[1].stage is None
+
+
 def test_case_execution_concepts_have_no_counterpart_here():
     """THE RULING THIS SEALS: a WorkflowDefinition carries no execution state — CaseState and
     WorkflowCaseRecord.state/.terminal have no counterpart in this module."""
@@ -217,6 +289,18 @@ def test_emit_channel_must_match_the_lowercase_pattern():
     EmitStep(kind="emit", id="e", channel="outbox_a", template="hi")
     with pytest.raises(ValidationError):
         EmitStep(kind="emit", id="e", channel="Outbox", template="hi")
+
+
+def test_emit_disposes_accepts_a_valid_slug_or_defaults_to_none():
+    step = EmitStep(kind="emit", id="e", channel="outbox_a", template="hi", disposes="fault_episode")
+    assert step.disposes == "fault_episode"
+    assert EmitStep(kind="emit", id="e", channel="outbox_a", template="hi").disposes is None
+
+
+def test_emit_disposes_rejects_a_slug_with_invalid_characters():
+    for bad in ("Fault", "1fault", "fault-episode"):
+        with pytest.raises(ValidationError):
+            EmitStep(kind="emit", id="e", channel="outbox_a", template="hi", disposes=bad)
 
 
 def test_render_step_accepts_any_template_shape():

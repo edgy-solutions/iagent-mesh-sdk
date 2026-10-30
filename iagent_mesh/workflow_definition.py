@@ -85,6 +85,13 @@ class _Declared(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class _Step(_Declared):
+    """Shared by every step kind. `stage` is admitted only where the runner can actually observe
+    it landing — see WorkflowDefinition._a_stage_is_declared_only_where_it_is_observable."""
+
+    stage: Optional[str] = None
+
+
 class CompletionPolicy(_Declared):
     """HOW a `human_await` settles. `mode="grouped"` and `quorum="n_of_m"` are declarable; the
     runner may not yet implement either (`n_of_m` is declared-but-unimplemented there as of
@@ -107,7 +114,7 @@ class CompletionPolicy(_Declared):
         return self
 
 
-class HumanAwaitStep(_Declared):
+class HumanAwaitStep(_Step):
     """A designed await on an authorized human. `promise_name` is declared content on purpose —
     see the runner's own docstring: a durable Restate promise name is identity-bearing journal
     state, so the executor and the resolving handler must agree on the same string this row
@@ -158,7 +165,7 @@ class HumanAwaitStep(_Declared):
         return self.promise_name or f"approval_{self.id}"
 
 
-class SpoOperationStep(_Declared):
+class SpoOperationStep(_Step):
     """A pre-resolved SPO operation. `subject`/`verb` are resolved identifiers, not natural
     language — this module validates their presence, not their eligibility (that is the runner's
     stage-2 check against the caller's own eligible set)."""
@@ -177,7 +184,7 @@ class SpoOperationStep(_Declared):
         return self
 
 
-class DirectCallStep(_Declared):
+class DirectCallStep(_Step):
     """TRANSITIONAL escape hatch for an infrastructural action not (yet) a mesh verb. `capability`
     stays REQUIRED — a permanently-ungated step kind cannot be expressed."""
 
@@ -195,7 +202,7 @@ class DirectCallStep(_Declared):
         return self
 
 
-class DispatchFanoutStep(_Declared):
+class DispatchFanoutStep(_Step):
     """Dispatch a review's batch without a human. `capability` stays REQUIRED and Topaz-decided —
     the gate this kind must not permit skipping."""
 
@@ -209,7 +216,7 @@ class DispatchFanoutStep(_Declared):
         return self
 
 
-class RenderStep(_Declared):
+class RenderStep(_Step):
     """Render a YAML template against the run's context and record it as this step's output."""
 
     kind: Literal["render"]
@@ -222,7 +229,7 @@ class RenderStep(_Declared):
         return self
 
 
-class SignalAwaitStep(_Declared):
+class SignalAwaitStep(_Step):
     """Await a system's answer — distinct from `human_await` because it registers no human task."""
 
     kind: Literal["signal_await"]
@@ -250,7 +257,7 @@ class SignalAwaitStep(_Declared):
         return self
 
 
-class WaitStep(_Declared):
+class WaitStep(_Step):
     """A durable timer. Its disposition is `elapsed`."""
 
     kind: Literal["wait"]
@@ -263,7 +270,7 @@ class WaitStep(_Declared):
         return self
 
 
-class EmitStep(_Declared):
+class EmitStep(_Step):
     """Render a template and append it to this instance's `outbox:{channel}`. The transport is not
     decided here — emitting is recorded, delivery is not claimed."""
 
@@ -271,6 +278,7 @@ class EmitStep(_Declared):
     id: str
     channel: str = Field(..., pattern=r"^[a-z][a-z0-9_]*$")
     template: Any
+    disposes: Optional[str] = Field(None, pattern=r"^[a-z][a-z0-9_]*$")
 
     @model_validator(mode="after")
     def _id_is_present(self) -> "EmitStep":
@@ -322,6 +330,28 @@ class WorkflowDefinition(_Declared):
         shared = sorted({n for n in names if names.count(n) > 1})
         if shared:
             raise ValueError(f"definition {self.id}: promise names awaited twice {shared}")
+        return self
+
+    @model_validator(mode="after")
+    def _a_stage_is_declared_only_where_it_is_observable(self) -> "WorkflowDefinition":
+        for i, step in enumerate(self.steps):
+            if step.stage is None:
+                continue
+            if step.stage not in self.domain_stages:
+                raise ValueError(
+                    f"step {step.id}: stage {step.stage!r} is not in definition {self.id}'s "
+                    f"domain_stages {list(self.domain_stages)}"
+                )
+            is_first = i == 0
+            is_non_grouped_human_await = (
+                step.kind == "human_await" and step.completion.mode != "grouped"
+            )
+            if not (is_first or is_non_grouped_human_await):
+                raise ValueError(
+                    f"step {step.id}: stage is declared but this step is neither index 0 nor a "
+                    f"non-grouped human_await -- the runner has no point at which it observes "
+                    f"this step's stage landing"
+                )
         return self
 
 

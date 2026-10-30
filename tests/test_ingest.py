@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from iagent_mesh.declarations import DeclarationError
 from iagent_mesh.interfaces import Initiator
+from iagent_mesh.persistence import PersistedClass, PersistenceDescriptor
 from iagent_mesh.provenance import DIRECT, ProvenanceBlock
 from iagent_mesh.task_kinds import UNDECLARED, resolve as resolve_task_kind
 from iagent_mesh.ingest import (
@@ -499,6 +500,37 @@ def test_label_may_contain_spaces_unlike_arrives_as_entries():
     take, not arrives_as's no-whitespace rule."""
     row = ContentKindRegistration(**{**VALID_REGISTRATION, "label": "Product Change Notice"})
     assert row.label == "Product Change Notice"
+
+
+# ── persists, ADDED per ADR-0060 (types only, 0.9.12) ───────────────────────────────────────
+
+def test_persists_defaults_to_none_a_kind_declares_no_persistence_descriptor():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.persists is None
+
+
+def test_a_kind_declares_its_persistence_descriptor():
+    descriptor = PersistenceDescriptor(
+        classes=(
+            PersistedClass(
+                output_class="mfg:WorkInstruction", store="neo4j", identity_field="instance_id",
+            ),
+        )
+    )
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "persists": descriptor})
+    assert row.persists.classes[0].output_class == "mfg:WorkInstruction"
+
+
+def test_event_branch_may_also_declare_persists():
+    """persists does not interact with branch — _branch_shape_is_consistent never references
+    it, same "optional for every branch, no exceptions" precedent domain/arrives_as/label draw."""
+    descriptor = PersistenceDescriptor(
+        classes=(
+            PersistedClass(output_class="mfg:Fault", store="neo4j", identity_field="event_id"),
+        )
+    )
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "persists": descriptor})
+    assert row.persists.classes[0].output_class == "mfg:Fault"
 
 
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
