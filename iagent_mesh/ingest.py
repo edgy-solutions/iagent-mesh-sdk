@@ -292,6 +292,90 @@ class ContentKindRegistration(BaseModel):
     the parent, not how a caller resolves that name to the parent's own node. Forbidden for
     ``branch="event"`` rows — see ``_branch_shape_is_consistent`` below."""
 
+    id_namespaces: tuple[str, ...] = ()
+    """ADDED 0.9.11. Generalizes invincible-agent/lane/74's PR #51 (``register_engine_to_mesh``'s
+    ``id_namespaces`` argument, ruled by the architect 2026-10-12) to this SDK's one registration
+    surface: the ID prefixes this kind's own instances carry, e.g. ``("HAZ-", "CSI-")`` for a kind
+    whose extracted identifiers are always hazard or safety-critical-item numbers. ``()`` (the
+    default) means this kind declares no prefix — every kind before this field existed, and any
+    kind whose identifiers carry no stable prefix to claim. THIS MODULE DOES NOT MATCH OR ARBITRATE
+    ON IT, same split :attr:`identity_field` and :attr:`parent_link_field` already state: it only
+    declares which prefixes a kind's instances own, not how a caller resolves a contested prefix
+    (PR #51's own fan-out rule — a contested prefix keeps every declarer — lives where the
+    resolving happens, not here)."""
+
+    arrives_as: tuple[str, ...] = ()
+    """ADDED 0.9.11, architect ruling 2026-10-21 (the "leaf rule"). The arrival formats this
+    kind's instances can come in AS — e.g. ``("pdf",)`` for a kind extracted from a dropped PDF,
+    ``("xml",)`` for one extracted from an XML drop (``s1000d``'s own format), or ``("event",)``
+    for a ``branch="event"`` kind's own arrival channel. A kind may name more than one, e.g. a
+    kind extractable from either a PDF or an XML drop. ``()`` (the default) means this kind
+    declares no drop format — every kind before this field existed, and an event kind whose
+    instances never arrive from a drop at all (e.g. ``maintenance-fault-event``, which seeds a
+    workflow from its own channel, not a file picker).
+
+    **AN OPEN VOCABULARY, NOT A CLOSED ENUM** — same reason :attr:`kind` itself is a bare
+    ``str``: a new arrival format (``"cad"``, a scanner's own export format, ...) is a fact about
+    a kind this module has no business refusing to hold. ``_arrival_formats_are_bare_tokens``
+    checks only that an entry is non-blank with no whitespace, not that it is drawn from the
+    ruling's own three examples.
+
+    **OPTIONAL FOR EVERY BRANCH AND EVERY `domain`, NO EXCEPTIONS** — same ruling
+    :attr:`domain` itself drew (0.9.7, architect-corrected): an earlier draft that REQUIRED a
+    field on every domain-declaring kind is the exact hazard that correction identified. A
+    ``branch="event"`` row is free to declare ``("event",)``, more, or nothing — this module
+    does not infer or enforce what an event kind's own arrival channel is called from its
+    branch, the same split it already draws for :attr:`id_namespaces` on an event row.
+
+    **THIS MODULE DOES NOT OFFER LEAVES.** The ruling: "the leaves offered for a drop are the
+    domain-declaring kinds [i.e. :attr:`domain` is set] whose ``arrives_as`` includes the drop's
+    format" — e.g. for a PDF drop, every kind with ``domain`` set and ``"pdf"`` in
+    ``arrives_as`` (``pcn``, ``pdn``, and ``work-instruction`` all qualify; ``s1000d`` does not,
+    it only arrives as ``xml``). That selection is doc-tools'/invincible-agent's own code to
+    write against these two fields — this module only declares which formats a kind can arrive
+    as, same split :attr:`domain`, :attr:`identity_field`, and :attr:`id_namespaces` already draw
+    between declaring a fact about a kind and resolving or arbitrating on it."""
+
+    review_shape: Optional[Literal["notice", "document"]] = None
+    """ADDED 0.9.11, architect ruling 2026-10-21 ("Q1"): "Each kind declares review_shape in the
+    registry: ``notice`` (pcn, pdn: today's card) or ``document`` (work-instruction, and later
+    others)." The value picks which review card a promotion task opens for this kind's
+    instances — a notice's header fields and parts table, or a document's own (as yet unbuilt)
+    reader — and which reject codes the act accepts. ``None`` (the default) means this kind
+    declares no review card: every kind before this field existed, and any kind that never
+    reaches a promotion task.
+
+    **OPTIONAL FOR EVERY BRANCH, NO EXCEPTIONS** — invincible-agent/lane/01 asked whether a
+    ``branch="event"`` row must leave it ``None``, since an event kind never gets a promotion
+    review: "your call." Ruled the same as :attr:`domain` and :attr:`arrives_as` before it —
+    optional for every kind regardless of branch, not forbidden for one. An event kind that sets
+    it declares a fact that happens to go unused (same as an event kind free to set `domain`
+    though it is never promoted); a branch-specific prohibition here would be the first exception
+    to a pattern this module has now drawn three times running, for a case nobody asked to carry
+    a different answer.
+
+    **THIS MODULE DOES NOT PICK THE CARD, SAME SPLIT EVERY FIELD ABOVE DRAWS.** The BFF reads
+    this value to choose which reader renders; this field only names the choice."""
+
+    label: Optional[str] = None
+    """ADDED 0.9.11, architect ruling 2026-10-21, closing a gap cortex-ui and doc-tools/7f both
+    hit: the registry had no human-readable name to serve alongside an offered leaf, so a reader
+    was reduced to upper-casing :attr:`kind` (giving ``PCN``, but ``WORK-INSTRUCTION`` for
+    ``work-instruction``). ``label`` is this kind's own display name, e.g. ``"PCN"`` or
+    ``"Work Instruction"`` — shown wherever a kind is offered as a choice (a leaf picker, a
+    candidate, a review card's heading). ``None`` (the default) means this kind declares no
+    display name — every kind before this field existed; a caller that still needs something to
+    show falls back to :attr:`kind` itself, the same way it always has.
+
+    **OPTIONAL FOR EVERY KIND, NO EXCEPTIONS** — same "ruled optional, not required" precedent
+    :attr:`domain` drew in 0.9.7 and :attr:`arrives_as`/:attr:`review_shape` repeat above: this
+    is a display convenience, not a gate, and nothing should refuse to register a kind for
+    lacking a pretty name.
+
+    **THIS MODULE DOES NOT RENDER ANYTHING.** It declares the string; a leaf picker, a status
+    chip, or a review card's own template decides where and how it is shown — same split
+    every field above draws between declaring a fact about a kind and consuming it."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
@@ -303,7 +387,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("seeds_workflow", "identity_field", "domain", "parent_link_field")
+    @field_validator("seeds_workflow", "identity_field", "domain", "parent_link_field", "label")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
@@ -313,7 +397,7 @@ class ContentKindRegistration(BaseModel):
             )
         return v
 
-    @field_validator("passes", "outputs")
+    @field_validator("passes", "outputs", "id_namespaces", "arrives_as")
     @classmethod
     def _sequence_is_unique(cls, v: tuple[str, ...], info) -> tuple[str, ...]:
         seen = [x for i, x in enumerate(v) if x in v[:i]]
@@ -321,6 +405,30 @@ class ContentKindRegistration(BaseModel):
             raise ValueError(
                 f"ContentKindRegistration.{info.field_name} repeats {sorted(set(seen))}"
             )
+        return v
+
+    @field_validator("id_namespaces")
+    @classmethod
+    def _namespaces_are_bare_prefixes(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for prefix in v:
+            if len(prefix) < 2 or any(ch.isspace() for ch in prefix):
+                raise ValueError(
+                    f"ContentKindRegistration.id_namespaces entry {prefix!r} — PR #51's own rule: "
+                    f"each prefix is at least 2 characters with no whitespace, or it cannot start "
+                    f"a token of a lookup term"
+                )
+        return v
+
+    @field_validator("arrives_as")
+    @classmethod
+    def _arrival_formats_are_bare_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for fmt in v:
+            if not fmt.strip() or any(ch.isspace() for ch in fmt):
+                raise ValueError(
+                    f"ContentKindRegistration.arrives_as entry {fmt!r} — a format token is "
+                    f"non-blank with no whitespace, or it cannot be compared against a drop's "
+                    f"own format"
+                )
         return v
 
     @model_validator(mode="after")

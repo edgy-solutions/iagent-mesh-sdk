@@ -70,6 +70,28 @@ still owes itself the same re-check this docstring keeps repeating.
 correction to the extraction pipeline's own admin queue, independent of what rides in the graph
 row's ``ProvenanceBlock`` — the audit trail back to the pipeline, not a second copy of the stamp.
 
+── `steward-entered`, THE SEVENTH AND LAST RUNG, RULED BY THE ARCHITECT ON 208's EMPTY-NOTICE
+TASK, 2026-10-23 ──────────────────────────────────────────────────────────────────────────────
+A steward hand-entering a part that no extraction ever produced — not correcting a reading, there
+is no reading to correct. ``steward-corrected`` still has an extraction underneath it;
+``steward-entered`` has only the steward and the page they named. That is the farthest hop this
+vocabulary names, which is why the ruling places it after ``steward-corrected`` and calls it the
+last rung: every degradation path this module distinguishes is now named, and the graph tells a
+corrected row from an entered row only by ``obtained_via`` — which is the point, not a gap to
+close later.
+
+One optional field rides on :class:`ProvenanceBlock` for this rung, and the pairing is NOT the
+same shape ``steward-corrected`` draws (RULED, same day, confirmed directly to both lanes):
+``corrected_by`` (who entered it) is REQUIRED under ``steward-entered``, the same as under
+``steward-corrected`` — an entered row still names a person. ``extracted_value`` is FORBIDDEN
+under ``steward-entered``, the opposite of ``steward-corrected``'s requirement — there is no
+extraction for an entered row to differ from, so a value here would assert a reading that never
+happened. Every other rung still forbids both fields, unchanged.
+
+A seventh value is, once more, a change to the closed ordered tuple ADR-0041's Consequences
+section already warned would need re-checking — see invincible-agent/lane/01's 2026-10-23 packet
+for this repo's own consumers that reason over :data:`OBTAINED_VIA` by position or count.
+
 ── `ingest_id`, ADDED 2026-09-30 ON THE v0.9.5 CUT ORDER ───────────────────────────────────────
 The promotion store (ia-74/lane/74's `IngestGraph`/`IngestIndexes`) keys its cleanup on this one
 field: a promotion or rejection deletes "everything whose block carries the id" by scoping
@@ -94,6 +116,7 @@ __all__ = [
     "MANUAL_EXPORT",
     "USER_DROP",
     "STEWARD_CORRECTED",
+    "STEWARD_ENTERED",
     "OBTAINED_VIA",
     "ObtainedVia",
     "AS_OF_UNKNOWN",
@@ -111,12 +134,15 @@ __all__ = [
 # HOW the claim was obtained — the degradation path, ordered nearest-to-truth. The ORDER is
 # meaningful (it is distance from the authoritative system), not cosmetic. `user-drop` is the
 # fifth rung, added at the far end per ADR-0041 §2; `steward-corrected` is the sixth, added at
-# the same far end per the 2026-10-10 steward-correction ruling — see the module docstring.
-DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED = (
-    "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected")
-OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
+# the same far end per the 2026-10-10 steward-correction ruling; `steward-entered` is the
+# seventh AND LAST, ruled 2026-10-23 — see the module docstring.
+DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED, STEWARD_ENTERED = (
+    "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected",
+    "steward-entered")
+OBTAINED_VIA = (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED,
+                STEWARD_ENTERED)
 
-#: The same six values as a ``Literal`` for pydantic field typing — mirrors
+#: The same seven values as a ``Literal`` for pydantic field typing — mirrors
 #: ``SlotDecl.kind: Literal[SLOT_KINDS]`` in :mod:`iagent_mesh.graph_manifest`, the house pattern
 #: for "one tuple is both the runtime membership check and the static type."
 ObtainedVia = Literal[OBTAINED_VIA]  # type: ignore[valid-type]
@@ -195,15 +221,18 @@ class ProvenanceBlock(BaseModel):
     delete by** (`EdgeIdentityFilter(key=ingest_id)` against `MeshGraphWriter.delete_edges`) — see
     the module docstring's "ingest_id, ADDED 2026-09-30" section."""
     corrected_by: Optional[str] = None
-    """Who corrected this claim — set if and only if ``obtained_via`` is
-    :data:`STEWARD_CORRECTED`. See the module docstring's "steward-corrected, THE SIXTH RUNG"
-    section. Opaque, carried verbatim — this field does not parse it."""
+    """Who corrected OR entered this claim — required when ``obtained_via`` is
+    :data:`STEWARD_CORRECTED` or :data:`STEWARD_ENTERED`, forbidden under every other rung. See
+    the module docstring's "steward-corrected, THE SIXTH RUNG" and "steward-entered, THE SEVENTH
+    AND LAST RUNG" sections. Opaque, carried verbatim — this field does not parse it."""
     extracted_value: Optional[str] = None
     """What automated extraction produced for this claim BEFORE the correction, preserved for
-    audit. Set if and only if ``obtained_via`` is :data:`STEWARD_CORRECTED`. May be blank — "the
-    extraction produced nothing" is itself a legitimate defect to record, not an omission this
-    field refuses. The corrected value is not duplicated here; it is whatever this claim's own
-    field already holds."""
+    audit. Required when ``obtained_via`` is :data:`STEWARD_CORRECTED`, FORBIDDEN when it is
+    :data:`STEWARD_ENTERED` — an entered row has no prior extraction to differ from — and under
+    every other rung. May be blank under ``steward-corrected`` — "the extraction produced
+    nothing" is itself a legitimate defect to record, not an omission this field refuses. The
+    corrected value is not duplicated here; it is whatever this claim's own field already
+    holds."""
 
     @field_validator("authoritative_source", "as_of", "ingested_at", "ingest_run", "standing")
     @classmethod
@@ -236,7 +265,7 @@ class ProvenanceBlock(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _corrected_fields_ride_only_with_steward_corrected(self) -> "ProvenanceBlock":
+    def _corrected_fields_ride_only_with_steward_corrected_or_entered(self) -> "ProvenanceBlock":
         if self.obtained_via == STEWARD_CORRECTED:
             if self.corrected_by is None or self.extracted_value is None:
                 raise ValueError(
@@ -244,11 +273,24 @@ class ProvenanceBlock(BaseModel):
                     "corrected_by and extracted_value — a correction with no corrector or no "
                     "record of what it replaced is not an auditable correction"
                 )
+        elif self.obtained_via == STEWARD_ENTERED:
+            if self.corrected_by is None:
+                raise ValueError(
+                    "ProvenanceBlock(obtained_via='steward-entered') requires corrected_by — "
+                    "an entered row still names who entered it, even with no prior reading to "
+                    "correct"
+                )
+            if self.extracted_value is not None:
+                raise ValueError(
+                    "ProvenanceBlock(obtained_via='steward-entered') forbids extracted_value — "
+                    "there was no extraction for an entered row to differ from"
+                )
         elif self.corrected_by is not None or self.extracted_value is not None:
             raise ValueError(
                 f"ProvenanceBlock.obtained_via={self.obtained_via!r} but corrected_by/"
-                f"extracted_value is set — those two fields assert 'this row was corrected', "
-                f"which only obtained_via='steward-corrected' can be true of"
+                f"extracted_value is set — those two fields assert 'this row was corrected or "
+                f"entered by a steward', which only obtained_via='steward-corrected'/"
+                f"'steward-entered' can be true of"
             )
         return self
 
@@ -275,6 +317,96 @@ class ProvenanceBlock(BaseModel):
         if self.extracted_value is not None:
             block["extracted_value"] = self.extracted_value
         return block
+
+
+class EvidenceRef(BaseModel):
+    """ADDED 0.9.11. A structured, machine-locatable citation into the source document — which
+    page, and a bounding box on that page — for a caller that can jump straight to the region
+    (e.g. a PDF viewer rendering the citation inline) rather than parsing one of
+    :attr:`ExtractionDefect.evidence`'s free-form strings. A sibling, not a replacement:
+    ``evidence`` stays the required, always-present citation; ``evidence_ref`` is the optional,
+    structured one for a source that actually has pages and coordinates to cite.
+
+    **Coordinate convention, RULED 2026-10-21** (architect directive to doc-tools/7f,
+    cortex-ui/master, this SDK): ``bbox`` is page-fraction, ``0..1``, origin TOP-LEFT — unit-free
+    by construction, the same everywhere ``evidence_ref`` appears, so no sibling ``units`` key
+    ever rides beside it. A producer that measures in layout pixels or word-layer points (e.g.
+    ``gateway.py``'s own ``_evidence_ref`` dict today, which carries ``"units": "pt"|"px"``)
+    converts to this page-fraction space BEFORE constructing one of these — this model refuses to
+    carry the unconverted value or a unit tag for it.
+
+    **``note``, RULED 2026-10-21** (architect, same dry-run decision, item 4): this SDK's shape
+    won over the BFF's own free-string ``evidence_ref`` on row/header edits — the BFF's string
+    becomes ``note`` on this model. The BFF (invincible-agent/lane/01-202) runs its own mirror of
+    this shape until it imports this SDK at a version that carries this field.
+
+    **``bbox`` is Optional, RULED 2026-10-21 (second ruling, same day)**: ``page`` may not be
+    null — ``bbox`` may. A null ``bbox`` means "stated on this page, no box we can draw": a
+    citation the source only places on a page, not at a drawable region of it. A card rendering
+    this jumps to the page with no outline and labels it "on page N, no box", rather than
+    fabricating a box or refusing the citation outright. A derived field carries no
+    ``evidence_ref`` at all (ruled separately) — a null ``bbox`` is for a citation that IS
+    page-located but has no finer locus, not for the absence of a citation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    page: int
+    """1-indexed page number, matching how a PDF viewer or a human reader names a page — not
+    0-indexed, which would require every consumer to add 1 before rendering a citation."""
+    bbox: Optional[tuple[float, float, float, float]] = None
+    """``(x0, y0, x1, y1)``, each a fraction of the page in ``0..1``, origin TOP-LEFT: ``(x0, y0)``
+    is the box's upper-left corner, ``(x1, y1)`` its lower-right corner — ``y`` increases
+    DOWNWARD the page, not the bottom-left/upward convention a PDF's own content stream uses.
+    Unit-free: a fraction of the page means the same thing regardless of the source's native DPI,
+    point size, or pixel grid, which is why no ``units`` field exists on this model at all.
+    ``None`` means the citation is page-located but has no drawable region — not "no citation"."""
+    note: Optional[str] = None
+    """ADDED 2026-10-21. Free-form text alongside the structured ``page``/``bbox`` citation — the
+    BFF's own free-string ``evidence_ref`` (e.g. ``"page 1 column header 'Customer Part
+    Number'"``) lands here, not as a second, looser shape for this model. ``None`` by default;
+    when given, must be non-blank — a blank ``note`` is indistinguishable from omitting it, so
+    this model refuses the ambiguity rather than silently accepting it."""
+
+    @field_validator("page")
+    @classmethod
+    def _page_is_at_least_one(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                f"EvidenceRef.page={v} — pages are 1-indexed; a page before the first page is "
+                f"not a citation, it is a mistake"
+            )
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def _note_is_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                "EvidenceRef.note='   ' — set it to the cited text, or leave it unset; a blank "
+                "value is neither"
+            )
+        return v
+
+    @field_validator("bbox")
+    @classmethod
+    def _bbox_is_well_formed(cls, v: Optional[tuple[float, float, float, float]]
+                              ) -> Optional[tuple[float, float, float, float]]:
+        if v is None:
+            return v
+        x0, y0, x1, y1 = v
+        if not all(0.0 <= c <= 1.0 for c in v):
+            raise ValueError(
+                f"EvidenceRef.bbox={v!r} — every coordinate is a page fraction in 0..1 (the "
+                f"2026-10-21 ruling); a value outside that range is unconverted pixel/point "
+                f"geometry, not a citation this model accepts"
+            )
+        if not (x1 > x0 and y1 > y0):
+            raise ValueError(
+                f"EvidenceRef.bbox={v!r} — (x1, y1) must be strictly greater than (x0, y0), or "
+                f"the box has zero or negative area and cites nothing"
+            )
+        return v
 
 
 class ExtractionDefect(BaseModel):
@@ -321,6 +453,13 @@ class ExtractionDefect(BaseModel):
     anything machine-checkable. Same grammar, and the same non-empty requirement, as
     :attr:`iagent_mesh.systems_of_record.Origin.evidence` states for ``resolved_by='record'``: a
     correction with nothing cited is indistinguishable from a guess wearing a corrected label."""
+    evidence_ref: Optional[EvidenceRef] = None
+    """ADDED 0.9.11. The structured sibling to ``evidence`` above — a page/bbox citation, for a
+    source that has pages and coordinates to cite. ``None`` (the default) means this correction
+    cites nothing more locatable than ``evidence``'s own strings, true of every defect before
+    this field existed and of any source (a spreadsheet cell, a database row) with no page or
+    bounding box to name. This field does not relax ``evidence``'s own non-empty requirement —
+    the two are independent; a correction can carry a structured ref with or without one."""
 
     @field_validator("artifact_id", "pin_digest", "corrected_value")
     @classmethod
@@ -389,11 +528,20 @@ def make_provenance(*, authoritative_source: str, obtained_via: str, as_of: Opti
                 "obtained_via='steward-corrected' requires both corrected_by and "
                 "extracted_value — a correction with no corrector or no record of what it "
                 "replaced is not an auditable correction")
+    elif obtained_via == STEWARD_ENTERED:
+        if not corrected_by:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' requires corrected_by — an entered row still "
+                "names who entered it, even with no prior reading to correct")
+        if extracted_value is not None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' forbids extracted_value — there was no "
+                "extraction for an entered row to differ from")
     elif corrected_by is not None or extracted_value is not None:
         raise ProvenanceIncomplete(
             f"obtained_via={obtained_via!r} but corrected_by/extracted_value was supplied — "
-            f"those two fields assert 'this row was corrected', which only "
-            f"obtained_via='steward-corrected' can be true of")
+            f"those two fields assert 'this row was corrected or entered by a steward', which "
+            f"only obtained_via='steward-corrected'/'steward-entered' can be true of")
     block = {
         "authoritative_source": authoritative_source,
         "obtained_via": obtained_via,
@@ -434,11 +582,21 @@ def validate_provenance(block: Any) -> None:
                 "obtained_via='steward-corrected' requires both corrected_by and "
                 "extracted_value — a correction with no corrector or no record of what it "
                 "replaced is not an auditable correction")
+    elif block["obtained_via"] == STEWARD_ENTERED:
+        if not corrected_by:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' requires corrected_by — an entered row still "
+                "names who entered it, even with no prior reading to correct")
+        if extracted_value is not None:
+            raise ProvenanceIncomplete(
+                "obtained_via='steward-entered' forbids extracted_value — there was no "
+                "extraction for an entered row to differ from")
     elif corrected_by is not None or extracted_value is not None:
         raise ProvenanceIncomplete(
             f"obtained_via={block['obtained_via']!r} but corrected_by/extracted_value is "
-            f"present — those two fields assert 'this row was corrected', which only "
-            f"obtained_via='steward-corrected' can be true of")
+            f"present — those two fields assert 'this row was corrected or entered by a "
+            f"steward', which only obtained_via='steward-corrected'/'steward-entered' can be "
+            f"true of")
 
 
 def require_provenance(assertion: dict, *, key: str = "provenance") -> dict:

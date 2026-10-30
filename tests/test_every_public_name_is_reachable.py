@@ -88,8 +88,8 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: from `import iagent_mesh`.
 _EXPORTED = {
     "conformance", "declarations", "discovery", "edge_types", "enumeration",
-    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "provenance", "results",
-    "rows", "shapes", "systems_of_record", "task_kinds", "workflow_case",
+    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "provenance", "refusal",
+    "results", "rows", "shapes", "systems_of_record", "task_kinds", "workflow_case",
     "workflow_definition", "write_results",
 }
 

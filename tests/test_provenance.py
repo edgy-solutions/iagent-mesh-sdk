@@ -20,8 +20,10 @@ from iagent_mesh.provenance import (
     MANUAL_EXPORT,
     OBTAINED_VIA,
     STEWARD_CORRECTED,
+    STEWARD_ENTERED,
     USER_DROP,
     WAREHOUSE,
+    EvidenceRef,
     ExtractionDefect,
     ProvenanceBlock,
     ProvenanceIncomplete,
@@ -80,23 +82,32 @@ def test_ingest_id_appears_only_when_set():
 
 
 # ── the ordered tuple, `user-drop` its fifth rung (ADR-0041 §2), `steward-corrected` its ────
-# sixth (invincible-agent/lane/01's steward-correction ruling, 2026-10-10) ──────────────────
+# sixth (invincible-agent/lane/01's steward-correction ruling, 2026-10-10), `steward-entered` ─
+# its seventh AND LAST (the architect's 2026-10-23 ruling on 208's empty-notice task) ─────────
 
-def test_obtained_via_is_the_six_rung_tuple_ruled_by_adr_0041_and_the_steward_ruling():
-    """Pinned to the exact tuple both rulings produce, not a re-derivation of it — the order is
-    meaningful (nearest-to-truth first) and this is the contract, not an implementation detail."""
-    assert OBTAINED_VIA == (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED)
+def test_obtained_via_is_the_seven_rung_tuple_ruled_by_adr_0041_and_the_steward_rulings():
+    """Pinned to the exact tuple all three rulings produce, not a re-derivation of it — the
+    order is meaningful (nearest-to-truth first) and this is the contract, not an implementation
+    detail."""
+    assert OBTAINED_VIA == (
+        DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP, STEWARD_CORRECTED, STEWARD_ENTERED,
+    )
     assert OBTAINED_VIA == (
         "direct", "etl", "warehouse", "manual-export", "user-drop", "steward-corrected",
+        "steward-entered",
     )
-    assert OBTAINED_VIA[-1] == STEWARD_CORRECTED, (
-        "steward-corrected must be the FARTHEST rung — a steward retyping a value is a human "
-        "intermediary correcting a reading, not the authoritative system itself, the same "
-        "kind of hop user-drop already is"
+    assert OBTAINED_VIA[-1] == STEWARD_ENTERED, (
+        "steward-entered must be the FARTHEST rung — an entered row has only the steward and "
+        "a page, not even a reading to correct, which the 2026-10-23 ruling names as the last "
+        "rung this vocabulary needs"
     )
-    assert OBTAINED_VIA[-2] == USER_DROP, (
-        "user-drop must still be the SECOND-farthest rung — appending steward-corrected after "
-        "it must not have reordered what was already there"
+    assert OBTAINED_VIA[-2] == STEWARD_CORRECTED, (
+        "steward-corrected must still be the SECOND-farthest rung — appending steward-entered "
+        "after it must not have reordered what was already there"
+    )
+    assert OBTAINED_VIA[-3] == USER_DROP, (
+        "user-drop must still be the THIRD-farthest rung — appending steward-corrected and "
+        "steward-entered after it must not have reordered what was already there"
     )
 
 
@@ -106,6 +117,40 @@ def test_user_drop_is_a_legal_obtained_via_on_both_entry_points():
     assert block["obtained_via"] == "user-drop"
     ProvenanceBlock(**{**VALID, "obtained_via": USER_DROP, "as_of": AS_OF_UNKNOWN,
                         "standing": "supervised"})  # does not raise
+
+
+_ENTERED_VALID = {**VALID, "obtained_via": STEWARD_ENTERED, "corrected_by": "alice"}
+
+
+def test_steward_entered_is_a_legal_obtained_via_on_both_entry_points():
+    """steward-entered rides through the SAME constructor as every other rung — no parallel
+    path — but its own pairing is the MIRROR of steward-corrected's: corrected_by required,
+    extracted_value forbidden (confirmed by the architect, same day, to both lanes)."""
+    block = make_provenance(**_ENTERED_VALID)
+    assert block["obtained_via"] == "steward-entered"
+    assert block["corrected_by"] == "alice"
+    assert "extracted_value" not in block
+    pb = ProvenanceBlock(**_ENTERED_VALID)  # does not raise
+    assert pb.as_dict()["corrected_by"] == "alice"
+    assert "extracted_value" not in pb.as_dict()
+
+
+def test_steward_entered_requires_corrected_by():
+    bad = {k: v for k, v in _ENTERED_VALID.items() if k != "corrected_by"}
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        make_provenance(**bad)
+    with pytest.raises(ValidationError):
+        ProvenanceBlock(**bad)
+
+
+def test_steward_entered_forbids_extracted_value():
+    """The mirror image of steward-corrected's requirement — there was no extraction for an
+    entered row to differ from."""
+    bad = {**_ENTERED_VALID, "extracted_value": "F-16"}
+    with pytest.raises(ProvenanceIncomplete, match="extracted_value"):
+        make_provenance(**bad)
+    with pytest.raises(ValidationError):
+        ProvenanceBlock(**bad)
 
 
 # ── `steward-corrected`, its `corrected_by`/`extracted_value` pairing, both entry points ──
@@ -141,6 +186,9 @@ def test_corrected_by_and_extracted_value_are_REQUIRED_together_under_steward_co
 
 
 def test_corrected_by_and_extracted_value_are_REFUSED_under_any_other_rung():
+    """steward-entered is excluded here — its own pairing (corrected_by required, extracted_value
+    forbidden) is the mirror of this one, not a member of it. See the steward-entered tests
+    above."""
     for rung in (DIRECT, ETL, WAREHOUSE, MANUAL_EXPORT, USER_DROP):
         bad = {**VALID, "obtained_via": rung, "corrected_by": "bob", "extracted_value": "x"}
         if rung == USER_DROP:
@@ -158,6 +206,14 @@ def test_validate_provenance_enforces_the_same_pairing_on_the_dict_path():
         validate_provenance({**VALID, "corrected_by": "bob", "extracted_value": "x"})
     with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
         validate_provenance({**_STEWARD_VALID, "corrected_by": None})
+
+
+def test_validate_provenance_enforces_the_steward_entered_pairing_on_the_dict_path():
+    validate_provenance(make_provenance(**_ENTERED_VALID))  # does not raise
+    with pytest.raises(ProvenanceIncomplete, match="corrected_by"):
+        validate_provenance({**VALID, "obtained_via": STEWARD_ENTERED})
+    with pytest.raises(ProvenanceIncomplete, match="extracted_value"):
+        validate_provenance({**_ENTERED_VALID, "extracted_value": "F-16"})
 
 
 # ── ExtractionDefect, the companion admin-queue record the same ruling names ──────────────
@@ -200,6 +256,90 @@ def test_extraction_defect_is_frozen_and_forbids_extra_fields():
         d.corrected_value = "something-else"  # type: ignore[misc]
     with pytest.raises(ValidationError):
         ExtractionDefect(**_DEFECT_VALID, corrected_by="bob")  # type: ignore[call-arg]
+
+
+# ── EvidenceRef, ADDED 0.9.11 — the structured sibling to evidence ───────────────────────
+# bbox is a page fraction, 0..1, origin top-left (architect ruling 2026-10-21) — the fixture's
+# coordinates are fractions of the page, never layout pixels or points.
+
+_REF_VALID = dict(page=3, bbox=(0.1, 0.2, 0.6, 0.7))
+
+
+def test_evidence_ref_builds_from_the_valid_fixture():
+    ref = EvidenceRef(**_REF_VALID)
+    assert ref.page == 3
+    assert ref.bbox == (0.1, 0.2, 0.6, 0.7)
+
+
+def test_evidence_ref_page_must_be_at_least_one():
+    with pytest.raises(ValidationError, match="page"):
+        EvidenceRef(**{**_REF_VALID, "page": 0})
+
+
+def test_evidence_ref_bbox_must_have_positive_area():
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 0.1, 0.7)})  # x1 == x0
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 0.05, 0.7)})  # x1 < x0
+
+
+def test_evidence_ref_bbox_must_be_a_page_fraction():
+    # the 2026-10-21 ruling: 0..1 only — anything outside is unconverted pixel/point geometry.
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (-0.1, 0.2, 0.6, 0.7)})  # x0 < 0
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (0.1, 0.2, 1.6, 0.7)})  # x1 > 1
+    with pytest.raises(ValidationError, match="bbox"):
+        EvidenceRef(**{**_REF_VALID, "bbox": (10.0, 20.0, 110.0, 70.0)})  # layout pixels, unconverted
+
+
+def test_evidence_ref_is_frozen_and_forbids_extra_fields():
+    ref = EvidenceRef(**_REF_VALID)
+    with pytest.raises(ValidationError):
+        ref.page = 4  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        EvidenceRef(**_REF_VALID, bogus="x")  # type: ignore[call-arg]
+
+
+def test_evidence_ref_note_defaults_to_none():
+    ref = EvidenceRef(**_REF_VALID)
+    assert ref.note is None
+
+
+def test_evidence_ref_accepts_the_bff_s_free_string_as_note():
+    # the architect's 2026-10-21 ruling: the SDK's {page, bbox} shape wins; the BFF's own free
+    # string lands here as `note`, not as a second, looser shape for this model.
+    ref = EvidenceRef(**_REF_VALID, note="page 1 column header 'Customer Part Number'")
+    assert ref.note == "page 1 column header 'Customer Part Number'"
+
+
+def test_evidence_ref_note_must_not_be_blank_when_given():
+    with pytest.raises(ValidationError, match="note"):
+        EvidenceRef(**_REF_VALID, note="   ")
+
+
+def test_evidence_ref_bbox_may_be_null():
+    # the architect's second 2026-10-21 ruling: null bbox means "stated on this page, no box
+    # we can draw" — page stays required, bbox alone may be omitted.
+    ref = EvidenceRef(page=3, bbox=None)
+    assert ref.page == 3
+    assert ref.bbox is None
+
+
+def test_evidence_ref_page_is_still_required_when_bbox_is_null():
+    with pytest.raises(ValidationError, match="page"):
+        EvidenceRef(bbox=None)  # type: ignore[call-arg]
+
+
+def test_extraction_defect_evidence_ref_defaults_to_none():
+    d = ExtractionDefect(**_DEFECT_VALID)
+    assert d.evidence_ref is None
+
+
+def test_extraction_defect_accepts_a_structured_evidence_ref_alongside_evidence():
+    d = ExtractionDefect(**{**_DEFECT_VALID, "evidence_ref": _REF_VALID})
+    assert d.evidence_ref == EvidenceRef(**_REF_VALID)
+    assert d.evidence == ("pin:pin-2026-10-10-001",)  # unchanged, still required
 
 
 def test_an_unknown_obtained_via_is_refused_on_both_entry_points():
