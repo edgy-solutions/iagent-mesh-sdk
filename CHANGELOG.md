@@ -6,7 +6,7 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## Unreleased — `lane/ca-0.9.11`
+## 0.9.11 — 2026-10-29
 
 ### Added
 - `EvidenceRef` (`iagent_mesh/provenance.py`) / `ExtractionDefect.evidence_ref` — a structured
