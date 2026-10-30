@@ -200,7 +200,11 @@ from .refusal import Refusal
 # above); `load_content_kind_registrations` is unambiguous and comes to the root instead.
 from .ingest import (
     CONTENT_KIND_BRANCHES,
+    EMITTABLE_CODES,
     INGEST_STAGES,
+    REASON_CODE_SLUG_RE,
+    REASON_CODES,
+    RESERVED_TO_LANE_1,
     ArtifactRevision,
     ContentKindBranch,
     ContentKindRegistration,
@@ -350,6 +354,38 @@ from .workflow_definition import (
     load_workflow_definition,
 )
 
+# Generic text normalization for identity comparison — no domain knowledge, see the module
+# docstring for why no corporate-suffix/revision-dot handling belongs here.
+from .normalize import normalize_mpn
+
+# The shared export-profile header (architect directive, 2026-10-30) — one shape three
+# independently-evolved producers each return under their own `header()` method; see the module
+# docstring for the field-set history (`scope` vs `granularity`) and the exact field list ruled.
+from .export_profile import ExportProfileHeader
+
+# ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
+# architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
+# might eventually agree on only resolves to one thing from one import path.
+from .persistence import (
+    ArtifactRef,
+    BlobRef,
+    DocumentManifest,
+    PersistedClass,
+    PersistenceDescriptor,
+)
+
+# The review-coverage record (architect directive, 2026-10-30) and the review-shape registry row
+# it is validated against — typed exactly per Lane 1's wire-answer packet to cortex-ui (see the
+# module docstring for the packet path). Re-exported at root for the same reason `provenance` is:
+# "ca types it, the BFF imports it" only resolves to one shape from one import path.
+from .review_coverage import (
+    ReviewCoverage,
+    ReviewCoverageGroup,
+    ReviewCoverageSharedFact,
+    ReviewShapeRow,
+    ReviewShapeRule,
+)
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -478,6 +514,12 @@ __all__ = [
     "load_content_kind_registrations",
     "registered_kinds",
     "resolve_content_kind",
+    # the ingest reason-code vocabulary, generalized from doc-tools' own documented stopgap
+    # (doc_tools/utils/ingest_failure.py) — see iagent_mesh/ingest.py for the quoted exception
+    "REASON_CODES",
+    "RESERVED_TO_LANE_1",
+    "EMITTABLE_CODES",
+    "REASON_CODE_SLUG_RE",
     "MeshClient",
     "MeshResponse",
     "CallerIdentity",
@@ -588,4 +630,20 @@ __all__ = [
     "WorkflowDefinition",
     "WorkflowDefinitionError",
     "load_workflow_definition",
+    # generic text normalization for identity comparison
+    "normalize_mpn",
+    # the shared export-profile header (architect directive, 2026-10-30)
+    "ExportProfileHeader",
+    # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
+    "ArtifactRef",
+    "BlobRef",
+    "DocumentManifest",
+    "PersistedClass",
+    "PersistenceDescriptor",
+    # the review-coverage record and review-shape registry row (architect directive, 2026-10-30)
+    "ReviewCoverage",
+    "ReviewCoverageGroup",
+    "ReviewCoverageSharedFact",
+    "ReviewShapeRow",
+    "ReviewShapeRule",
 ]

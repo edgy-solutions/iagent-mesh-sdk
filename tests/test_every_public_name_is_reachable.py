@@ -87,10 +87,10 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: Modules whose public surface IS the package's surface. Every `__all__` name must be reachable
 #: from `import iagent_mesh`.
 _EXPORTED = {
-    "conformance", "declarations", "discovery", "edge_types", "enumeration",
-    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "provenance", "refusal",
-    "results", "rows", "shapes", "systems_of_record", "task_kinds", "workflow_case",
-    "workflow_definition", "write_results",
+    "conformance", "declarations", "discovery", "edge_types", "enumeration", "export_profile",
+    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "normalize", "persistence",
+    "provenance", "refusal", "results", "review_coverage", "rows", "shapes", "systems_of_record",
+    "task_kinds", "workflow_case", "workflow_definition", "write_results",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a

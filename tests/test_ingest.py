@@ -15,11 +15,16 @@ from pydantic import ValidationError
 
 from iagent_mesh.declarations import DeclarationError
 from iagent_mesh.interfaces import Initiator
+from iagent_mesh.persistence import PersistedClass, PersistenceDescriptor
 from iagent_mesh.provenance import DIRECT, ProvenanceBlock
 from iagent_mesh.task_kinds import UNDECLARED, resolve as resolve_task_kind
 from iagent_mesh.ingest import (
     CONTENT_KIND_BRANCHES,
+    EMITTABLE_CODES,
     INGEST_STAGES,
+    REASON_CODE_SLUG_RE,
+    REASON_CODES,
+    RESERVED_TO_LANE_1,
     ArtifactRevision,
     ContentKindRegistration,
     ContentKindUnregistered,
@@ -458,9 +463,11 @@ def test_a_kind_declares_document_review_shape():
     assert row.review_shape == "document"
 
 
-def test_review_shape_rejects_a_value_outside_the_closed_set():
-    with pytest.raises(ValidationError, match="review_shape"):
-        ContentKindRegistration(**{**VALID_REGISTRATION, "review_shape": "ledger"})
+def test_review_shape_is_an_open_vocabulary_not_a_closed_enum():
+    """REOPENED 2026-10-30, reversing the 2026-10-21 closed-Literal ruling on purpose: a new
+    review shape (course, finding) is now a registry row, not an SDK release."""
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "review_shape": "course"})
+    assert row.review_shape == "course"
 
 
 def test_event_branch_may_declare_review_shape():
@@ -499,6 +506,37 @@ def test_label_may_contain_spaces_unlike_arrives_as_entries():
     take, not arrives_as's no-whitespace rule."""
     row = ContentKindRegistration(**{**VALID_REGISTRATION, "label": "Product Change Notice"})
     assert row.label == "Product Change Notice"
+
+
+# ── persists, ADDED per ADR-0060 (types only, 0.9.12) ───────────────────────────────────────
+
+def test_persists_defaults_to_none_a_kind_declares_no_persistence_descriptor():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.persists is None
+
+
+def test_a_kind_declares_its_persistence_descriptor():
+    descriptor = PersistenceDescriptor(
+        classes=(
+            PersistedClass(
+                output_class="mfg:WorkInstruction", store="neo4j", identity_field="instance_id",
+            ),
+        )
+    )
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "persists": descriptor})
+    assert row.persists.classes[0].output_class == "mfg:WorkInstruction"
+
+
+def test_event_branch_may_also_declare_persists():
+    """persists does not interact with branch — _branch_shape_is_consistent never references
+    it, same "optional for every branch, no exceptions" precedent domain/arrives_as/label draw."""
+    descriptor = PersistenceDescriptor(
+        classes=(
+            PersistedClass(output_class="mfg:Fault", store="neo4j", identity_field="event_id"),
+        )
+    )
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "persists": descriptor})
+    assert row.persists.classes[0].output_class == "mfg:Fault"
 
 
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
@@ -660,3 +698,35 @@ def test_validate_dir_resolves_and_picks_from_the_loaded_rows(tmp_path):
     resolve_content_kind("work-instruction", rows)  # does not raise
     with pytest.raises(ContentKindUnregistered):
         resolve_content_kind("mystery-kind", rows)
+
+
+# ── REASON_CODES, generalized from doc-tools' own documented stopgap (0.9.12) ──────────────
+# doc_tools/utils/ingest_failure.py declared this vocabulary locally, naming `iagent_mesh.ingest`
+# by module and stating "it exports ... nothing resembling `REASON_CODES`... It MUST be replaced
+# by an SDK import the moment the SDK ships one." These four tests cover the two names that
+# matter for 0.9.12's architect directive: `vision_timeout` is emittable, `timeout` is not.
+
+def test_vision_timeout_is_in_the_reason_code_vocabulary():
+    assert "vision_timeout" in REASON_CODES
+
+
+def test_vision_timeout_is_emittable_not_reserved_to_lane_1():
+    """ADDED 2026-10-30 per architect directive: a vision-model extraction step's own timeout is
+    a producer's to emit, distinct from the ingest watchdog's `timeout` below."""
+    assert "vision_timeout" in EMITTABLE_CODES
+    assert "vision_timeout" not in RESERVED_TO_LANE_1
+
+
+def test_timeout_is_reserved_to_lane_1_and_not_emittable():
+    """`timeout` names the ingest watchdog's own code — recognised, never emitted by a producer
+    (same split doc-tools' own `classify()` draws: it never returns this code)."""
+    assert "timeout" in RESERVED_TO_LANE_1
+    assert "timeout" not in EMITTABLE_CODES
+
+
+def test_every_reason_code_is_a_valid_slug():
+    """The wire rule `REASON_CODE_SLUG_RE` must hold for every member of the vocabulary it
+    governs — a code that fails its own shape rule is a defect in the vocabulary, not a caller
+    error."""
+    for code in REASON_CODES:
+        assert REASON_CODE_SLUG_RE.match(code), f"{code!r} is not a valid reason-code slug"

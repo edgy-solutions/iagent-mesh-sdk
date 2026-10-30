@@ -34,11 +34,16 @@ are independent, same as :class:`iagent_mesh.provenance.ExtractionDefect`'s ``ev
 
 from __future__ import annotations
 
+import json
+from typing import Any, Optional
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 __all__ = [
     "Refusal",
 ]
+
+_TERMINAL_PREFIX = "refusal:"
 
 
 class Refusal(BaseModel):
@@ -88,3 +93,36 @@ class Refusal(BaseModel):
                     f"name is indistinguishable from no candidate at all; omit it instead"
                 )
         return v
+
+    def to_terminal(self) -> str:
+        """Serializes this refusal into the one-string payload a Restate `TerminalError` message
+        carries. The SDK does not import or depend on `restate` — a caller does
+        `raise restate.TerminalError(refusal.to_terminal())` itself; this method only produces the
+        string. Deterministic (`sort_keys`) so the same refusal always serializes identically."""
+        body = {
+            "policy_id": self.policy_id,
+            "missing_binding": self.missing_binding,
+            "grantable_by": self.grantable_by,
+            "candidates": list(self.candidates),
+        }
+        return _TERMINAL_PREFIX + json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_terminal(cls, message: Any) -> Optional["Refusal"]:
+        """The inverse of `to_terminal`. Returns `None` — never raises — on anything that is not
+        a carried refusal: a non-string, a string without the prefix, invalid JSON, a JSON value
+        that is not an object, or an object that fails `Refusal`'s own validation (e.g. a blank
+        required field). A caller distinguishes "not a refusal" from "a malformed one" only by
+        this returning `None` either way, matching the engine-side stopgap this formalizes."""
+        if not isinstance(message, str) or not message.startswith(_TERMINAL_PREFIX):
+            return None
+        try:
+            body = json.loads(message[len(_TERMINAL_PREFIX):])
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(body, dict):
+            return None
+        try:
+            return cls.model_validate(body)
+        except Exception:
+            return None

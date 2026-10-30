@@ -51,6 +51,7 @@ filled in later would be the optional join ADR-0035 refuses, one layer earlier.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable, Literal, Optional
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .declarations import DeclarationError, compose_rows, load_rows
 from .interfaces import Initiator
+from .persistence import PersistenceDescriptor
 from .provenance import ProvenanceBlock
 
 __all__ = [
@@ -76,6 +78,10 @@ __all__ = [
     "load_content_kind_registrations",
     "compose",
     "validate_dir",
+    "REASON_CODES",
+    "RESERVED_TO_LANE_1",
+    "EMITTABLE_CODES",
+    "REASON_CODE_SLUG_RE",
 ]
 
 # ── THE STAGE VOCABULARY, CLOSED, ORDERED NEAREST-TO-ARRIVAL FIRST ──────────────────────────
@@ -114,6 +120,55 @@ _TERMINAL_STAGES = ("promoted", "rejected", "failed")
 #: promotion fact this module does not model — the SDK does not re-carry a field another
 #: document already owns.
 _DETAIL_REQUIRED_STAGES = ("rejected", "failed")
+
+
+# ── THE REASON-CODE VOCABULARY, GENERALIZED FROM A DOCUMENTED STOPGAP ───────────────────────
+# doc-tools declared this vocabulary locally, at `doc_tools/utils/ingest_failure.py`, with its
+# own module docstring stating the exception by name: "Measured against `iagent_mesh.ingest`: it
+# exports `INGEST_STAGES`, `IngestStatus`, `ContentKindUnregistered`, `_TERMINAL_STAGES` and
+# `_DETAIL_REQUIRED_STAGES`, and nothing resembling `REASON_CODES`... It MUST be replaced by an
+# SDK import the moment the SDK ships one." This block is that import's destination. The names
+# below mirror doc-tools' own exactly — `REASON_CODES`, `RESERVED_TO_LANE_1`, `EMITTABLE_CODES`,
+# `REASON_CODE_SLUG_RE` — so doc-tools' own migration is "import these, delete the local copy",
+# not a rename exercise.
+#
+# Comments here are written GENERICALLY, unlike doc-tools' own raise-site comments (e.g. "the F3
+# guard", "the RuntimeError for a missing/unparseable sidecar manifest") — those name doc-tools'
+# own internal guards, which this shared vocabulary has no business carrying. What a code MEANS,
+# not where doc-tools happens to raise it today, is the part every future producer needs.
+REASON_CODES: frozenset[str] = frozenset({
+    "kind_unregistered",       # content_kind absent and unregistered (ADR-0021 rule 3 HALT)
+    "sidecar_unreadable",      # a sidecar manifest was missing or could not be parsed
+    "domain_is_a_format",      # a format token (e.g. "pdf", "cad") arrived where a domain belongs
+    "content_kind_is_a_hash",  # a content_kind value was actually a hash, not a kind
+    "ingest_id_malformed",     # the ingest id did not match its canonical shape
+    "extraction_failed",       # an extraction pass raised
+    "extraction_empty",        # an extraction pass completed but produced zero reviewable rows
+    "graph_write",             # a store write (graph/triple-store) failed
+    "link_write",              # a link write (e.g. a parent/child or cross-reference edge) failed
+    "concept_parse",           # a concept/term parse step failed
+    # `vision_timeout` — ADDED 2026-10-30, architect directive, placing it in `REASON_CODES`.
+    # A vision-model extraction STEP exceeded its OWN timeout budget — distinct from `timeout`
+    # below, which is `RESERVED_TO_LANE_1` (the ingest watchdog's own, lane-owned code). A
+    # producer running a vision pass times out at its own layer and must emit `vision_timeout`,
+    # never borrow the reserved `timeout` code for a failure that is not the watchdog's. This
+    # resolves an earlier flagged ambiguity about whether `vision_timeout` was a duration
+    # constant — it is not; it is a reason-code slug like every sibling in this set.
+    "vision_timeout",
+    "timeout",                 # Lane 1's ingest watchdog; RESERVED_TO_LANE_1 — recognised, never emitted here
+    "unexpected_error",        # total fallback
+})
+
+#: Codes this module recognises but never emits itself — the ingest watchdog's own, so a
+#: producer's failure path must not borrow it for a failure that is not the watchdog's.
+RESERVED_TO_LANE_1: frozenset[str] = frozenset({"timeout"})
+
+#: What a producer may actually emit — `REASON_CODES` minus the codes reserved to the watchdog.
+EMITTABLE_CODES: frozenset[str] = REASON_CODES - RESERVED_TO_LANE_1
+
+#: The wire shape a `reason_code` must match: lowercase, starts with a letter, `[a-z0-9_]*`,
+#: capped at 64 characters. Mirrors doc-tools' own wire rule for the same field.
+REASON_CODE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class ContentKindUnregistered(LookupError):
@@ -336,7 +391,7 @@ class ContentKindRegistration(BaseModel):
     as, same split :attr:`domain`, :attr:`identity_field`, and :attr:`id_namespaces` already draw
     between declaring a fact about a kind and resolving or arbitrating on it."""
 
-    review_shape: Optional[Literal["notice", "document"]] = None
+    review_shape: Optional[str] = None
     """ADDED 0.9.11, architect ruling 2026-10-21 ("Q1"): "Each kind declares review_shape in the
     registry: ``notice`` (pcn, pdn: today's card) or ``document`` (work-instruction, and later
     others)." The value picks which review card a promotion task opens for this kind's
@@ -355,7 +410,17 @@ class ContentKindRegistration(BaseModel):
     a different answer.
 
     **THIS MODULE DOES NOT PICK THE CARD, SAME SPLIT EVERY FIELD ABOVE DRAWS.** The BFF reads
-    this value to choose which reader renders; this field only names the choice."""
+    this value to choose which reader renders; this field only names the choice.
+
+    **REOPENED 2026-10-30, architect ruling, reversing 2026-10-21 Q1 ON PURPOSE:** the closed
+    ``Literal`` became the wrong shape the moment a new review shape (``course``, ``finding``,
+    alongside ``notice``/``document``) needed a row, not an SDK release, to exist — exactly the
+    generic-at-birth standing rule's test 2 ("a new behaviour is reachable by adding a row, not a
+    branch"). The field is now an open string; realness-checking a given value moves to whichever
+    layer owns the served registry (the BFF/leaf-picker), which becomes the new deny-by-default
+    boundary in this value's place. This module still declares the fact, never arbitrates it —
+    same split every field in this class draws — it simply no longer ALSO enforces a closed
+    membership test at declaration time."""
 
     label: Optional[str] = None
     """ADDED 0.9.11, architect ruling 2026-10-21, closing a gap cortex-ui and doc-tools/7f both
@@ -375,6 +440,19 @@ class ContentKindRegistration(BaseModel):
     **THIS MODULE DOES NOT RENDER ANYTHING.** It declares the string; a leaf picker, a status
     chip, or a review card's own template decides where and how it is shown — same split
     every field above draws between declaring a fact about a kind and consuming it."""
+
+    persists: Optional[PersistenceDescriptor] = None
+    """ADDED per ADR-0060, types only (0.9.12). This kind's persistence descriptor — where each
+    output class lives and what a generated read verb may expose about it. ``None`` (the
+    default) means this kind declares no persistence descriptor: every kind before this field
+    existed, and any kind ADR-0060's behavior has not yet been ruled on for.
+
+    **THIS FIELD DOES NOT INTERACT WITH `branch`, AND NOTHING BELOW ENFORCES IT.** Same "ruled
+    optional, not required, no exceptions" precedent :attr:`domain`/:attr:`arrives_as`/
+    :attr:`label` draw: :func:`_branch_shape_is_consistent` does not reference it, so an
+    ``event`` row is as free to carry one as a ``document`` row. See
+    :mod:`iagent_mesh.persistence`'s own module docstring — this is a type, not behavior; the
+    origin-rule/verb-generation machinery ADR-0060 describes is unbuilt."""
 
     @field_validator("kind")
     @classmethod
