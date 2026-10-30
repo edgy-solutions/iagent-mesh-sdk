@@ -381,6 +381,22 @@ class MeshGraph(Protocol):
         there is indistinguishable from a considered one.
         """
 
+    def is_safety_critical(self, initiator: Initiator, *, mpn: str, domain: str) -> MeshResult:
+        """True iff ``mpn`` is safety-critical in ``domain``, per the graph.
+
+        **TYPE NOW, ROUTE LATER — architect ruling, 2026-10-30.** This signature exists so the
+        interface surface is complete; it ships with NO implementation and no producer wires it
+        yet. The one real decision-maker today is a static, domain-scoped list in
+        ``agent_fleet/safety_agent/safety_critical.py`` (``safety_critical(mpn, domain) -> bool``,
+        merged PR #125), whose own module docstring already calls itself a placeholder for "the
+        graph read (a mesh SDK call)" that replaces it — and whose test
+        (``tests/safety/test_the_safety_critical_rule_is_the_only_decision.py``) reds on any
+        SECOND implementation of this decision. Porting that static list's body here would BE
+        that second implementation, which is exactly what this stub must not do. A concrete
+        graph-backed answer waits on a concrete ``MeshGraph`` client (v0.9.13) and an explicit
+        producer wiring — until then this method exists to be typed against, not called.
+        """
+
 
 @runtime_checkable
 class MeshOntology(Protocol):

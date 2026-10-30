@@ -74,10 +74,17 @@ def test_no_new_exception_for_a_delegate_at_the_write_boundary():
 def test_the_read_interfaces_gained_NO_new_method():
     """Ruled: sibling Protocols, never new methods on the read interfaces. Pinning the exact
     method sets so a write method added here-by-mistake is caught by name, not by a vaguer
-    'still read-only' shape check."""
+    'still read-only' shape check.
+
+    AMENDED 2026-10-30, architect ruling: `is_safety_critical` joined `MeshGraph` as a TYPE-ONLY
+    stub — no implementation, no producer wired — so the interface surface is complete ahead of
+    a concrete graph-backed client (v0.9.13). Still a read (it answers a question, writes
+    nothing), so it is the same kind of widening `verbs_for`'s row-shape change was: the method
+    SET pinned here moves because the ruling said so, not because the "never new methods" rule
+    was relaxed for writes."""
     assert {n for n in dir(MeshGraph) if not n.startswith("_") and n != "MODES"} == {
         "registry", "providers_for", "classes_with_a_verb", "data_assets_for",
-        "edge", "path", "operable_subjects", "verbs_for", "ancestors",
+        "edge", "path", "operable_subjects", "verbs_for", "ancestors", "is_safety_critical",
     }
     assert {n for n in dir(MeshOntology) if not n.startswith("_") and n != "MODES"} == {"ask", "construct"}
     assert {n for n in dir(MeshVectors) if not n.startswith("_") and n != "MODES"} == {
