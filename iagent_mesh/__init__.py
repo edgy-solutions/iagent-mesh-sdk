@@ -191,7 +191,7 @@ from .provenance import (
 # THE REFUSAL ENVELOPE, RE-EXPORTED AT ROOT for the same reason `provenance` is — a denied
 # authorization decision gov and fin both adopt only resolves to one shape if it comes from one
 # import path. Architect directive, 2026-10-24.
-from .refusal import Refusal
+from .refusal import PartialRefusal, Refusal
 
 # THE INGEST WIRE SHAPES, RE-EXPORTED AT ROOT for the same reason `provenance` is — `IngestRequest`
 # is meant to be one wire shape two repos agree on, which only holds if it resolves from one
@@ -361,7 +361,12 @@ from .normalize import normalize_mpn
 # The shared export-profile header (architect directive, 2026-10-30) — one shape three
 # independently-evolved producers each return under their own `header()` method; see the module
 # docstring for the field-set history (`scope` vs `granularity`) and the exact field list ruled.
-from .export_profile import ExportProfileHeader
+from .export_profile import (
+    ExportProfileError,
+    ExportProfileHeader,
+    ExportProfileSource,
+    compose_export_profiles,
+)
 
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
@@ -385,6 +390,14 @@ from .review_coverage import (
     ReviewShapeRow,
     ReviewShapeRule,
 )
+
+# The SDK-adoption drift check (2026-10-30) — a reusable, importable version of the 2026-10-17
+# hand-copy census (docs/measurements/2026-10-17-sdk-adoption-census.md), meant to be called from
+# ANOTHER repo's own CI, e.g. `from iagent_mesh.sdk_adoption import assert_no_hand_copied_types`.
+# Deliberately a SEPARATE module from `conformance`, which already owns that name for a different
+# meaning (does a given interface IMPLEMENTATION behave per contract) — see sdk_adoption.py's
+# module docstring for why the collision matters and why this isn't folded into conformance.py.
+from .sdk_adoption import HandCopyFinding, assert_no_hand_copied_types, find_hand_copied_types
 
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
@@ -500,6 +513,7 @@ __all__ = [
     "validate_provenance",
     # the refusal envelope (architect directive, 2026-10-24 — gov and fin both adopt this shape)
     "Refusal",
+    "PartialRefusal",
     # the ingest wire shapes (ADR-0021 content-kind selection / ADR-0041 user-drop ingest)
     "CONTENT_KIND_BRANCHES",
     "INGEST_STAGES",
@@ -634,6 +648,9 @@ __all__ = [
     "normalize_mpn",
     # the shared export-profile header (architect directive, 2026-10-30)
     "ExportProfileHeader",
+    "ExportProfileError",
+    "ExportProfileSource",
+    "compose_export_profiles",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",
@@ -646,4 +663,8 @@ __all__ = [
     "ReviewCoverageSharedFact",
     "ReviewShapeRow",
     "ReviewShapeRule",
+    # the SDK-adoption drift check (2026-10-30) — reusable version of the hand-copy census
+    "HandCopyFinding",
+    "assert_no_hand_copied_types",
+    "find_hand_copied_types",
 ]
