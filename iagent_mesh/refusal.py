@@ -41,6 +41,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 __all__ = [
     "Refusal",
+    "PartialRefusal",
 ]
 
 _TERMINAL_PREFIX = "refusal:"
@@ -126,3 +127,61 @@ class Refusal(BaseModel):
             return cls.model_validate(body)
         except Exception:
             return None
+
+
+class PartialRefusal(BaseModel):
+    """A refusal a caller can build before it knows ``grantable_by`` — the two-hop case where one
+    layer sees WHAT was missing (the policy, the binding) but not WHO can grant it, and a layer
+    downstream (a gateway/BFF sitting in front of the real policy engine) fills that in before the
+    refusal reaches anyone who'd act on it. :class:`Refusal` itself stays strict on purpose (see
+    its own ``grantable_by`` docstring: "a refusal with nobody able to grant it is not a refusal a
+    caller can route anywhere") — this type exists so a caller that genuinely cannot supply that
+    field yet is not forced to fabricate one.
+
+    Ruling (architect via Lane 1's fork packet, 2026-10-30, option (b)): ``grantable_by`` optional
+    on the wire for this pre-completion shape, completed via :meth:`complete` once the layer that
+    knows the answer has it. One engine-side stopgap (`agent_fleet/utils/terminal_refusal.py` in
+    invincible-agent, which omits ``grantable_by`` "by design" because the engine does not know
+    who may grant) and ca's own MCP generator (refusing before any BFF call, for the same reason)
+    both hit this; this is the one SDK change that serves both rather than each inventing its own
+    placeholder."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: str
+    missing_binding: str
+    candidates: tuple[str, ...] = ()
+
+    @field_validator("policy_id", "missing_binding")
+    @classmethod
+    def _required_string_is_present(cls, v: str, info) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                f"PartialRefusal.{info.field_name}='' — required; a refusal that cannot say "
+                f"which policy or what was missing is not a decision anyone downstream can "
+                f"act on, even before grantable_by is known"
+            )
+        return v
+
+    @field_validator("candidates")
+    @classmethod
+    def _candidates_are_non_blank(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for candidate in v:
+            if not candidate or not candidate.strip():
+                raise ValueError(
+                    f"PartialRefusal.candidates contains a blank entry {v!r} — a candidate with "
+                    f"no name is indistinguishable from no candidate at all; omit it instead"
+                )
+        return v
+
+    def complete(self, grantable_by: str) -> "Refusal":
+        """Returns the full, strict :class:`Refusal` once the caller completing this (typically a
+        gateway/BFF in front of the real policy engine) knows who can grant the missing binding.
+        Reuses `Refusal`'s own validation — a blank `grantable_by` here raises exactly as it would
+        constructing a `Refusal` directly; completion cannot smuggle in a blank value either."""
+        return Refusal(
+            policy_id=self.policy_id,
+            missing_binding=self.missing_binding,
+            grantable_by=grantable_by,
+            candidates=self.candidates,
+        )
