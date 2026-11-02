@@ -44,6 +44,7 @@ from iagent_mesh.refusal import Refusal
 __all__ = [
     "TokenExchanger",
     "UnwiredTokenExchanger",
+    "KeycloakTokenExchanger",
     "InboundTokenSource",
     "HeaderTokenSource",
     "StdioFileTokenSource",
@@ -81,6 +82,55 @@ class UnwiredTokenExchanger:
         raise NotImplementedError(
             "token exchange not wired — Lane 1 supplies the Keycloak implementation"
         )
+
+
+class KeycloakTokenExchanger:
+    """Exchanges an inbound bearer (RFC 8693 `subject_token`) for a token scoped to a
+    different audience, via a Keycloak realm's token endpoint. The realm's `iagent-mesh`
+    client performs the exchange using its own client-credential; the original token's
+    `sub` is preserved through the exchange (RFC 8693 guarantees this), which is what lets
+    a downstream audit trail show the real caller rather than this server's own identity.
+    """
+
+    def __init__(
+        self,
+        *,
+        token_endpoint: str,
+        client_id: str,
+        client_secret: str,
+        http_client: httpx.AsyncClient,
+    ) -> None:
+        self._token_endpoint = token_endpoint
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._http_client = http_client
+
+    async def exchange(self, inbound_token: str, *, audience: str) -> str:
+        response = await self._http_client.post(
+            self._token_endpoint,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "subject_token": inbound_token,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "audience": audience,
+                "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            },
+        )
+        if not (200 <= response.status_code < 300):
+            raise RuntimeError(
+                f"Keycloak token exchange failed with status {response.status_code}: "
+                f"{response.text[:500]}"
+            )
+        try:
+            body = response.json()
+            access_token = body["access_token"]
+        except Exception as exc:
+            raise RuntimeError(
+                f"Keycloak token exchange response had no usable access_token: {exc}"
+            ) from exc
+        return access_token
 
 
 # ── INBOUND TOKEN EXTRACTION — real for both transports ────────────────────────────────────

@@ -11,6 +11,7 @@ faked, not the cryptographic check.
 from __future__ import annotations
 
 import time
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -22,6 +23,7 @@ from iagent_mesh.refusal import Refusal
 from mcp_server.bff_tools import (
     BffRefusalError,
     BffToolConfig,
+    KeycloakTokenExchanger,
     Operation,
     TokenVerifier,
     UnwiredTokenExchanger,
@@ -342,3 +344,128 @@ async def test_bff_403_envelope_fields_preserved_in_refusal():
     assert excinfo.value.bff_error == "forbidden"
     assert excinfo.value.bff_message == "alice lacks case_reviewer on this case"
     assert len(calls) == 1
+
+
+# ── 7. KeycloakTokenExchanger — the real RFC 8693 implementation ───────────────────────────
+
+KEYCLOAK_TOKEN_ENDPOINT = "https://keycloak.example/realms/mesh/protocol/openid-connect/token"
+
+
+def _keycloak_client(handler):
+    calls: list[httpx.Request] = []
+
+    async def wrapped(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return await handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(wrapped))
+    return client, calls
+
+
+def _keycloak_exchanger(client: httpx.AsyncClient) -> KeycloakTokenExchanger:
+    return KeycloakTokenExchanger(
+        token_endpoint=KEYCLOAK_TOKEN_ENDPOINT,
+        client_id="iagent-mesh",
+        client_secret="iagent-mesh-client-secret",
+        http_client=client,
+    )
+
+
+async def test_keycloak_exchange_sends_correct_form_body_and_returns_access_token():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": "exchanged-xyz", "token_type": "Bearer"})
+
+    client, calls = _keycloak_client(handler)
+    exchanger = _keycloak_exchanger(client)
+
+    token = await exchanger.exchange("inbound-abc", audience="bff-client")
+
+    assert token == "exchanged-xyz"
+    assert len(calls) == 1
+    sent = calls[0]
+    assert str(sent.url) == KEYCLOAK_TOKEN_ENDPOINT
+    assert sent.headers["content-type"] == "application/x-www-form-urlencoded"
+    form = dict(urllib.parse.parse_qsl(sent.content.decode("utf-8")))
+    assert form["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert form["client_id"] == "iagent-mesh"
+    assert form["client_secret"] == "iagent-mesh-client-secret"
+    assert form["subject_token"] == "inbound-abc"
+    assert form["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+    assert form["audience"] == "bff-client"
+    assert form["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+
+
+async def test_keycloak_exchange_non_2xx_raises_runtime_error_with_status_in_message():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    client, _calls = _keycloak_client(handler)
+    exchanger = _keycloak_exchanger(client)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await exchanger.exchange("inbound-abc", audience="bff-client")
+
+    assert "400" in str(excinfo.value)
+
+
+async def test_keycloak_exchange_2xx_with_no_access_token_raises_runtime_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"token_type": "Bearer"})
+
+    client, _calls = _keycloak_client(handler)
+    exchanger = _keycloak_exchanger(client)
+
+    with pytest.raises(RuntimeError, match="access_token"):
+        await exchanger.exchange("inbound-abc", audience="bff-client")
+
+
+async def test_keycloak_exchange_2xx_with_invalid_json_raises_runtime_error_not_json_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json at all")
+
+    client, _calls = _keycloak_client(handler)
+    exchanger = _keycloak_exchanger(client)
+
+    with pytest.raises(RuntimeError):
+        await exchanger.exchange("inbound-abc", audience="bff-client")
+
+
+# ── 8. KeycloakTokenExchanger satisfies TokenExchanger and plugs into the real flow ────────
+
+
+async def test_keycloak_exchanger_end_to_end_through_call_bff_operation():
+    inbound = _make_inbound_jwt(sub="alice")
+
+    async def keycloak_handler(request: httpx.Request) -> httpx.Response:
+        exchanged = jwt.encode(
+            {"sub": "alice", "aud": "bff-client", "exp": int(time.time()) + 3600},
+            _BFF_AUDIENCE_SECRET,
+            algorithm="HS256",
+        )
+        return httpx.Response(200, json={"access_token": exchanged, "token_type": "Bearer"})
+
+    keycloak_client, keycloak_calls = _keycloak_client(keycloak_handler)
+    exchanger = KeycloakTokenExchanger(
+        token_endpoint=KEYCLOAK_TOKEN_ENDPOINT,
+        client_id="iagent-mesh",
+        client_secret="iagent-mesh-client-secret",
+        http_client=keycloak_client,
+    )
+
+    bff_client, bff_calls = _recording_client(status_code=200, json_body={"case_id": "abc123"})
+    config = BffToolConfig(
+        bff_base_url="https://bff.example",
+        token_source=_FixedTokenSource(inbound),
+        verifier=_verifier(),
+        exchanger=exchanger,
+        http_client=bff_client,
+        bff_audience="bff-client",
+    )
+
+    result = await call_bff_operation(_case_read_operation(), {"case_id": "abc123"}, config)
+
+    assert result == {"case_id": "abc123"}
+    assert len(keycloak_calls) == 1
+    assert len(bff_calls) == 1
+    sent_auth = bff_calls[0].headers["authorization"]
+    assert sent_auth != f"Bearer {inbound}"
