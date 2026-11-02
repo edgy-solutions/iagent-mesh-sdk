@@ -2,7 +2,7 @@
   "$defs": {
     "RendersAs": {
       "additionalProperties": false,
-      "description": "The display half. Hints only \u2014 nothing here may change what a task can DO.",
+      "description": "The display half. Hints only — nothing here may change what a task can DO.",
       "properties": {
         "badge": {
           "maxLength": 12,
@@ -60,6 +60,30 @@
       "title": "Reason Required",
       "type": "array",
       "uniqueItems": true
+    },
+    "carries": {
+      "additionalProperties": {
+        "enum": [
+          "edits",
+          "reject",
+          "none"
+        ],
+        "type": "string"
+      },
+      "title": "Carries",
+      "type": "object"
+    },
+    "applies_when": {
+      "additionalProperties": {
+        "enum": [
+          "flagged",
+          "unflagged",
+          "any"
+        ],
+        "type": "string"
+      },
+      "title": "Applies When",
+      "type": "object"
     }
   },
   "required": [

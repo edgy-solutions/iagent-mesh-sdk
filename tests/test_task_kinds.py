@@ -286,3 +286,64 @@ def test_the_schema_seal_can_fail():
     mutated = dict(json_schema())
     mutated["title"] = "NotTheRealTitle"
     assert mutated != json_schema()
+
+
+# ── carries / applies_when per-verb maps ─────────────────────────────────────────────────
+
+def test_carries_and_applies_when_validate_and_default():
+    """A declared row validates, and an undeclared verb falls back to the stated default —
+    carries -> "none", applies_when -> "any"."""
+    tk = TaskKind(**{
+        **VALID,
+        "carries": {"approved": "edits"},
+        "applies_when": {"rejected": "flagged"},
+    })
+    assert tk.carries == {"approved": "edits"}
+    assert tk.applies_when == {"rejected": "flagged"}
+    assert tk.carries_for("approved") == "edits"
+    assert tk.carries_for("rejected") == "none"
+    assert tk.applies_when_for("rejected") == "flagged"
+    assert tk.applies_when_for("approved") == "any"
+
+
+def test_carries_key_not_in_accepts_is_refused():
+    bad = {**VALID, "carries": {"not_a_verb": "edits"}}
+    with pytest.raises(Exception, match="does not accept"):
+        TaskKind(**bad)
+
+
+def test_applies_when_key_not_in_accepts_is_refused():
+    bad = {**VALID, "applies_when": {"not_a_verb": "flagged"}}
+    with pytest.raises(Exception, match="does not accept"):
+        TaskKind(**bad)
+
+
+def test_two_verbs_mapped_to_edits_is_refused():
+    bad = {
+        **VALID,
+        "accepts": ["approved", "rejected", "returned_for_rework"],
+        "carries": {"approved": "edits", "returned_for_rework": "edits"},
+    }
+    with pytest.raises(Exception, match="edits"):
+        TaskKind(**bad)
+
+
+def test_two_verbs_mapped_to_reject_is_refused():
+    bad = {
+        **VALID,
+        "accepts": ["approved", "rejected", "returned_for_rework"],
+        "carries": {"rejected": "reject", "returned_for_rework": "reject"},
+    }
+    with pytest.raises(Exception, match="reject"):
+        TaskKind(**bad)
+
+
+def test_one_edits_and_a_different_reject_is_not_a_collision():
+    ok = {
+        **VALID,
+        "accepts": ["approved", "rejected"],
+        "carries": {"approved": "edits", "rejected": "reject"},
+    }
+    tk = TaskKind(**ok)
+    assert tk.carries_for("approved") == "edits"
+    assert tk.carries_for("rejected") == "reject"
