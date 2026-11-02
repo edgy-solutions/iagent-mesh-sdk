@@ -105,9 +105,10 @@ the six required fields, never a seventh required one.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 __all__ = [
     "DIRECT",
@@ -319,6 +320,12 @@ class ProvenanceBlock(BaseModel):
         return block
 
 
+# Internal annotation helper, not a public type — not listed in __all__. Adds page-fraction
+# (0..1) bounds to the JSON SCHEMA of a bbox coordinate only; it carries no runtime `ge`/`le`
+# constraint, so it cannot shadow EvidenceRef._bbox_is_well_formed's own, more specific error.
+_PageFraction = Annotated[float, Field(json_schema_extra={"minimum": 0.0, "maximum": 1.0})]
+
+
 class EvidenceRef(BaseModel):
     """ADDED 0.9.11. A structured, machine-locatable citation into the source document — which
     page, and a bounding box on that page — for a caller that can jump straight to the region
@@ -354,14 +361,14 @@ class EvidenceRef(BaseModel):
     page: int
     """1-indexed page number, matching how a PDF viewer or a human reader names a page — not
     0-indexed, which would require every consumer to add 1 before rendering a citation."""
-    bbox: Optional[tuple[float, float, float, float]] = None
+    bbox: Optional[tuple[_PageFraction, _PageFraction, _PageFraction, _PageFraction]] = None
     """``(x0, y0, x1, y1)``, each a fraction of the page in ``0..1``, origin TOP-LEFT: ``(x0, y0)``
     is the box's upper-left corner, ``(x1, y1)`` its lower-right corner — ``y`` increases
     DOWNWARD the page, not the bottom-left/upward convention a PDF's own content stream uses.
     Unit-free: a fraction of the page means the same thing regardless of the source's native DPI,
     point size, or pixel grid, which is why no ``units`` field exists on this model at all.
     ``None`` means the citation is page-located but has no drawable region — not "no citation"."""
-    note: Optional[str] = None
+    note: Union[str, SkipJsonSchema[None]] = None
     """ADDED 2026-10-21. Free-form text alongside the structured ``page``/``bbox`` citation — the
     BFF's own free-string ``evidence_ref`` (e.g. ``"page 1 column header 'Customer Part
     Number'"``) lands here, not as a second, looser shape for this model. ``None`` by default;
