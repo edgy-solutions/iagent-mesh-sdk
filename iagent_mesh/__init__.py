@@ -246,6 +246,7 @@ from .ingest import (
 # while the root hands the caller graph_manifest's function, which is precisely the silent
 # shadowing that file exists to prevent, wearing a green.
 from .declarations import (
+    GRANTED_BY_SEED,
     DeclarationError,
     compose_rows,
     load_rows,
@@ -387,8 +388,10 @@ from .review_coverage import (
     ReviewCoverage,
     ReviewCoverageGroup,
     ReviewCoverageSharedFact,
+    ReviewShapeCardOnlyError,
     ReviewShapeRow,
     ReviewShapeRule,
+    validate_coverage_against_shape,
 )
 
 # The SDK-adoption drift check (2026-10-30) — a reusable, importable version of the 2026-10-17
@@ -567,6 +570,7 @@ __all__ = [
     "compose_rows",
     "load_rows",
     "read_rows",
+    "GRANTED_BY_SEED",
     "GROUPS",
     "AmbiguousImplementation",
     "NoImplementation",
@@ -663,6 +667,8 @@ __all__ = [
     "ReviewCoverageSharedFact",
     "ReviewShapeRow",
     "ReviewShapeRule",
+    "ReviewShapeCardOnlyError",
+    "validate_coverage_against_shape",
     # the SDK-adoption drift check (2026-10-30) — reusable version of the hand-copy census
     "HandCopyFinding",
     "assert_no_hand_copied_types",
