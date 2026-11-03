@@ -4,6 +4,19 @@ from: iagent-mesh-sdk/lane/ca
 date: 2026-11-02
 re: the MeshVectors remote client, next after MeshGraphRemoteClient (v0.9.13, commit bbd28b9)
 
+**RULED 2026-11-02 (b45b), both open questions below:**
+1. **Embedding is gateway-side, not client-side** — overrules this spec's proposed default.
+   "The model and its prefixes are a platform fact (nomic prefixes, one model per store), and a
+   client that embeds brings a second model into the room. The client sends text; the gateway
+   embeds." Question 1's "(a) client-side" section below is **superseded** by "(b) gateway-side
+   embed" — kept in place, struck through in spirit, so the reasoning that was weighed is still
+   visible rather than deleted.
+2. **The marker-mismatch check lives gateway-side, surfaced as 409 → `MarkerMismatch`** — as
+   proposed. Question 2's "(i) gateway performs the check" is confirmed, not superseded.
+
+**Build order:** after the asset-read surface (the finance packet), which ranks ahead. Nothing
+below is built yet; this file is kept as the design record for when it is.
+
 v0.9.13's directive ("concrete MeshGraph/MeshVectors clients... build graph first") deferred
 `MeshVectors`. This is that spec. Two of the five open questions from the original spec
 (`sessions/2026-10-30-spec-v0-9-13-concrete-remote-clients.md`) carry over settled, with no new
