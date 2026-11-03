@@ -113,4 +113,102 @@ Nothing is built. If (a) or (b) is chosen, the next step is a second, narrower s
 `MeshVectorsRemoteClient` is going through. If (c) is chosen, this file is the record of why, and
 the finance packet's gaps stay lane/01's and the architect's to close without a new SDK surface.
 
+# RULED 2026-11-02 (architect, via Chris) — question 1 answered, question 3 reversed
+
+> MeshData returns a handle, not rows: `resolve(initiator, urn) → MeshResult[DataRef]` where
+> DataRef carries the ticket, the schema (column names + types), row-count estimate, as-of, and
+> provenance; materialising is the caller's step through the client it already has (dag-tools), so
+> polars never enters the SDK and the one-way dependency holds. Read-side filtering (columns,
+> predicate, period) goes on the resolve as declared parameters the broker applies, so the handle
+> is already scoped to what the caller may see. That is what the finance inputs contract names in
+> a row. Spec that; the doc edit and the Protocol land only when engine-fin is the second caller —
+> ca is right that one caller doesn't justify it, and fin will be the second this week.
+
+This settles question 1 as **(b)**, sharpened: not a bare URI/schema pair but a named shape,
+`DataRef`, with five fields —
+
+- `ticket` — the opaque, signed/scoped handle the caller hands to its own client (dag-tools) to
+  materialize. This Protocol never resolves it further; resolving it IS this call.
+- `schema` — column names and types, substrate-agnostic (no polars `Schema` object crosses the
+  line — a plain mapping or tuple of `(name, type_name)` pairs, decided when the Protocol is
+  actually written).
+- `row-count estimate` — a count, not a promise; the materializing read may differ.
+- `as-of` — when the handle's scope was evaluated, same role `MeshGraph`/`MeshOntology` already
+  give an as-of elsewhere in this file.
+- `provenance` — who/what granted the scope, same discipline `EvidenceRef`/`GRANTED_BY_SEED`
+  already carry elsewhere in this SDK.
+
+**Question 3 (as-of/predicate pushdown) is reversed from "out of scope for v1."** It was proposed
+OUT because adding a pushdown parameter this SDK cannot honor uniformly across backends looked
+like `MeshResult`'s own "degrade silently" failure one level up. The ruling resolves that
+differently: pushdown is not a parameter the Protocol promises to honor on the READ — it is a
+parameter on the RESOLVE, applied by the broker before the handle is returned. The handle that
+comes back is already scoped to columns/predicate/period; there is nothing left to silently
+degrade, because nothing optional is being promised at read time. `resolve(initiator, urn, *,
+columns=None, predicate=None, period=None) -> MeshResult[DataRef]` — all three declared, all three
+applied by the broker, not by this SDK, before `DataRef` exists.
+
+## Grounding "the finance inputs contract names in a row"
+
+Read `invincible-agent/agent_fleet/finance_agent/measure_verbs.py` (ADR-0036/ADR-0053 overlay-row
+mechanism) to ground this rather than guess at it. A finance MEASURE row's `inputs.state` names
+quantities from a CLOSED vocabulary, `STATE_VOCABULARY` (line 90):
+
+    program.bac, period.bcws, period.bcwp, period.acwp,
+    cumulative.bcws, cumulative.bcwp, cumulative.acwp
+
+— refused at load (`_build`, line 254) if a row names anything outside it. This is exactly the
+`BCWS`/`BCWP`/`ACWP`-per-period shape the finance packet's columns already use, and exactly what
+lane/01's EV-fixture spec (below) names as its own columns. The ruling's line reads as: `DataRef`'s
+`schema` is the surface a measure row's `inputs.state` can point at — the handle's columns are not
+an arbitrary CSV shape, they are (or must be nameable against) this closed vocabulary, which is
+what makes "the finance inputs contract names [these columns] in a row" true rather than
+coincidental. This is a naming/shape constraint on `DataRef.schema` for the finance case, not a new
+field — noted here so the eventual `MeshData` spec's worked example doesn't drift from it.
+
+## Worked example (prospective, not yet live)
+
+Per `invincible-agent/sessions/2026-11-02-packet-to-architect-from-lane-01-spec-sandbox-ev-asset-
+in-the-demo-location-behind-its-real-broker.md` — lane/01's `ev_fixture`: nine work packages by six
+periods (NP-MERIDIAN seed's own figures, chosen so the graph and the asset must agree), columns
+`program, control_account, work_package, period, BCWS, BCWP, ACWP` (fin's names), URN via
+`dag_tools.inventory` (never typed literally), living in `dag_tools.user_deployment` demo mode
+behind the real `iagent-dag-tools-broker` (no new pods). Access: one `policy/asset_grants.yaml` row
+grants alice; bob gets no row (the refusal control).
+
+If `MeshData` existed today, the shape would read:
+
+    ref = mesh_data.resolve(
+        initiator,                       # alice: granted; bob: not
+        urn,                              # from dag_tools.inventory, never typed
+        columns=["program", "control_account", "work_package", "period", "BCWS", "BCWP", "ACWP"],
+        period=("2026-01", "2026-06"),
+    )
+    # ref.rows[0].schema  -> [("program", "str"), ..., ("BCWS", "float"), ...]
+    # ref.rows[0].ticket  -> handed to CortexDataClient to materialize
+    client = CortexDataClient(originator_email=initiator.require_authz_id())
+    lf = client.materialize(ref.rows[0].ticket)   # name illustrative; the real method isn't built
+
+**This is illustrative, not a verified call site.** Four items in lane/01's own spec are still
+unchecked as of today (the DataHub ingestion hop; the MinIO/mintable-credential IO manager per
+`docs/plans/broker-advertises-unminted-credential.md`, marked HIGH; the env-match per
+`docs/plans/broker-endpoint-env-divergence.md`; the live read itself, pending Chris as alice and as
+bob). Unlike the other worked examples in `docs/interfaces.md`, which are real, surveyed call
+sites, this one is prospective until the fixture is live — flagged as such so it is not mistaken
+for a tested contract when the doc edit eventually lands.
+
+## What ca does now
+
+**Nothing is built in `iagent_mesh/interfaces.py` or `docs/interfaces.md` yet.** The ruling is
+explicit: "the doc edit and the Protocol land only when engine-fin is the second caller... and fin
+will be the second this week." This file is the spec to build from once that trigger fires — the
+method signature (`resolve(initiator, urn, *, columns=None, predicate=None, period=None) ->
+MeshResult[DataRef]`), the `DataRef` field list, and the vocabulary-grounding note above are all
+settled, so the moment fin is the second caller, the next step is writing the `DataRef` pydantic
+model, the `MeshData` Protocol class, and the `docs/interfaces.md` section — not re-opening any of
+questions 1–3.
+
+Question 2 (the read key, `urn` opaque) and question 4 (the size gate, implementation-only) stand
+as written above, unruled but non-blocking.
+
 Lane: iagent-mesh-sdk/lane/ca
