@@ -402,6 +402,11 @@ from .review_coverage import (
 # module docstring for why the collision matters and why this isn't folded into conformance.py.
 from .sdk_adoption import HandCopyFinding, assert_no_hand_copied_types, find_hand_copied_types
 
+# The strict PDP-answer reader (architect ruling 2026-11-02: "yes, the SDK carries the strict
+# reader (ca)"), ported verbatim from invincible-agent/agent_fleet/utils/pdp_answer.py (PR #190)
+# for the workbench, which cannot import agent_fleet. See pdp_answer.py's module docstring.
+from .pdp_answer import MalformedPdpAnswer, check_answer, decision_answer
+
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
 # life rather than ending it — a caller who finds it at the package root has no reason to think
@@ -673,4 +678,8 @@ __all__ = [
     "HandCopyFinding",
     "assert_no_hand_copied_types",
     "find_hand_copied_types",
+    # the strict PDP-answer reader (architect ruling 2026-11-02), ported for the workbench
+    "MalformedPdpAnswer",
+    "check_answer",
+    "decision_answer",
 ]
