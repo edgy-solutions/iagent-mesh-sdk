@@ -58,7 +58,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .results import MeshResult
 from .write_results import MeshWriteResult
@@ -72,6 +72,8 @@ __all__ = [
     "ResolveInstanceRequest",
     "MeshVectors",
     "MeshArtifacts",
+    "DataRef",
+    "MeshData",
     "MESH_COLLECTION_META",
     "CollectionMarker",
     "CorruptCollectionMarker",
@@ -933,6 +935,172 @@ class MeshArtifacts(Protocol):
         the complete set to detect what it is "missing" is reading entitlement scope off the
         comparison, the same misreading a single `get`'s collapsed ``outcome="empty"`` already
         refuses to support.
+        """
+
+
+class DataRef(BaseModel):
+    """A handle onto a tabular read — never the data. **RULED 2026-11-02** (architect, via Chris,
+    on ``sessions/2026-11-02-spec-meshdata-protocol.md``): ``MeshData.resolve`` returns this
+    instead of ``pl.LazyFrame`` because this module carries zero polars dependency, by deliberate
+    one-way design (``pyproject.toml``'s own comment: dag-tools imports this SDK; this SDK does
+    not import dag-tools or polars). A dataframe would have been the first Protocol in this file
+    to leak an implementation's own return type into a substrate-agnostic contract — every other
+    Protocol here is substrate-agnostic (``MeshGraph`` doesn't import a Cypher driver's row type;
+    ``MeshVectors`` doesn't import Weaviate's).
+
+    Materialising is the CALLER's step, through whatever client it already holds
+    (``CortexDataClient`` today, something else later) — this Protocol's job ends at the ticket,
+    the same "declares vs. performs" split :class:`MeshArtifacts` already draws for entitlement,
+    applied here to the read itself rather than to the permission check.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    ticket: str
+    """Opaque. Signed/scoped by the broker, handed verbatim to the caller's own client
+    (``CortexDataClient.materialize`` or equivalent) to materialize. This Protocol never resolves
+    it further — resolving it IS :meth:`MeshData.resolve`."""
+
+    schema_: tuple[tuple[str, str], ...] = Field(alias="schema")
+    """Column names and types, substrate-agnostic — a plain tuple of ``(name, type_name)`` pairs,
+    never a polars ``Schema`` object, for the same reason ``ticket`` is opaque rather than a live
+    connection. Named ``schema_`` with ``alias="schema"`` because the bare name shadows
+    ``BaseModel``'s own (deprecated) ``schema()`` method — the same dodge, for the same kind of
+    collision, as :attr:`CaseTransition.frm`'s ``alias="from"`` elsewhere in this SDK.
+
+    For a finance read, each column name is (or must be nameable against)
+    ``measure_verbs.py``'s closed ``STATE_VOCABULARY`` — the handle's columns are not an arbitrary
+    CSV shape; that is what makes "the finance inputs contract names [these columns] in a row",
+    the ruling's own phrase, a grounded claim rather than a coincidental one."""
+
+    row_count_estimate: int
+    """A count, not a promise — the materializing read may differ. Named ``estimate`` rather than
+    ``count`` so no caller mistakes this for a number it can reconcile the materialized read
+    against."""
+
+    as_of: str
+    """When the handle's SCOPE was evaluated — the same role an as-of plays elsewhere in this
+    file for ``MeshGraph``/``MeshOntology``, applied here to "what this ticket was granted
+    against" rather than to the data's own vintage, which the materializing read may differ
+    from."""
+
+    provenance: str
+    """Who or what granted the scope — same discipline :data:`GRANTED_BY_SEED` already carries
+    for a ratified row authored by the seed itself, applied here to a resolved read rather than to
+    a declaration file."""
+
+    @field_validator("ticket", "as_of", "provenance")
+    @classmethod
+    def _field_is_present(cls, v: str, info) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                f"DataRef.{info.field_name}='' — a handle that cannot say {info.field_name} is "
+                f"not a resolved handle"
+            )
+        return v
+
+    @field_validator("row_count_estimate")
+    @classmethod
+    def _estimate_is_not_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(
+                f"DataRef.row_count_estimate={v} — a negative estimate is not a count of anything"
+            )
+        return v
+
+
+@runtime_checkable
+class MeshData(Protocol):
+    """Named resolution of a tabular read — whatever broker/catalog holds it, resolved through ONE
+    contract instead of each caller hand-rolling its own ticket/size-gate/denial shape against the
+    same underlying client.
+
+    **ADDED, OPENING v0.9.14 SCOPE.** A fifth named-read Protocol, after :class:`MeshArtifacts`'
+    own precedent as the fourth. Spec'd 2026-11-02 (``sessions/2026-11-02-spec-meshdata-
+    protocol.md``) and deliberately left unbuilt at that time: the ruling that answered the spec's
+    one blocking question also named the trigger for building it — *"the doc edit and the
+    Protocol land only when engine-fin is the second caller... and fin will be the second this
+    week."* That trigger has fired: ``invincible-agent`` PR #219 is engine-fin's own hand-built
+    finance-inputs resolver (``FIN_DATASET_URN``/``FIN_ASSET_MAX_ROWS``), independently
+    implementing a ticket, a row-count size gate (422 over limit), a timing line, and a typed
+    403 denial — nearly the exact shape this Protocol formalizes, built a second time rather than
+    imported once. Fin used its own vocabulary, not this Protocol's; converging #219 onto
+    ``resolve`` is a follow-up for fin's own lane, not a precondition of shipping the Protocol —
+    the same way ``MeshArtifacts`` shipped before cortex's and OpenDDIL's own hand-built gateway
+    routes had migrated to call it.
+
+    **``urn`` IS OPAQUE TO THIS PROTOCOL**, the same posture :attr:`MeshArtifacts.get`'s ``kind``
+    already takes: the broker resolves it (``physical_urn_for`` in dag-tools' own terms), this
+    layer never parses it, and a caller never types one literally — it comes from the catalog
+    (``dag_tools.inventory`` today) the same way a kind string comes from a registration.
+
+    **NO LISTING METHOD, AND THAT IS DELIBERATE, NOT AN OMISSION.** ``MeshArtifacts`` pairs
+    ``get`` with ``list_by_kind`` because artifacts are enumerable by kind; a tabular asset's
+    access is per-dataset (one ``policy/asset_grants.yaml`` row per URN), not enumerable by any
+    "kind" a caller could ask for in bulk. Adding a listing method speculatively, with nothing to
+    return it against, would be the same unjustified-abstraction mistake this Protocol's own
+    deferral avoided at the class level, repeated at the method level.
+
+    **PUSHDOWN HAPPENS ON THE RESOLVE, NOT ON A LATER READ.** ``columns``/``predicate``/``period``
+    are declared parameters the broker applies BEFORE the handle is returned — the handle that
+    comes back is already scoped to them. This is a reversal from the spec's first draft, which
+    proposed leaving pushdown out of v1 entirely on the theory that a parameter this SDK cannot
+    honor uniformly across backends would be :class:`~iagent_mesh.results.MeshResult`'s own
+    "degrade silently" failure, one level up. The ruling resolves that differently: there is
+    nothing left to silently degrade, because nothing optional is promised at READ time — the
+    promise is entirely at resolve time, made by the broker, not by this SDK.
+
+    **THE SIZE GATE IS IMPLEMENTATION-LEVEL, NOT A PROTOCOL MECHANISM** — the same split
+    :class:`MeshArtifacts` draws for entitlement. DA's existing reader has one; engine-fin's did
+    not, and that absence is what killed a pod once already (a ``GROUP BY`` over ``p_cage``,
+    OOMKilled at 2Gi). This Protocol does not know what "too large" means for any given backend,
+    but it DOES require that an oversized resolve come back as ``outcome="failed"`` with a
+    ``detail`` naming the gate, never a silent OOM the caller only discovers from the pod's own
+    death.
+
+    **READ-ONLY, the same posture as every other Protocol in this file.** Nothing here holds a
+    driver, and there is no write half — materializing the ticket happens entirely outside this
+    SDK, through the caller's own client.
+
+    **ENTITLEMENT COLLAPSES INTO ``outcome="empty"`` — on purpose, same discipline as
+    ``MeshArtifacts``.** This SDK owns no compartment/grant model of its own (see
+    :class:`Initiator` on why identity travels opaque). A resolve for a ``urn`` the initiator is
+    not entitled to see must come back as a REFUSAL — ``MeshResult(outcome="empty")`` or a raised
+    ``PermissionError`` the implementation owns — never ``outcome="answered"`` over a ticket the
+    initiator should not have been handed. Conformance can assert the SHAPE of that refusal; it
+    cannot assert the policy decision behind it.
+    """
+
+    MODES: tuple[str, ...] = ()
+
+    def resolve(
+        self,
+        initiator: Initiator,
+        urn: str,
+        *,
+        columns: Optional[Sequence[str]] = None,
+        predicate: Optional[str] = None,
+        period: Optional[tuple[str, str]] = None,
+    ) -> MeshResult:
+        """Resolve ``urn`` into a :class:`DataRef` the caller then materializes with its own
+        client.
+
+        ``columns``, when given, restricts the handle's :attr:`DataRef.schema_` to a declared
+        subset the broker applies before the handle exists — never a hint this SDK honors on a
+        best-effort basis.
+
+        ``predicate`` is an opaque, broker-interpreted filter expression — this Protocol does not
+        define its grammar, the same way :attr:`MeshArtifacts.get`'s ``kind`` does not define
+        ``ContentKindRegistration``'s. ``period``, when given, is an inclusive ``(start, end)``
+        pair over whatever period-key vocabulary the resolved asset declares (for a finance read,
+        the engine's own closed ``FISCAL_PERIODS`` list).
+
+        ``outcome="failed"`` with a ``detail`` naming the gate covers an oversized resolve — see
+        this Protocol's own docstring on why the gate itself is implementation-level.
+        ``outcome="empty"`` covers both "no such urn" and "exists, but this initiator is not
+        entitled to resolve it" — the same ambiguity :class:`MeshArtifacts` already carries for
+        ``get``, for the same reason: telling the two apart would let a caller probe a dataset's
+        mere existence under an entitlement that only covers resolving it.
         """
 
 

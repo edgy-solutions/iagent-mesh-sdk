@@ -590,6 +590,123 @@ proposal; it is not part of this ruling or this release.
 
 ---
 
+### `MeshData` — named resolution of a tabular read, added 2026-11-03, opening v0.9.14 scope
+
+**A fifth named-read Protocol, after `MeshArtifacts`'s own precedent as the
+fourth.** Spec'd 2026-11-02
+(`sessions/2026-11-02-spec-meshdata-protocol.md`) and deliberately left
+unbuilt at that time — the ruling that answered the spec's one blocking
+question also named the trigger for building it: *"the doc edit and the
+Protocol land only when engine-fin is the second caller... and fin will be
+the second this week."* That trigger fired: `invincible-agent` PR #219 is
+engine-fin's own hand-built finance-inputs resolver
+(`FIN_DATASET_URN`/`FIN_ASSET_MAX_ROWS`), independently implementing a
+ticket, a row-count size gate (422 over limit), a timing line, and a typed
+403 denial — nearly the exact shape this Protocol formalizes, built a second
+time rather than imported once. Fin used its own vocabulary, not this
+Protocol's; converging #219 onto `resolve` is a follow-up for fin's own lane,
+not a precondition of shipping the Protocol — the same way `MeshArtifacts`
+shipped before cortex's and OpenDDIL's own hand-built gateway routes had
+migrated to call it.
+
+**`urn` is opaque to this Protocol**, the same posture `MeshArtifacts.get`'s
+`kind` already takes: the broker resolves it (`physical_urn_for` in
+dag-tools' own terms), this layer never parses it, and a caller never types
+one literally — it comes from the catalog (`dag_tools.inventory` today) the
+same way a kind string comes from a registration.
+
+`MODES = ()`.
+
+| Operation | Returns |
+| --- | --- |
+| `resolve(initiator, urn, *, columns=None, predicate=None, period=None)` | A `DataRef` handle the caller materializes with its own client |
+
+**No listing method, and that is deliberate, not an omission.**
+`MeshArtifacts` pairs `get` with `list_by_kind` because artifacts are
+enumerable by kind; a tabular asset's access is per-dataset (one
+`policy/asset_grants.yaml` row per URN), not enumerable by any "kind" a
+caller could ask for in bulk. Adding a listing method speculatively, with
+nothing to return it against, would be the same unjustified-abstraction
+mistake this Protocol's own deferral avoided at the class level, repeated at
+the method level.
+
+**Pushdown happens on the resolve, not on a later read.**
+`columns`/`predicate`/`period` are declared parameters the broker applies
+before the handle is returned — the handle that comes back is already
+scoped to them. This is a reversal from the spec's first draft, which
+proposed leaving pushdown out of v1 entirely on the theory that a parameter
+this SDK cannot honor uniformly across backends would be `MeshResult`'s own
+"degrade silently" failure, one level up. The ruling resolves that
+differently: there is nothing left to silently degrade, because nothing
+optional is promised at read time — the promise is entirely at resolve time,
+made by the broker, not by this SDK.
+
+**Never `T = pl.LazyFrame`, on purpose.** `iagent_mesh` carries zero polars
+dependency, by deliberate one-way design (`pyproject.toml`'s own comment:
+dag-tools imports this SDK; this SDK does not import dag-tools or polars).
+`resolve` returns a `DataRef` — a handle, never the data — with five ruled
+fields:
+
+| Field | Carries |
+| --- | --- |
+| `ticket` | Opaque. Signed/scoped by the broker, materialized by the caller's own client (`CortexDataClient` today, something else later). This Protocol never resolves it further. |
+| `schema_` (wire key `schema`) | Column names and types as a plain tuple of `(name, type_name)` pairs — never a polars `Schema` object. Named `schema_` with `alias="schema"` to dodge the same `BaseModel`-attribute collision `CaseTransition.frm`'s `alias="from"` dodges elsewhere in this SDK. |
+| `row_count_estimate` | A count, not a promise — the materializing read may differ. |
+| `as_of` | When the handle's scope was evaluated — not the data's own vintage. |
+| `provenance` | Who or what granted the scope, same discipline `GRANTED_BY_SEED` already carries for a declaration row. |
+
+**The size gate is implementation-level, not a Protocol mechanism** — the
+same split `MeshArtifacts` draws for entitlement. DA's existing reader has
+one; engine-fin's did not, and that absence is what killed a pod once
+already (a `GROUP BY` over `p_cage`, OOMKilled at 2Gi). This Protocol does
+not know what "too large" means for any given backend, but it does require
+that an oversized resolve come back as `outcome="failed"` with a `detail`
+naming the gate, never a silent OOM the caller only discovers from the pod's
+own death.
+
+**Read-only, the same posture as every other Protocol in this file.**
+Nothing here holds a driver, and there is no write half — materializing the
+ticket happens entirely outside this SDK, through the caller's own client.
+
+#### Entitlement collapses into `outcome="empty"` — on purpose, and conformance refuses to prove otherwise
+
+Same discipline as `MeshArtifacts`: this SDK owns no compartment/grant model
+of its own (see `Initiator` on why identity travels opaque). A resolve for a
+`urn` the initiator is not entitled to see must come back as a refusal —
+`MeshResult(outcome="empty")` or a raised `PermissionError` the
+implementation owns — never `outcome="answered"` over a ticket the initiator
+should not have been handed. Conformance can assert the shape of that
+refusal; it cannot assert the policy decision behind it.
+
+`check_mesh_data_entitlement_contract` asserts exactly this and **refuses to
+go further**: entitled→`answered` with rows, unentitled→`empty`,
+absent-urn→`empty`, and its own `assert_fixture_discriminates` call is
+between entitled and unentitled only — never between unentitled and absent,
+because that distinction is the one this Protocol rules out, not one a
+fixture simply failed to supply.
+
+`check_mesh_data_size_gate_contract`, this Protocol's own addition with no
+`MeshArtifacts` analog (no other Protocol in this file carries a
+Protocol-level size-gate-shape requirement): an oversized resolve must come
+back `outcome="failed"` with a non-empty `detail`. It does not assert what
+the ceiling IS, only that crossing it is reported, never merely discovered —
+the unreported-OOM shape named above.
+
+#### Worked examples: none exist yet (surveyed 2026-11-03)
+
+`resolve` has zero occurrences anywhere in `invincible-agent` as of this
+survey — expected, since this Protocol opens v0.9.14 scope the same day.
+Stated here rather than left silent: engine-fin's PR #219
+(`FIN_DATASET_URN`) is the hand-built resolver this Protocol exists to
+replace, not a caller of it — converging #219 onto `resolve` is fin's own
+lane's follow-up, not yet scheduled. The EV-fixture read the spec document
+illustrates (`urn:li:dataset:(urn:li:dataPlatform:s3,ev_fixture,PROD)`) is
+prospective — it depends on the dag-tools fixture pin, the sandbox digest
+roll, and the `mesh_demo_customers` grant-row mismatch the fin packets
+describe, none of which this section's publication changes.
+
+---
+
 ## 4a. The write half
 
 **Status: shipped, unreleased.** Ruled 2026-09-27 on
@@ -1296,7 +1413,7 @@ was deployed.
 ```python
 from iagent_mesh.interfaces import (
     Initiator, ServiceIdentityRefused, DelegateIdentityRefused,
-    MeshGraph, MeshOntology, MeshVectors, MeshArtifacts,
+    MeshGraph, MeshOntology, MeshVectors, MeshArtifacts, MeshData, DataRef,
     ResolveInstanceRequest,
     MESH_COLLECTION_META, CollectionMarker, CorruptCollectionMarker,
     collection_marker, read_collection_marker, marker_predates_collection,
@@ -1312,6 +1429,7 @@ from iagent_mesh.conformance import (
     check_vectors_writer_has_contract, check_mesh_artifacts_entitlement_contract,
     check_mesh_artifacts_list_by_kind_contract, check_system_of_record_query_contract,
     check_system_of_record_query_independence_contract,
+    check_mesh_data_entitlement_contract, check_mesh_data_size_gate_contract,
 )
 from iagent_mesh.models import MethodBlock, MethodInput, ToolOutput
 

@@ -66,6 +66,8 @@ __all__ = [
     "check_vectors_writer_has_contract",
     "check_mesh_artifacts_entitlement_contract",
     "check_mesh_artifacts_list_by_kind_contract",
+    "check_mesh_data_entitlement_contract",
+    "check_mesh_data_size_gate_contract",
     "check_system_of_record_query_contract",
     "check_system_of_record_query_independence_contract",
     "check_provenance_floor_contract",
@@ -1113,6 +1115,88 @@ def check_mesh_artifacts_list_by_kind_contract(
     assert_fixture_discriminates(
         f"{op} entitled vs unentitled", entitled, unentitled, describe=lambda r: r.outcome
     )
+
+
+# ── check_mesh_data_entitlement_contract, added 2026-11-03 — opens v0.9.14 scope for the new
+# MeshData Protocol ─────────────────────────────────────────────────────────────────────────────
+
+
+def check_mesh_data_entitlement_contract(
+    *,
+    call_resolve_as_entitled: Callable[[], MeshResult],
+    call_resolve_as_unentitled: Callable[[], MeshResult],
+    call_resolve_absent_urn: Callable[[], MeshResult],
+) -> None:
+    """Proves an implementation's `MeshData.resolve` tells "answered" apart from BOTH refusal
+    shapes `MeshResult` is allowed to collapse together — same discipline as
+    `check_mesh_artifacts_entitlement_contract`, applied to a resolved ticket instead of an
+    artifact row. Never asserts "refused" apart from "absent": `MeshData`'s own docstring rules
+    that out for the same reason `MeshArtifacts.get` does — telling them apart would let a caller
+    probe a urn's mere existence under an entitlement that only covers resolving it.
+
+    `call_resolve_as_entitled` resolves a urn an initiator IS entitled to see — bound to a real
+    asset the implementer's own fixture grants, the same "nothing to verify against" discipline
+    every write-then-read arm in this module already applies. `call_resolve_as_unentitled`
+    resolves the SAME urn as an initiator the fixture constructs to be refused. `call_resolve_
+    absent_urn` resolves a urn the fixture never registered at all, as the entitled initiator —
+    the ordinary absent case, unrelated to entitlement.
+    """
+    op = "data.resolve"
+
+    entitled = call_resolve_as_entitled()
+    if entitled.outcome != "answered" or not entitled.rows:
+        _fail(op, f"an initiator entitled to the fixture's own urn got "
+                  f"outcome={entitled.outcome!r}, not 'answered' with rows. Nothing proves "
+                  f"entitlement is a real gate if the one case meant to pass does not")
+
+    unentitled = call_resolve_as_unentitled()
+    if unentitled.outcome != "empty":
+        _fail(op, f"an initiator NOT entitled to the fixture's own urn got "
+                  f"outcome={unentitled.outcome!r}, not 'empty'. An implementation returning "
+                  f"'answered' here hands a materializing ticket to a caller this fixture built "
+                  f"specifically to be refused")
+
+    absent = call_resolve_absent_urn()
+    if absent.outcome != "empty":
+        _fail(op, f"a urn the fixture never registered produced outcome={absent.outcome!r}, "
+                  f"not 'empty' — unrelated to entitlement, the ordinary absent case every other "
+                  f"read Protocol in this SDK already distinguishes from 'answered'")
+
+    assert_fixture_discriminates(
+        f"{op} entitled vs unentitled", entitled, unentitled, describe=lambda r: r.outcome
+    )
+
+
+# ── check_mesh_data_size_gate_contract, added 2026-11-03 — the gate `MeshData`'s own docstring
+# requires at Protocol level without naming what "too large" means for any backend ──────────────
+
+
+def check_mesh_data_size_gate_contract(
+    *,
+    call_resolve_oversized: Callable[[], MeshResult],
+) -> None:
+    """Proves an oversized resolve comes back as a NAMED failure rather than the silent OOM
+    engine-fin's own pod took before it had a size gate (a `GROUP BY` over `p_cage`, OOMKilled at
+    2Gi, the incident `MeshData`'s own docstring cites for why this arm exists at all).
+
+    `call_resolve_oversized` resolves a urn the implementer's own fixture is built to refuse on
+    size alone — bound to whatever row-count or byte ceiling that implementation enforces, the
+    same "implementation-level, not a Protocol mechanism" split `MeshData`'s docstring draws:
+    this arm does not assert what the ceiling IS, only that crossing it is reported, never merely
+    discovered.
+    """
+    op = "data.resolve"
+
+    oversized = call_resolve_oversized()
+    if oversized.outcome != "failed":
+        _fail(op, f"a resolve the fixture built to exceed its own size gate got "
+                  f"outcome={oversized.outcome!r}, not 'failed'. A silent 'answered' or 'empty' "
+                  f"here is the same unreported OOM this gate exists to replace with a readable "
+                  f"refusal")
+    if not oversized.detail:
+        _fail(op, "an oversized resolve failed with no detail naming the gate — 'something went "
+                  "wrong' is how an operator relearns the pod-killing incident this arm exists "
+                  "to keep from repeating silently")
 
 
 # ── check_graph_writer_write_node_contract, added 2026-10-01 — opens v0.9.6 scope, for Lane 1
