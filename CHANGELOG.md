@@ -6,6 +6,44 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.14 — 2026-11-03 (draft, uncut)
+
+*No `## 0.9.13` entry exists above this one — that tag (`d8165f3`) covers five gating items filed
+as reply packets, not a CHANGELOG edit. Not backfilled here; out of this entry's own scope.*
+
+### Added
+- `iagent_mesh.pdp_answer` — `check_answer`, `decision_answer`, `MalformedPdpAnswer`
+  (`iagent_mesh/pdp_answer.py`), a verbatim port of `agent_fleet/utils/pdp_answer.py` (PR #190)
+  for the training-consolidation workbench, which cannot import `agent_fleet`. A non-boolean PDP
+  field is the OUTAGE class (`MalformedPdpAnswer`, never coerced with `bool(...)`); an absent
+  field reads as `False` (proto3 JSON may omit a false boolean). `MalformedPdpAnswer(httpx.
+  DecodingError, ValueError)` — `httpx` is already a base dependency, no base-class judgment call
+  needed. Both `check_answer` and `decision_answer` ported, not just the directory-check half the
+  workbench calls today, since the two share `_body`/`_strict` in the source and its test matrix.
+- `MeshData` / `DataRef` (`iagent_mesh/interfaces.py`) — the fifth named-read Protocol, ruled
+  2026-11-02 and built now that invincible-agent PR #219 (engine-fin's hand-built finance-inputs
+  resolver) independently reimplements the ticket/size-gate/timing/typed-denial shape this
+  Protocol formalizes. `resolve(initiator, urn, *, columns=None, predicate=None, period=None) ->
+  MeshResult[DataRef]`; `DataRef` is a handle, never `pl.LazyFrame` (this SDK carries zero polars
+  dependency, by deliberate one-way design) — `ticket` / `schema_` (wire key `schema`) /
+  `row_count_estimate` / `as_of` / `provenance`. `urn` is opaque to the Protocol, same posture as
+  `MeshArtifacts.get`'s `kind`; no listing method (access is per-dataset, not enumerable by kind);
+  pushdown (`columns`/`predicate`/`period`) is resolve-time, applied by the broker before the
+  handle comes back; entitlement collapses into `outcome="empty"`, same discipline as
+  `MeshArtifacts`; the size gate is implementation-level — this Protocol only requires
+  `outcome="failed"` with a `detail` naming it, never the unreported-OOM shape a prior incident
+  (a `GROUP BY` over `p_cage`, OOMKilled at 2Gi) is named for.
+- `check_mesh_data_entitlement_contract`, `check_mesh_data_size_gate_contract`
+  (`iagent_mesh/conformance.py`) — the latter has no `MeshArtifacts` analog, the first
+  Protocol-level size-gate-shape requirement in this file.
+
+### Not in this cut
+- Converging invincible-agent PR #219 onto `MeshData.resolve` — fin's own lane's follow-up, not a
+  precondition of this cut, same precedent `MeshArtifacts` set shipping before cortex's and
+  OpenDDIL's hand-built routes migrated to call it.
+- An adoption-ratchet census of what the BFF still hand-copies instead of importing from this
+  SDK — separate report, in progress.
+
 ## 0.9.12 — 2026-10-30
 
 ### Added
