@@ -331,6 +331,49 @@ def test_evidence_ref_page_is_still_required_when_bbox_is_null():
         EvidenceRef(bbox=None)  # type: ignore[call-arg]
 
 
+# ── EvidenceRef JSON-SCHEMA tightening — schema-only, runtime behavior unchanged ─────────
+
+
+def test_evidence_ref_note_schema_has_no_null_arm():
+    schema = EvidenceRef.model_json_schema()
+    note_schema = schema["properties"]["note"]
+    assert note_schema.get("type") == "string"
+    # no anyOf/enum carrying a "null" arm anywhere in this property's schema
+    for key in ("anyOf", "oneOf", "allOf"):
+        for arm in note_schema.get(key, []):
+            assert arm.get("type") != "null"
+    assert note_schema.get("enum") is None or "null" not in note_schema.get("enum", [])
+
+
+def test_evidence_ref_bbox_schema_prefix_items_carry_page_fraction_bounds():
+    schema = EvidenceRef.model_json_schema()
+    bbox_schema = schema["properties"]["bbox"]
+    # bbox stays Optional, so its schema is an anyOf of the tuple arm and a null arm — find the
+    # tuple arm, not the null one.
+    arms = bbox_schema.get("anyOf", [bbox_schema])
+    tuple_arm = next(a for a in arms if a.get("type") != "null")
+    prefix_items = tuple_arm["prefixItems"]
+    assert len(prefix_items) == 4
+    for item in prefix_items:
+        assert item["minimum"] == 0.0
+        assert item["maximum"] == 1.0
+
+
+def test_evidence_ref_bbox_runtime_validation_is_unchanged_by_the_schema_tightening():
+    # same exact message as the custom validator produces — proof the schema-only change in
+    # 3b did not introduce a generic pydantic ge/le error ahead of _bbox_is_well_formed.
+    with pytest.raises(ValidationError) as exc_info:
+        EvidenceRef(page=1, bbox=(1.5, 0, 1, 1))
+    message = str(exc_info.value)
+    assert "EvidenceRef.bbox=" in message
+    assert "page fraction in 0..1" in message
+
+
+def test_evidence_ref_note_runtime_construction_is_unchanged_by_the_schema_tightening():
+    assert EvidenceRef(page=1, note=None).note is None
+    assert EvidenceRef(page=1, note="x").note == "x"
+
+
 def test_extraction_defect_evidence_ref_defaults_to_none():
     d = ExtractionDefect(**_DEFECT_VALID)
     assert d.evidence_ref is None

@@ -57,6 +57,23 @@ def test_steps_cannot_be_empty():
         _definition(steps=[])
 
 
+def test_a_single_bad_step_reports_only_its_own_error_not_a_phantom_empty_steps():
+    """Regression for invincible-agent/lane/74, 2026-11-05: `steps` used to be
+    `tuple[Step, ...] = Field(..., min_length=1)`, and pydantic 2.12.5 reports a tuple
+    `min_length` failure alongside an inner element's own failure (it does not for a list),
+    so one bad step read as `steps: []` to any caller of `.errors()`. `steps` validates as
+    `tuple[Step, ...]` with emptiness checked in an `after` validator instead, which only runs
+    once every step has already passed, so a bad step's error stands alone.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        _definition(steps=[
+            {"kind": "human_await", "id": "approve", "audience": "ops", "approves": ["x"]},
+        ])
+    locs = [e["loc"] for e in exc_info.value.errors()]
+    assert ("steps",) not in locs
+    assert any(loc[:2] == ("steps", 0) for loc in locs)
+
+
 def test_an_unknown_step_kind_fails_the_discriminator_loudly():
     with pytest.raises(ValidationError):
         _definition(steps=[{"kind": "mystery", "id": "x"}])

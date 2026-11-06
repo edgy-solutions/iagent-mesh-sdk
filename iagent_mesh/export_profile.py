@@ -18,12 +18,18 @@ or branch per kind.
 """
 from __future__ import annotations
 
-from typing import Optional
+import os
+from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+from .declarations import DeclarationError, compose_rows
 
 __all__ = [
     "ExportProfileHeader",
+    "ExportProfileSource",
+    "ExportProfileError",
+    "compose_export_profiles",
 ]
 
 
@@ -53,3 +59,118 @@ class ExportProfileHeader(BaseModel):
     kinds: tuple[str, ...] = ()
     """The content kinds this export's rows cover, e.g. ``("pcn", "pdn")`` — carried as DATA on
     the header, never as a route or branch per kind, per generic-at-birth."""
+
+
+# ── v0.9.13: the converged export-profile loader (gov's 2026-10-30 packet) ─────────────────
+#
+# Three engines (review export, answer export, fin CDRL) each hand-rolled the same seed-then-
+# overlay, replace-by-name, tombstone-by-name mechanism, differing only in their env var names,
+# default seed path and a kind label. The architect's ruling (2026-10-30, via Chris): "yes, one
+# function; source rows live in a policy file both the validator and engines share."
+#
+# This does NOT invent a fourth composer. ``iagent_mesh.declarations`` already IS that one
+# composer — its own docstring records "the ADR-0039 amendment refuses a fourth composer BY
+# NAME" — so this is a thin, kind-agnostic wrapper over ``declarations.compose_rows``, not a
+# new seed/overlay/tombstone mechanism. That also fixes the file format and the tombstone
+# convention without guessing: ``compose_rows`` hard-codes one YAML document per file (not
+# parameterized — see its module docstring) and a tombstone is a row carrying only its key
+# field plus ``deleted: true``. Both are pre-existing repo-wide conventions, reused here
+# exactly, not new choices made for this function.
+#
+# What IS a guess, pending gov's confirmation: the ``overlay_env`` value is documented by gov's
+# packet only as "a list of paths" with no delimiter named, and there is no existing SDK
+# precedent for parsing an overlay-dirs *environment variable* (``declarations.compose_rows``
+# takes ``overlay_dirs`` as a Python argument, already split). Treated here as ``os.pathsep``-
+# delimited, the conventional choice for a path-list env var on POSIX/Windows alike (``:`` vs
+# ``;``) — flag this with gov before any engine switches its own loader to call this function.
+
+
+class ExportProfileError(DeclarationError):
+    """An export-profile row is invalid; see ``DeclarationError``. A family subclass (same
+    pattern as ``task_kinds.TaskKindError``) so a caller can catch export-profile composition
+    failures specifically, without catching every declaration family's."""
+
+
+class ExportProfileSource(BaseModel):
+    """A declared *source* for one export kind's profile set — ``{kind, seed_env, seed_default,
+    overlay_env}``, exactly gov's packet's field list. One row per export kind (review export,
+    answer export, fin CDRL, or any future kind); rows live in a policy file both the validator
+    and each engine's loader read, per the architect's ruling, not as per-engine declarations.
+
+    ``kind`` is an open ``str``, deliberately not a ``Literal``/``Enum`` of the three named
+    kinds — per this repo's generic-at-birth standing rule, a fourth export kind must be
+    reachable by adding a row, not by an SDK release that enumerates it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    """Which export kind this source composes for, e.g. ``"review-export"`` — carried as DATA
+    for the caller's own registry to key on; this module does not branch on it."""
+
+    seed_env: str
+    """The environment variable naming the seed directory, e.g. ``"INGEST_EXPORT_PROFILE_DIR"``."""
+
+    seed_default: str
+    """The seed directory used when ``seed_env`` is unset in the environment."""
+
+    overlay_env: str
+    """The environment variable naming the overlay directories (see the module-level note
+    above on the delimiter convention), e.g. ``"EXPORT_PROFILE_OVERLAY_DIRS"``."""
+
+
+def _export_profile_row(raw: dict) -> dict[str, Any]:
+    """The identity builder: a composed export profile is returned as its raw declared fields,
+    not forced into ``ExportProfileHeader`` or any other fixed shape. The three engines' own
+    profile rows carry different field sets beyond ``name`` (``format``/``scope``/``label`` for
+    some, others besides) — this module's job is composition (seed, overlay, replace,
+    tombstone), not validating what a profile row itself must contain. A caller that wants a
+    typed row still can: pass its own ``builder`` by calling ``declarations.compose_rows``
+    directly with this function's resolved seed/overlay directories."""
+    return dict(raw)
+
+
+def compose_export_profiles(
+    source: ExportProfileSource,
+    *,
+    overlay_dirs: Optional[list[str]] = None,
+) -> dict[str, dict[str, Any]]:
+    """Compose one export kind's profile set from a declared ``ExportProfileSource``.
+
+    Reads the seed directory from ``os.environ.get(source.seed_env, source.seed_default)``,
+    then each overlay directory in order from ``os.environ.get(source.overlay_env)`` (see the
+    module-level note above: treated as ``os.pathsep``-delimited, a flagged guess) unless the
+    caller passes ``overlay_dirs`` explicitly — e.g. ``validate_policy.py`` running offline in
+    CI, which gov's packet names as the reason the source rows live in a file both sides read
+    rather than being served.
+
+    A later directory's same-named profile fully REPLACES the earlier one (never a field-level
+    merge — same ADR-0036 reasoning ``declarations.compose_rows`` already draws); a tombstone
+    (a row with only its ``name`` and ``deleted: true``) REMOVES that name from the set. The
+    profile's identity is its ``name`` field, per gov's packet.
+
+    A missing seed directory is not an error — it composes to no seed rows, same as an empty
+    one (``declarations.read_rows`` globs ``*.yaml`` in a directory that may not exist).
+
+    Returns a ``dict`` keyed by profile ``name`` rather than ``ExportProfileHeader`` rows: the
+    three engines' profiles do not share one field set beyond ``name``, so forcing them into
+    this module's existing header shape would either drop fields or require ``extra="allow"``
+    on a type that elsewhere forbids it. See ``_export_profile_row`` for a caller that wants a
+    typed row.
+    """
+    seed_dir = os.environ.get(source.seed_env, source.seed_default)
+
+    if overlay_dirs is None:
+        raw_overlay = os.environ.get(source.overlay_env)
+        # GUESS pending gov's confirmation (see the module-level note above): os.pathsep-
+        # delimited, e.g. "dir1:dir2" on POSIX or "dir1;dir2" on Windows.
+        overlay_dirs = raw_overlay.split(os.pathsep) if raw_overlay else []
+
+    rows = compose_rows(
+        seed_dir,
+        overlay_dirs,
+        key_field="name",
+        builder=_export_profile_row,
+        label="export profile",
+        error=ExportProfileError,
+    )
+    return {row["name"]: row for row in rows}

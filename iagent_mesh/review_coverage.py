@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 __all__ = [
     "ReviewCoverageGroup",
@@ -41,6 +41,8 @@ __all__ = [
     "ReviewCoverage",
     "ReviewShapeRule",
     "ReviewShapeRow",
+    "ReviewShapeCardOnlyError",
+    "validate_coverage_against_shape",
 ]
 
 
@@ -206,15 +208,24 @@ class ReviewShapeRow(BaseModel):
     ``"finding"`` — the four shapes the wire packet's §4 names as seeded (``notice`` plus the
     three seeded with ``rules: []`` until a rule is declared for them)."""
 
-    item_kind: str
+    item_kind: Optional[str] = None
     """The item kind this shape's reviews address, e.g. ``"part"`` for ``notice``. Must match
     what ``ReviewCoverage.item_kind`` carries for a record of this shape; enforcement is the
-    server's."""
+    server's.
 
-    rules_version: str
+    OPTIONAL, card-only convention: ``None`` here means this row carries no review coverage at
+    all — a "card-only" row, present only to describe the card the item renders as, with nothing
+    for a ``ReviewCoverage`` record to be validated against. See the all-or-nothing rule on
+    :attr:`rules_version`/:attr:`rules` and :meth:`is_card_only`."""
+
+    rules_version: Optional[str] = None
     """This row's current rules version, e.g. ``"notice.v1"``. A ``ReviewCoverage`` record
     computed against a stale version is refused (``unknown_rules_version``, per the wire packet's
-    §4), so a client reads this field to know what to compute against and to send back."""
+    §4), so a client reads this field to know what to compute against and to send back.
+
+    OPTIONAL, same all-or-nothing rule as :attr:`item_kind`: either all three of ``item_kind``/
+    ``rules_version``/``rules`` are set (a coverage row) or all three are ``None`` (a card-only
+    row) — any other combination is refused below."""
 
     params: dict[str, Any] = Field(default_factory=dict)
     """Row-level parameters not scoped to a single rule, e.g. ``{"sample_all_up_to": 4}`` for
@@ -224,7 +235,49 @@ class ReviewShapeRow(BaseModel):
     you" — this type carries whichever split the row ends up declaring, it does not itself take a
     position on which constant belongs where."""
 
-    rules: list[ReviewShapeRule] = Field(default_factory=list)
+    rules: Optional[list[ReviewShapeRule]] = None
     """The rules this shape admits. ``[]`` for a seeded-but-undeclared shape (``document``,
     ``course``, ``finding``, per the wire packet's §4) "until someone declares a rule for them" —
-    an empty list is a real, valid row state, not an omission."""
+    an empty list is a real, valid row state, not an omission.
+
+    OPTIONAL, same all-or-nothing rule as :attr:`item_kind`: ``None`` means a card-only row (no
+    coverage at all); ``[]`` means a coverage row whose rules are simply not yet declared — the
+    two are different facts, which is why ``rules`` defaults to ``None`` rather than ``[]``."""
+
+    @model_validator(mode="after")
+    def _item_kind_rules_version_rules_are_all_or_nothing(self) -> "ReviewShapeRow":
+        fields = {"item_kind": self.item_kind, "rules_version": self.rules_version,
+                  "rules": self.rules}
+        unset = [name for name, v in fields.items() if v is None]
+        if unset and len(unset) != len(fields):
+            set_names = sorted(set(fields) - set(unset))
+            raise ValueError(
+                f"mixed_coverage_fields: {sorted(unset)} unset while {set_names} set on "
+                f"review_shape {self.review_shape!r} — item_kind/rules_version/rules are "
+                f"all-or-nothing: either all three are set (a coverage row) or all three are "
+                f"None (a card-only row with no coverage)"
+            )
+        return self
+
+    @property
+    def is_card_only(self) -> bool:
+        return self.item_kind is None
+
+
+class ReviewShapeCardOnlyError(ValueError):
+    """Raised when a `ReviewCoverage` record is checked against a card-only `ReviewShapeRow`
+    (one with no `item_kind`/`rules_version`/`rules`) — coverage has no meaning for a card-only
+    shape, so this refuses rather than silently accepting."""
+
+
+def validate_coverage_against_shape(coverage: "ReviewCoverage", shape: "ReviewShapeRow") -> None:
+    """Refuses with `ReviewShapeCardOnlyError` if `shape.is_card_only` — the only check this
+    function makes. It does NOT check `coverage.item_kind == shape.item_kind` or
+    `coverage.rules_version == shape.rules_version`; that enforcement is the server's, per this
+    module's existing split between declaring a shape and arbitrating on it (see the module
+    docstring)."""
+    if shape.is_card_only:
+        raise ReviewShapeCardOnlyError(
+            f"review_shape {shape.review_shape!r} is card-only (no item_kind/rules_version/"
+            f"rules) — a ReviewCoverage record cannot be validated against it"
+        )

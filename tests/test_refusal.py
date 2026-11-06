@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from iagent_mesh.refusal import Refusal
+from iagent_mesh.refusal import PartialRefusal, Refusal
 
 VALID = dict(
     policy_id="topaz:can_invoke_mesh_startReview",
@@ -98,3 +98,60 @@ def test_from_terminal_returns_none_for_a_dict_missing_a_required_key():
     import json
     body = {k: v for k, v in VALID.items() if k != "grantable_by"}
     assert Refusal.from_terminal("refusal:" + json.dumps(body)) is None
+
+
+# ── PartialRefusal (the grantable_by-unknown-yet case, option (b) in Lane 1's fork packet) ─────
+
+def test_partial_refusal_builds_without_grantable_by():
+    p = PartialRefusal(
+        policy_id=VALID["policy_id"],
+        missing_binding=VALID["missing_binding"],
+        candidates=VALID["candidates"],
+    )
+    assert p.policy_id == VALID["policy_id"]
+    assert p.missing_binding == VALID["missing_binding"]
+    assert p.candidates == VALID["candidates"]
+
+
+def test_partial_refusal_required_strings_cannot_be_blank():
+    for field in ("policy_id", "missing_binding"):
+        kwargs = {k: v for k, v in VALID.items() if k != "grantable_by"}
+        with pytest.raises(ValidationError, match=field):
+            PartialRefusal(**{**kwargs, field: ""})
+
+
+def test_partial_refusal_candidates_cannot_contain_a_blank_entry():
+    with pytest.raises(ValidationError, match="candidates"):
+        PartialRefusal(
+            policy_id=VALID["policy_id"],
+            missing_binding=VALID["missing_binding"],
+            candidates=("role:finance-lead", ""),
+        )
+
+
+def test_partial_refusal_is_frozen_and_forbids_extra_fields():
+    p = PartialRefusal(policy_id=VALID["policy_id"], missing_binding=VALID["missing_binding"])
+    with pytest.raises(ValidationError):
+        p.policy_id = "something-else"  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        PartialRefusal(
+            policy_id=VALID["policy_id"],
+            missing_binding=VALID["missing_binding"],
+            grantable_by="role:finance-lead",  # type: ignore[call-arg]
+        )
+
+
+def test_partial_refusal_complete_returns_a_full_refusal():
+    p = PartialRefusal(
+        policy_id=VALID["policy_id"],
+        missing_binding=VALID["missing_binding"],
+        candidates=VALID["candidates"],
+    )
+    r = p.complete(grantable_by=VALID["grantable_by"])
+    assert r == Refusal(**VALID)
+
+
+def test_partial_refusal_complete_cannot_smuggle_in_a_blank_grantable_by():
+    p = PartialRefusal(policy_id=VALID["policy_id"], missing_binding=VALID["missing_binding"])
+    with pytest.raises(ValidationError, match="grantable_by"):
+        p.complete(grantable_by="")

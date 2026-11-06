@@ -187,6 +187,21 @@ class TaskKind(BaseModel):
     not another is expressible only afterwards — but it is a CHANGE, not a restatement, and a
     row written in anticipation of it does nothing until the consumer moves."""
 
+    carries: dict[str, Literal["edits", "reject", "none"]] = Field(default_factory=dict)
+    """What a verb's act CARRIES, per verb. An absent verb means the default: ``"none"`` — it
+    carries nothing beyond the act itself. ``"edits"`` means the verb's act carries a proposed
+    edit to the thing under review; ``"reject"`` means it carries a rejection of it. Validated
+    below as a subset of ``accepts`` (same reachability discipline as ``reason_required``) and,
+    across the whole map, AT MOST ONE verb may carry ``"edits"`` and AT MOST ONE may carry
+    ``"reject"`` — two verbs both claiming to carry the same kind of act would leave a consumer
+    unable to tell which one actually applies the edit or the rejection when either fires."""
+
+    applies_when: dict[str, Literal["flagged", "unflagged", "any"]] = Field(default_factory=dict)
+    """When a verb is OFFERED, per verb. An absent verb means the default: ``"any"`` — offered
+    regardless of whether the item under review is flagged. ``"flagged"``/``"unflagged"``
+    narrow a verb to one of the two states. Validated below as a subset of ``accepts``, same
+    reachability discipline as ``reason_required`` and ``carries``."""
+
     @field_validator("kind")
     @classmethod
     def _kind_is_a_bare_token(cls, v: str) -> str:
@@ -207,6 +222,43 @@ class TaskKind(BaseModel):
                 f"a rule whose input can never arrive is a rule that reads as enforced and is not"
             )
         return self
+
+    @model_validator(mode="after")
+    def _carries_and_applies_when_are_reachable_and_carries_is_at_most_one_per_value(
+        self,
+    ) -> "TaskKind":
+        accepts = set(self.accepts)
+        stray_carries = sorted(set(self.carries) - accepts)
+        if stray_carries:
+            raise ValueError(
+                f"kind {self.kind!r} declares carries for {stray_carries}, which it does not "
+                f"accept — a rule whose input can never arrive is a rule that reads as enforced "
+                f"and is not"
+            )
+        stray_applies_when = sorted(set(self.applies_when) - accepts)
+        if stray_applies_when:
+            raise ValueError(
+                f"kind {self.kind!r} declares applies_when for {stray_applies_when}, which it "
+                f"does not accept — a rule whose input can never arrive is a rule that reads as "
+                f"enforced and is not"
+            )
+        for value in ("edits", "reject"):
+            collided = sorted(v for v, c in self.carries.items() if c == value)
+            if len(collided) > 1:
+                raise ValueError(
+                    f"kind {self.kind!r} maps {collided} all to carries={value!r} — at most one "
+                    f"verb may carry {value!r}, or a consumer cannot tell which one actually "
+                    f"applies it"
+                )
+        return self
+
+    def carries_for(self, verb: str) -> str:
+        """`self.carries.get(verb, "none")` — the default for a verb absent from the map."""
+        return self.carries.get(verb, "none")
+
+    def applies_when_for(self, verb: str) -> str:
+        """`self.applies_when.get(verb, "any")` — the default for a verb absent from the map."""
+        return self.applies_when.get(verb, "any")
 
 
 #: What an UNDECLARED kind resolves to. The badge says nothing, which is harmless; ``accepts``

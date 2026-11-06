@@ -19,8 +19,10 @@ from iagent_mesh.review_coverage import (
     ReviewCoverage,
     ReviewCoverageGroup,
     ReviewCoverageSharedFact,
+    ReviewShapeCardOnlyError,
     ReviewShapeRow,
     ReviewShapeRule,
+    validate_coverage_against_shape,
 )
 
 
@@ -117,8 +119,10 @@ def test_shared_fact_bbox_must_have_positive_area():
 
 
 def test_review_shape_row_with_no_rules_yet():
+    # rules is explicit here because it is now Optional, defaulting to None (card-only) rather
+    # than [] — a coverage row with no rules declared yet must say so explicitly.
     row = ReviewShapeRow(
-        review_shape="course", item_kind="concept", rules_version="course.v1"
+        review_shape="course", item_kind="concept", rules_version="course.v1", rules=[]
     )
     assert row.rules == []
     assert row.params == {}
@@ -159,3 +163,46 @@ def test_rule_key_item_kind_review_shape_are_an_open_vocabulary_not_a_closed_enu
     assert coverage.item_kind == "a-brand-new-item-kind"
     assert coverage.groups[0].rule == "a-brand-new-rule"
     assert coverage.groups[0].key == "a-brand-new-key"
+
+
+# ── card-only ReviewShapeRow (item_kind/rules_version/rules are all-or-nothing) ──
+
+
+def test_card_only_row_validates():
+    row = ReviewShapeRow(review_shape="finding")
+    assert row.item_kind is None
+    assert row.rules_version is None
+    assert row.rules is None
+    assert row.is_card_only is True
+
+
+def test_full_coverage_row_validates_even_with_empty_rules():
+    row = ReviewShapeRow(
+        review_shape="course", item_kind="concept", rules_version="course.v1", rules=[]
+    )
+    assert row.is_card_only is False
+    assert row.rules == []
+
+
+def test_mixed_card_only_fields_are_refused():
+    with pytest.raises(ValidationError, match="mixed_coverage_fields:"):
+        ReviewShapeRow(review_shape="finding", item_kind="part")
+
+
+def test_validate_coverage_against_shape_refuses_card_only_shape():
+    card_only = ReviewShapeRow(review_shape="finding")
+    coverage = ReviewCoverage(review_shape="finding", item_kind="part", rules_version="v1")
+    with pytest.raises(ReviewShapeCardOnlyError):
+        validate_coverage_against_shape(coverage, card_only)
+
+
+def test_validate_coverage_against_shape_accepts_coverage_shape_even_if_item_kind_mismatches():
+    # deliberately mismatched item_kind — this function only checks is_card_only, never
+    # coverage.item_kind == shape.item_kind (that enforcement is the server's).
+    shape = ReviewShapeRow(
+        review_shape="notice", item_kind="part", rules_version="notice.v1", rules=[]
+    )
+    coverage = ReviewCoverage(
+        review_shape="notice", item_kind="something-else", rules_version="notice.v1"
+    )
+    assert validate_coverage_against_shape(coverage, shape) is None

@@ -53,7 +53,15 @@ __all__ = [
     "read_rows",
     "load_rows",
     "compose_rows",
+    "GRANTED_BY_SEED",
 ]
+
+#: The sentinel `granted_by`/`ratified_by` value for a ratified row that was authored by the
+#: SEED itself (bootstrap/platform-shipped), not by a named human or a named seat (e.g.
+#: "architect", "owner"). A consumer's own validator/seal should import this rather than
+#: restating its own local copy of the same string — see the architect's 2026-10-31 ruling on
+#: `ratified_by` naming a seat, not a person, for the sibling convention this sits beside.
+GRANTED_BY_SEED = "seed"
 
 T = TypeVar("T")
 

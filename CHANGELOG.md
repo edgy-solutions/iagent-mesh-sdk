@@ -6,6 +6,70 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.15 — 2026-11-05 (draft, uncut)
+
+### Added
+- `AssetContract` (`iagent_mesh/asset_contract.py`) — the Pydantic mirror of a
+  `contracts/<name>.yaml` file (ADR-0066, provisional), mirroring invincible-agent's
+  `contracts/ev_fixture.yaml` (PR #275, `0ee3c873`, 2026-11-05) field-for-field: "the first
+  contract as data". `load_asset_contract(path)` loads one file; `load_asset_contracts(dir)`
+  loads every contract in a directory, built on `declarations.load_rows` (a contract is a
+  ratified row — `status: sample|proposed|ratified` — not a seed-plus-overlay composed set, so
+  `compose_rows` was not reached for). `validate(dataframe_schema, contract)` checks the
+  schema-level subset of the contract's named rules (`missing_column`, `wrong_type`) against a
+  `(name, type_name)` tuple shaped like `DataRef.schema_`; the remaining, row/value-level rules
+  stay the reader's own job. dag-tools imports this module.
+- `MeasureSeries` / `MeasureSeriesReference` (`iagent_mesh/measure_series.py`) — Fork A1, ruled
+  2026-11-05 (lane/fin's time-phasing census): the first shared render-declaration model for a
+  MULTI_SERIES measure row. A declared series is `{key, label, unit?, cumulative?}`; a reference
+  is `{label}` plus exactly one of `value` (a constant) or `series` (a declared key). Fields on
+  the existing MULTI_SERIES archetype, not a new archetype; `cumulative` is a fact about served
+  values, never a cue for a renderer to accumulate. fin's loader and cortex-ui's
+  `multi-series/contract.ts` converge onto this shape instead of staying two hand-rolled copies.
+- `WorkflowDefinition.steps` — the `tuple[Step, ...]` field's emptiness check moved from
+  `Field(..., min_length=1)` to an `after`-validator (invincible-agent/lane/74, 2026-11-05):
+  pydantic 2.12.5 reports a tuple (not list) `min_length` failure alongside a failing element's
+  own error, so one bad step read as `steps: []` to any caller of `.errors()`. The validator runs
+  only once every step has already validated, so a bad step's error now stands alone.
+
+## 0.9.14 — 2026-11-04
+
+*No `## 0.9.13` entry exists above this one — that tag (`d8165f3`) covers five gating items filed
+as reply packets, not a CHANGELOG edit. Not backfilled here; out of this entry's own scope.*
+
+### Added
+- `iagent_mesh.pdp_answer` — `check_answer`, `decision_answer`, `MalformedPdpAnswer`
+  (`iagent_mesh/pdp_answer.py`), a verbatim port of `agent_fleet/utils/pdp_answer.py` (PR #190)
+  for the training-consolidation workbench, which cannot import `agent_fleet`. A non-boolean PDP
+  field is the OUTAGE class (`MalformedPdpAnswer`, never coerced with `bool(...)`); an absent
+  field reads as `False` (proto3 JSON may omit a false boolean). `MalformedPdpAnswer(httpx.
+  DecodingError, ValueError)` — `httpx` is already a base dependency, no base-class judgment call
+  needed. Both `check_answer` and `decision_answer` ported, not just the directory-check half the
+  workbench calls today, since the two share `_body`/`_strict` in the source and its test matrix.
+- `MeshData` / `DataRef` (`iagent_mesh/interfaces.py`) — the fifth named-read Protocol, ruled
+  2026-11-02 and built now that invincible-agent PR #219 (engine-fin's hand-built finance-inputs
+  resolver) independently reimplements the ticket/size-gate/timing/typed-denial shape this
+  Protocol formalizes. `resolve(initiator, urn, *, columns=None, predicate=None, period=None) ->
+  MeshResult[DataRef]`; `DataRef` is a handle, never `pl.LazyFrame` (this SDK carries zero polars
+  dependency, by deliberate one-way design) — `ticket` / `schema_` (wire key `schema`) /
+  `row_count_estimate` / `as_of` / `provenance`. `urn` is opaque to the Protocol, same posture as
+  `MeshArtifacts.get`'s `kind`; no listing method (access is per-dataset, not enumerable by kind);
+  pushdown (`columns`/`predicate`/`period`) is resolve-time, applied by the broker before the
+  handle comes back; entitlement collapses into `outcome="empty"`, same discipline as
+  `MeshArtifacts`; the size gate is implementation-level — this Protocol only requires
+  `outcome="failed"` with a `detail` naming it, never the unreported-OOM shape a prior incident
+  (a `GROUP BY` over `p_cage`, OOMKilled at 2Gi) is named for.
+- `check_mesh_data_entitlement_contract`, `check_mesh_data_size_gate_contract`
+  (`iagent_mesh/conformance.py`) — the latter has no `MeshArtifacts` analog, the first
+  Protocol-level size-gate-shape requirement in this file.
+
+### Not in this cut
+- Converging invincible-agent PR #219 onto `MeshData.resolve` — fin's own lane's follow-up, not a
+  precondition of this cut, same precedent `MeshArtifacts` set shipping before cortex's and
+  OpenDDIL's hand-built routes migrated to call it.
+- An adoption-ratchet census of what the BFF still hand-copies instead of importing from this
+  SDK — separate report, in progress.
+
 ## 0.9.12 — 2026-10-30
 
 ### Added

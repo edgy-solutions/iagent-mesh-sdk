@@ -87,10 +87,11 @@ _PKG = pathlib.Path(iagent_mesh.__file__).parent
 #: Modules whose public surface IS the package's surface. Every `__all__` name must be reachable
 #: from `import iagent_mesh`.
 _EXPORTED = {
-    "conformance", "declarations", "discovery", "edge_types", "enumeration", "export_profile",
-    "graph_manifest", "ingest", "interfaces", "maintenance_bridge", "normalize", "persistence",
-    "provenance", "refusal", "results", "review_coverage", "rows", "shapes", "systems_of_record",
-    "task_kinds", "workflow_case", "workflow_definition", "write_results",
+    "asset_contract", "conformance", "declarations", "discovery", "edge_types", "enumeration",
+    "export_profile", "graph_manifest", "ingest", "interfaces", "maintenance_bridge",
+    "measure_series", "normalize", "pdp_answer", "persistence", "provenance", "refusal",
+    "results", "review_coverage", "rows", "shapes", "systems_of_record", "task_kinds",
+    "workflow_case", "workflow_definition", "write_results",
 }
 
 #: Modules deliberately NOT re-exported, each with the reason. An omission with a reason is a
@@ -169,6 +170,12 @@ _EXEMPT = {
         "collides with graph_manifest.validate_dir (at the root, what the policy repo's PR gate "
         "imports), task_kinds.validate_dir and ingest.validate_dir (both already exempt). "
         "RULED: systems_of_record's stays module-qualified too, same reason as `compose`",
+    # ── 2026-11-05: `asset_contract` — no collision, a deliberate rename ───────────────────
+    ("asset_contract", "validate"):
+        "no colliding root name today, but `validate` alone is too generic for the package "
+        "root — every other root-level checker here is `validate_<thing>` (validate_dir, "
+        "validate_provenance, validate_connectors_known, validate_coverage_against_shape). "
+        "RULED: re-exported as `validate_asset_contract`; the bare name stays module-qualified",
 }
 
 

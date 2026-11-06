@@ -79,6 +79,8 @@ from .conformance import (
     check_live,
     check_mesh_artifacts_entitlement_contract,
     check_mesh_artifacts_list_by_kind_contract,
+    check_mesh_data_entitlement_contract,
+    check_mesh_data_size_gate_contract,
     check_offline,
     check_ontology_contract,
     check_ontology_writer_contract,
@@ -127,12 +129,14 @@ from .interfaces import (
     MESH_COLLECTION_META,
     CollectionMarker,
     CorruptCollectionMarker,
+    DataRef,
     DelegateIdentityRefused,
     EdgeIdentity,
     EdgeIdentityFilter,
     Embedder,
     Initiator,
     MeshArtifacts,
+    MeshData,
     MeshGraph,
     MeshGraphWriter,
     MeshOntology,
@@ -191,7 +195,7 @@ from .provenance import (
 # THE REFUSAL ENVELOPE, RE-EXPORTED AT ROOT for the same reason `provenance` is — a denied
 # authorization decision gov and fin both adopt only resolves to one shape if it comes from one
 # import path. Architect directive, 2026-10-24.
-from .refusal import Refusal
+from .refusal import PartialRefusal, Refusal
 
 # THE INGEST WIRE SHAPES, RE-EXPORTED AT ROOT for the same reason `provenance` is — `IngestRequest`
 # is meant to be one wire shape two repos agree on, which only holds if it resolves from one
@@ -246,6 +250,7 @@ from .ingest import (
 # while the root hands the caller graph_manifest's function, which is precisely the silent
 # shadowing that file exists to prevent, wearing a green.
 from .declarations import (
+    GRANTED_BY_SEED,
     DeclarationError,
     compose_rows,
     load_rows,
@@ -361,7 +366,35 @@ from .normalize import normalize_mpn
 # The shared export-profile header (architect directive, 2026-10-30) — one shape three
 # independently-evolved producers each return under their own `header()` method; see the module
 # docstring for the field-set history (`scope` vs `granularity`) and the exact field list ruled.
-from .export_profile import ExportProfileHeader
+from .export_profile import (
+    ExportProfileError,
+    ExportProfileHeader,
+    ExportProfileSource,
+    compose_export_profiles,
+)
+
+# AssetContract (ADR-0066, provisional) — the Pydantic mirror of a `contracts/<name>.yaml` file,
+# mirroring invincible-agent's ev_fixture.yaml (PR #275, 0ee3c873), the first contract as data.
+# dag-tools imports this to validate a materialized asset's schema against a deployment's own
+# contract; see the module docstring for what `validate` checks and what it leaves to the reader.
+from .asset_contract import (
+    AssetContract,
+    AssetContractCadence,
+    AssetContractColumn,
+    AssetContractDataset,
+    AssetContractError,
+    AssetContractLimits,
+    AssetContractPeriod,
+    load_asset_contract,
+    load_asset_contracts,
+)
+from .asset_contract import validate as validate_asset_contract
+
+# MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05) — the first shared
+# render-declaration model for a MULTI_SERIES measure row; fin's loader and cortex-ui's contract
+# both converge onto this shape. See the module docstring for why `cumulative` is a fact, never
+# an instruction to accumulate.
+from .measure_series import MeasureSeries, MeasureSeriesReference
 
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
@@ -382,9 +415,24 @@ from .review_coverage import (
     ReviewCoverage,
     ReviewCoverageGroup,
     ReviewCoverageSharedFact,
+    ReviewShapeCardOnlyError,
     ReviewShapeRow,
     ReviewShapeRule,
+    validate_coverage_against_shape,
 )
+
+# The SDK-adoption drift check (2026-10-30) — a reusable, importable version of the 2026-10-17
+# hand-copy census (docs/measurements/2026-10-17-sdk-adoption-census.md), meant to be called from
+# ANOTHER repo's own CI, e.g. `from iagent_mesh.sdk_adoption import assert_no_hand_copied_types`.
+# Deliberately a SEPARATE module from `conformance`, which already owns that name for a different
+# meaning (does a given interface IMPLEMENTATION behave per contract) — see sdk_adoption.py's
+# module docstring for why the collision matters and why this isn't folded into conformance.py.
+from .sdk_adoption import HandCopyFinding, assert_no_hand_copied_types, find_hand_copied_types
+
+# The strict PDP-answer reader (architect ruling 2026-11-02: "yes, the SDK carries the strict
+# reader (ca)"), ported verbatim from invincible-agent/agent_fleet/utils/pdp_answer.py (PR #190)
+# for the workbench, which cannot import agent_fleet. See pdp_answer.py's module docstring.
+from .pdp_answer import MalformedPdpAnswer, check_answer, decision_answer
 
 # `marker_is_stale` IS DELIBERATELY NOT RE-EXPORTED HERE. It is the deprecated alias for
 # `marker_predates_collection`, and promoting a deprecated name into a NEW namespace extends its
@@ -431,6 +479,8 @@ __all__ = [
     "check_live",
     "check_mesh_artifacts_entitlement_contract",
     "check_mesh_artifacts_list_by_kind_contract",
+    "check_mesh_data_entitlement_contract",
+    "check_mesh_data_size_gate_contract",
     "check_offline",
     "check_ontology_contract",
     "check_ontology_writer_contract",
@@ -450,12 +500,14 @@ __all__ = [
     "MESH_COLLECTION_META",
     "CollectionMarker",
     "CorruptCollectionMarker",
+    "DataRef",
     "DelegateIdentityRefused",
     "EdgeIdentity",
     "EdgeIdentityFilter",
     "Embedder",
     "Initiator",
     "MeshArtifacts",
+    "MeshData",
     "MeshGraph",
     "MeshGraphWriter",
     "MeshOntology",
@@ -500,6 +552,7 @@ __all__ = [
     "validate_provenance",
     # the refusal envelope (architect directive, 2026-10-24 — gov and fin both adopt this shape)
     "Refusal",
+    "PartialRefusal",
     # the ingest wire shapes (ADR-0021 content-kind selection / ADR-0041 user-drop ingest)
     "CONTENT_KIND_BRANCHES",
     "INGEST_STAGES",
@@ -553,6 +606,7 @@ __all__ = [
     "compose_rows",
     "load_rows",
     "read_rows",
+    "GRANTED_BY_SEED",
     "GROUPS",
     "AmbiguousImplementation",
     "NoImplementation",
@@ -634,6 +688,23 @@ __all__ = [
     "normalize_mpn",
     # the shared export-profile header (architect directive, 2026-10-30)
     "ExportProfileHeader",
+    "ExportProfileError",
+    "ExportProfileSource",
+    "compose_export_profiles",
+    # AssetContract (ADR-0066, provisional) — mirror of contracts/<name>.yaml, dag-tools imports it
+    "AssetContract",
+    "AssetContractCadence",
+    "AssetContractColumn",
+    "AssetContractDataset",
+    "AssetContractError",
+    "AssetContractLimits",
+    "AssetContractPeriod",
+    "load_asset_contract",
+    "load_asset_contracts",
+    "validate_asset_contract",
+    # MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05)
+    "MeasureSeries",
+    "MeasureSeriesReference",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",
@@ -646,4 +717,14 @@ __all__ = [
     "ReviewCoverageSharedFact",
     "ReviewShapeRow",
     "ReviewShapeRule",
+    "ReviewShapeCardOnlyError",
+    "validate_coverage_against_shape",
+    # the SDK-adoption drift check (2026-10-30) — reusable version of the hand-copy census
+    "HandCopyFinding",
+    "assert_no_hand_copied_types",
+    "find_hand_copied_types",
+    # the strict PDP-answer reader (architect ruling 2026-11-02), ported for the workbench
+    "MalformedPdpAnswer",
+    "check_answer",
+    "decision_answer",
 ]

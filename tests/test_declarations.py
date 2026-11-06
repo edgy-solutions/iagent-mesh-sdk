@@ -20,6 +20,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from iagent_mesh.declarations import (
+    GRANTED_BY_SEED,
     DeclarationError,
     compose_rows,
     load_rows,
@@ -236,3 +237,15 @@ def test_the_family_error_is_raised_not_the_base(tmp_path):
     _write(tmp_path, "a.yaml", {"outcome": "no key here"})
     with pytest.raises(DeclarationError):
         read_rows(tmp_path, key_field="decision_id", error=DecisionError)
+
+
+# ── GRANTED_BY_SEED ───────────────────────────────────────────────────────────────────────
+
+def test_granted_by_seed_is_the_sentinel_string():
+    assert GRANTED_BY_SEED == "seed"
+
+
+def test_granted_by_seed_is_importable_from_the_package_root():
+    from iagent_mesh import GRANTED_BY_SEED as root_sentinel
+
+    assert root_sentinel == "seed"
