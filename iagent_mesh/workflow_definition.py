@@ -308,13 +308,25 @@ class WorkflowDefinition(_Declared):
     classification: Optional[str] = None
     participants: tuple[dict, ...] = ()
     domain_stages: tuple[str, ...] = ()
-    steps: tuple[Step, ...] = Field(..., min_length=1)  # type: ignore[valid-type]
+    steps: tuple[Step, ...]  # type: ignore[valid-type]
     observable_state: Optional[dict] = None
 
     @model_validator(mode="after")
     def _id_and_name_are_present(self) -> "WorkflowDefinition":
         _required_str("WorkflowDefinition", "id", self.id)
         _required_str("WorkflowDefinition", "name", self.name)
+        return self
+
+    @model_validator(mode="after")
+    def _steps_are_present(self) -> "WorkflowDefinition":
+        # Deliberately not `Field(..., min_length=1)`: pydantic 2.12.5 reports BOTH the failing
+        # element's own error AND a field-level `too_short` for a tuple (not a list) whose
+        # min_length is violated by that same failure, making a definition with one bad step
+        # read as a definition with none. Checking emptiness here instead means this validator
+        # only runs once every step has already validated, so a bad step reports just its own
+        # error — invincible-agent/lane/74, 2026-11-05.
+        if not self.steps:
+            raise ValueError(f"definition {self.id}: steps must not be empty")
         return self
 
     @model_validator(mode="after")

@@ -373,6 +373,29 @@ from .export_profile import (
     compose_export_profiles,
 )
 
+# AssetContract (ADR-0066, provisional) — the Pydantic mirror of a `contracts/<name>.yaml` file,
+# mirroring invincible-agent's ev_fixture.yaml (PR #275, 0ee3c873), the first contract as data.
+# dag-tools imports this to validate a materialized asset's schema against a deployment's own
+# contract; see the module docstring for what `validate` checks and what it leaves to the reader.
+from .asset_contract import (
+    AssetContract,
+    AssetContractCadence,
+    AssetContractColumn,
+    AssetContractDataset,
+    AssetContractError,
+    AssetContractLimits,
+    AssetContractPeriod,
+    load_asset_contract,
+    load_asset_contracts,
+)
+from .asset_contract import validate as validate_asset_contract
+
+# MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05) — the first shared
+# render-declaration model for a MULTI_SERIES measure row; fin's loader and cortex-ui's contract
+# both converge onto this shape. See the module docstring for why `cumulative` is a fact, never
+# an instruction to accumulate.
+from .measure_series import MeasureSeries, MeasureSeriesReference
+
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
 # might eventually agree on only resolves to one thing from one import path.
@@ -668,6 +691,20 @@ __all__ = [
     "ExportProfileError",
     "ExportProfileSource",
     "compose_export_profiles",
+    # AssetContract (ADR-0066, provisional) — mirror of contracts/<name>.yaml, dag-tools imports it
+    "AssetContract",
+    "AssetContractCadence",
+    "AssetContractColumn",
+    "AssetContractDataset",
+    "AssetContractError",
+    "AssetContractLimits",
+    "AssetContractPeriod",
+    "load_asset_contract",
+    "load_asset_contracts",
+    "validate_asset_contract",
+    # MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05)
+    "MeasureSeries",
+    "MeasureSeriesReference",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",

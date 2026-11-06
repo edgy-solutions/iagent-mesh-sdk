@@ -6,7 +6,33 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.14 — 2026-11-03 (draft, uncut)
+## 0.9.15 — 2026-11-05 (draft, uncut)
+
+### Added
+- `AssetContract` (`iagent_mesh/asset_contract.py`) — the Pydantic mirror of a
+  `contracts/<name>.yaml` file (ADR-0066, provisional), mirroring invincible-agent's
+  `contracts/ev_fixture.yaml` (PR #275, `0ee3c873`, 2026-11-05) field-for-field: "the first
+  contract as data". `load_asset_contract(path)` loads one file; `load_asset_contracts(dir)`
+  loads every contract in a directory, built on `declarations.load_rows` (a contract is a
+  ratified row — `status: sample|proposed|ratified` — not a seed-plus-overlay composed set, so
+  `compose_rows` was not reached for). `validate(dataframe_schema, contract)` checks the
+  schema-level subset of the contract's named rules (`missing_column`, `wrong_type`) against a
+  `(name, type_name)` tuple shaped like `DataRef.schema_`; the remaining, row/value-level rules
+  stay the reader's own job. dag-tools imports this module.
+- `MeasureSeries` / `MeasureSeriesReference` (`iagent_mesh/measure_series.py`) — Fork A1, ruled
+  2026-11-05 (lane/fin's time-phasing census): the first shared render-declaration model for a
+  MULTI_SERIES measure row. A declared series is `{key, label, unit?, cumulative?}`; a reference
+  is `{label}` plus exactly one of `value` (a constant) or `series` (a declared key). Fields on
+  the existing MULTI_SERIES archetype, not a new archetype; `cumulative` is a fact about served
+  values, never a cue for a renderer to accumulate. fin's loader and cortex-ui's
+  `multi-series/contract.ts` converge onto this shape instead of staying two hand-rolled copies.
+- `WorkflowDefinition.steps` — the `tuple[Step, ...]` field's emptiness check moved from
+  `Field(..., min_length=1)` to an `after`-validator (invincible-agent/lane/74, 2026-11-05):
+  pydantic 2.12.5 reports a tuple (not list) `min_length` failure alongside a failing element's
+  own error, so one bad step read as `steps: []` to any caller of `.errors()`. The validator runs
+  only once every step has already validated, so a bad step's error now stands alone.
+
+## 0.9.14 — 2026-11-04
 
 *No `## 0.9.13` entry exists above this one — that tag (`d8165f3`) covers five gating items filed
 as reply packets, not a CHANGELOG edit. Not backfilled here; out of this entry's own scope.*
