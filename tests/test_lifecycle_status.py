@@ -1,13 +1,14 @@
-"""`LifecycleStatus` / `ImpactRow` — ADR-0065 section D's two field kinds (provisional number).
-See `iagent_mesh/lifecycle_status.py`'s module docstring for the absent/null distinction and for
-why `ImpactRow` renames section D's own `ltb_decision`.
+"""`LifecycleStatus` / `LtbDecision` (ADR-0065 section D) / `ImpactRow` (ADR-0065 section E,
+provisional number). See `iagent_mesh/lifecycle_status.py`'s module docstring for the absent/null
+distinction and for why `ImpactRow` is NOT a rename of `LtbDecision` — they are separate shapes
+from separate sections.
 """
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from iagent_mesh.lifecycle_status import ImpactRow, LifecycleStatus
+from iagent_mesh.lifecycle_status import ImpactRow, LifecycleStatus, LtbDecision
 
 
 def test_lifecycle_status_requires_source_and_as_of():
@@ -47,22 +48,46 @@ def test_lifecycle_status_is_frozen_and_forbids_unknown_fields():
         )
 
 
-def test_impact_row_mirrors_section_d_fields():
-    row = ImpactRow(quantity=50, by="svc:disposition-writer", rationale="PCN-1234", approved_by="role:engineering")
+def test_ltb_decision_mirrors_section_d_fields():
+    row = LtbDecision(quantity=50, by="svc:disposition-writer", rationale="PCN-1234", approved_by="role:engineering")
     assert row.quantity == 50
     assert row.by == "svc:disposition-writer"
     assert row.rationale == "PCN-1234"
     assert row.approved_by == "role:engineering"
 
 
-def test_impact_row_requires_all_four_fields():
+def test_ltb_decision_requires_all_four_fields():
     with pytest.raises(ValidationError):
-        ImpactRow(quantity=50, by="svc:x", rationale="PCN-1")  # missing approved_by
+        LtbDecision(quantity=50, by="svc:x", rationale="PCN-1")  # missing approved_by
 
 
-def test_impact_row_is_frozen_and_forbids_unknown_fields():
-    row = ImpactRow(quantity=1, by="svc:x", rationale="r", approved_by="role:y")
+def test_ltb_decision_is_frozen_and_forbids_unknown_fields():
+    row = LtbDecision(quantity=1, by="svc:x", rationale="r", approved_by="role:y")
     with pytest.raises(ValidationError):
         row.quantity = 2
     with pytest.raises(ValidationError):
-        ImpactRow(quantity=1, by="svc:x", rationale="r", approved_by="role:y", extra_field="x")
+        LtbDecision(quantity=1, by="svc:x", rationale="r", approved_by="role:y", extra_field="x")
+
+
+def test_impact_row_requires_part_ref_and_used_by():
+    row = ImpactRow(part_ref="part:1234", used_by="program:alpha")
+    assert row.part_ref == "part:1234"
+    assert row.used_by == "program:alpha"
+    assert row.quantity is None
+    with pytest.raises(ValidationError):
+        ImpactRow(part_ref="part:1234")  # missing used_by
+
+
+def test_impact_row_quantity_defaults_to_none_and_accepts_zero():
+    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=4)
+    assert row.quantity == 4
+    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=0)
+    assert row.quantity == 0
+
+
+def test_impact_row_is_frozen_and_forbids_unknown_fields():
+    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=4)
+    with pytest.raises(ValidationError):
+        row.quantity = 5
+    with pytest.raises(ValidationError):
+        ImpactRow(part_ref="part:1234", used_by="program:alpha", extra_field="x")

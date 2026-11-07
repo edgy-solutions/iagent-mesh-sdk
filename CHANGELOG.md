@@ -23,12 +23,16 @@ version field — it stays at the value it forked from until a release ceremony 
   `policy/classification/dimensions.yaml`; `None` means unlabelled. The vocabulary and the
   most-restrictive-when-unlabelled ordering check both stay on gov's side, not this SDK's, per
   gov's 2026-11-06 packet to ca.
-- `LifecycleStatus` and `ImpactRow` (`iagent_mesh/lifecycle_status.py`, new module) — the two
-  field kinds ADR-0065 section D names (provisional number; recovered from a doc-tools packet
-  since the ADR is not yet committed anywhere): `lifecycle_status {status, source, as_of,
-  successor?}` unchanged, and `ltb_decision {quantity, by, rationale, approved_by}` generalized
-  and renamed to `ImpactRow` so it applies to any disposition option the `obsolescence_resolution`
-  workflow's decide step resolves to, not last-time-buy alone. Documents the absent-vs-null
+- `LifecycleStatus`, `LtbDecision`, and `ImpactRow` (`iagent_mesh/lifecycle_status.py`, new
+  module) — three row shapes for the `obsolescence_resolution` workflow, split across two
+  ADR-0065 sections (provisional number; the ADR is not yet committed anywhere). Section D
+  (recovered from a doc-tools packet) names `lifecycle_status {status, source, as_of,
+  successor?}` and `ltb_decision {quantity, by, rationale, approved_by}` — both ship unchanged,
+  under their own names, as `LifecycleStatus` and `LtbDecision`. `ImpactRow` is a separate shape
+  from section E — "the where-used impact-table row" — per the architect's 2026-11-06 correction
+  (via Chris) of an earlier draft that had wrongly renamed `ltb_decision` to `ImpactRow`; section
+  E has no recovered field-level spec anywhere, so `ImpactRow {part_ref, used_by, quantity?}` is
+  this module's own flagged judgment call, not a recovered one. Documents the absent-vs-null
   distinction ("status absent = not assessed, status null = assessed, none known") across the two
   levels it actually applies at. Ships row shapes only — no emitter, registry, or workflow runner.
 
