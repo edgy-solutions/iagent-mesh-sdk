@@ -6,7 +6,33 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.15 — 2026-11-05 (draft, uncut)
+## 0.9.16 — 2026-11-06 (draft, uncut)
+
+### Added
+- `options` on `HumanAwaitStep` (`iagent_mesh/workflow_definition.py`) — a decide step's open
+  vocabulary of answers (e.g. a disposition list), per the architect's ruling 3 on
+  `invincible-agent#276` ("options live on the decide step... `steps[id=…].options`"). A plain
+  `tuple[str, ...]`, never `Literal`/`Enum`, per generic-at-birth. Validated non-empty, no
+  whitespace/`:`/`.`, and unique within the step — `policy/option_deciders.yaml` keys
+  `<workflow_id>.<option>` by splitting on the first `.`. Extends the existing "declarable but
+  NOT implemented" refusal on a grouped await to cover `options` too. Relationship to
+  `chooses_from` (both/either/replacing) is left open for lane 74, after the Socratic bar work.
+- `level` on `AssetContractColumn` and `max_level` on `AssetContractDataset`
+  (`iagent_mesh/asset_contract.py`) — ADR-0064's per-column/per-dataset classification, per the
+  architect's ruling 4 on `invincible-agent#276`. Both open strings against a deployment's
+  `policy/classification/dimensions.yaml`; `None` means unlabelled. The vocabulary and the
+  most-restrictive-when-unlabelled ordering check both stay on gov's side, not this SDK's, per
+  gov's 2026-11-06 packet to ca.
+- `LifecycleStatus` and `ImpactRow` (`iagent_mesh/lifecycle_status.py`, new module) — the two
+  field kinds ADR-0065 section D names (provisional number; recovered from a doc-tools packet
+  since the ADR is not yet committed anywhere): `lifecycle_status {status, source, as_of,
+  successor?}` unchanged, and `ltb_decision {quantity, by, rationale, approved_by}` generalized
+  and renamed to `ImpactRow` so it applies to any disposition option the `obsolescence_resolution`
+  workflow's decide step resolves to, not last-time-buy alone. Documents the absent-vs-null
+  distinction ("status absent = not assessed, status null = assessed, none known") across the two
+  levels it actually applies at. Ships row shapes only — no emitter, registry, or workflow runner.
+
+## 0.9.15 — 2026-11-05 (tagged v0.9.15 at 5a526b6 via PR #1)
 
 ### Added
 - `AssetContract` (`iagent_mesh/asset_contract.py`) — the Pydantic mirror of a

@@ -1,0 +1,68 @@
+"""`LifecycleStatus` / `ImpactRow` — ADR-0065 section D's two field kinds (provisional number).
+See `iagent_mesh/lifecycle_status.py`'s module docstring for the absent/null distinction and for
+why `ImpactRow` renames section D's own `ltb_decision`.
+"""
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from iagent_mesh.lifecycle_status import ImpactRow, LifecycleStatus
+
+
+def test_lifecycle_status_requires_source_and_as_of():
+    with pytest.raises(ValidationError):
+        LifecycleStatus(status="active")  # missing source, as_of
+
+
+def test_lifecycle_status_status_none_means_assessed_none_known():
+    status = LifecycleStatus(status=None, source="board", as_of="2026-11-06T00:00:00Z")
+    assert status.status is None
+    assert status.source == "board"
+
+
+def test_lifecycle_status_status_carries_an_open_vocabulary_string():
+    status = LifecycleStatus(
+        status="not-recommended-for-new-design", source="catalog", as_of="2026-11-06T00:00:00Z",
+    )
+    assert status.status == "not-recommended-for-new-design"
+
+
+def test_lifecycle_status_successor_defaults_to_none():
+    status = LifecycleStatus(status="obsolete", source="board", as_of="2026-11-06T00:00:00Z")
+    assert status.successor is None
+    status = LifecycleStatus(
+        status="obsolete", source="board", as_of="2026-11-06T00:00:00Z", successor="part-2",
+    )
+    assert status.successor == "part-2"
+
+
+def test_lifecycle_status_is_frozen_and_forbids_unknown_fields():
+    status = LifecycleStatus(status="active", source="board", as_of="2026-11-06T00:00:00Z")
+    with pytest.raises(ValidationError):
+        status.status = "obsolete"
+    with pytest.raises(ValidationError):
+        LifecycleStatus(
+            status="active", source="board", as_of="2026-11-06T00:00:00Z", extra_field="x",
+        )
+
+
+def test_impact_row_mirrors_section_d_fields():
+    row = ImpactRow(quantity=50, by="svc:disposition-writer", rationale="PCN-1234", approved_by="role:engineering")
+    assert row.quantity == 50
+    assert row.by == "svc:disposition-writer"
+    assert row.rationale == "PCN-1234"
+    assert row.approved_by == "role:engineering"
+
+
+def test_impact_row_requires_all_four_fields():
+    with pytest.raises(ValidationError):
+        ImpactRow(quantity=50, by="svc:x", rationale="PCN-1")  # missing approved_by
+
+
+def test_impact_row_is_frozen_and_forbids_unknown_fields():
+    row = ImpactRow(quantity=1, by="svc:x", rationale="r", approved_by="role:y")
+    with pytest.raises(ValidationError):
+        row.quantity = 2
+    with pytest.raises(ValidationError):
+        ImpactRow(quantity=1, by="svc:x", rationale="r", approved_by="role:y", extra_field="x")

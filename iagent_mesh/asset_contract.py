@@ -28,6 +28,12 @@ own ``type`` string (``"string"``/``"numeric"``/``"integer"`` in ``ev_fixture.ya
 generic-at-birth) by exact match: normalizing a substrate's own type names (polars ``Utf8``,
 pyarrow ``int64``, ...) into that vocabulary is the caller's job, not this module's — the same
 one-way dependency reasoning that keeps this file free of a dataframe library.
+
+``AssetContractColumn.level`` and ``AssetContractDataset.max_level`` (v0.9.16, per
+invincible-agent's gov-to-ca packet of 2026-11-06, itself per the architect's ruling 4 on
+``invincible-agent#276``) carry ADR-0064's per-column/per-dataset classification. Both are open
+strings against ``policy/classification/dimensions.yaml``'s vocabulary — this module ships
+neither the vocabulary nor the ordering check; gov's own validator holds both, per that packet.
 """
 from __future__ import annotations
 
@@ -73,6 +79,13 @@ class AssetContractDataset(BaseModel):
     kind is a deployment's row, not an SDK release."""
     banner: Optional[str] = None
     """A human-readable caution, e.g. marking a synthetic fixture. ``None`` means none declared."""
+    max_level: Optional[str] = None
+    """The dataset's ceiling on the classification hierarchy (ADR-0064), drawn from
+    ``policy/classification/dimensions.yaml``'s one ``hierarchical`` dimension -- an open string,
+    not ``Literal``/``Enum``: the vocabulary is the deployment's. ``None`` means unlabelled; under
+    ADR-0064 an unlabelled source is the most restrictive, but that ordering lives in the
+    consumer's own validator (gov's), not here -- this module does not import the vocabulary to
+    order against it."""
 
 
 class AssetContractPeriod(BaseModel):
@@ -104,6 +117,10 @@ class AssetContractColumn(BaseModel):
     produced_since: Optional[str] = None
     constant_within: tuple[str, ...] = ()
     additive_over: tuple[str, ...] = ()
+    level: Optional[str] = None
+    """This column's place on the classification hierarchy (ADR-0064), same vocabulary and same
+    ``None``-is-unlabelled-and-most-restrictive posture as :attr:`AssetContractDataset.max_level`
+    -- see that attribute's docstring."""
 
 
 class AssetContractLimits(BaseModel):

@@ -14,6 +14,8 @@ import yaml
 
 from iagent_mesh.asset_contract import (
     AssetContract,
+    AssetContractColumn,
+    AssetContractDataset,
     AssetContractError,
     load_asset_contract,
     load_asset_contracts,
@@ -235,3 +237,27 @@ def test_validate_reports_every_violation_not_just_the_first(ev_fixture_contract
     assert {"rule": "wrong_type", "column": "program_id"} in violations
     assert {"rule": "missing_column", "column": "program_name"} in violations
     assert len(violations) == 2
+
+
+# ── level / max_level (ADR-0064, v0.9.16) ──────────────────────────────────────────────────
+
+def test_column_level_defaults_to_none_and_accepts_an_open_string():
+    assert AssetContractColumn(name="x", type="string").level is None
+    assert AssetContractColumn(name="x", type="string", level="controlled").level == "controlled"
+
+
+def test_dataset_max_level_defaults_to_none_and_accepts_an_open_string():
+    dataset = AssetContractDataset(
+        urn="urn:li:dataset:x", producer={"repo": "dag-tools", "asset": "x"}, storage="file",
+    )
+    assert dataset.max_level is None
+    dataset = AssetContractDataset(
+        urn="urn:li:dataset:x", producer={"repo": "dag-tools", "asset": "x"}, storage="file",
+        max_level="restricted",
+    )
+    assert dataset.max_level == "restricted"
+
+
+def test_level_is_not_a_literal_any_open_string_is_accepted():
+    # Generic-at-birth: the vocabulary is the deployment's, not this module's to enumerate.
+    AssetContractColumn(name="x", type="string", level="whatever-the-deployment-calls-it")
