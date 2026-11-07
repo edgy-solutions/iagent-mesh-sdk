@@ -34,7 +34,11 @@ version field — it stays at the value it forked from until a release ceremony 
   E has no recovered field-level spec anywhere, so `ImpactRow {part_ref, used_by, quantity?}` is
   this module's own flagged judgment call, not a recovered one. Documents the absent-vs-null
   distinction ("status absent = not assessed, status null = assessed, none known") across the two
-  levels it actually applies at. Ships row shapes only — no emitter, registry, or workflow runner.
+  levels it actually applies at. `load_lifecycle_status_vocabulary(path)` reads the served
+  `policy/registry/lifecycle_status.yaml` file and returns its vocabulary; `validate_status_known`
+  checks a `status` against it (never checking `None`, per the absent/null distinction) — this
+  module reads the registry, it does not define the vocabulary inside it. Ships row shapes plus
+  that one reader — no emitter or workflow runner.
 
 ## 0.9.15 — 2026-11-05 (tagged v0.9.15 at 5a526b6 via PR #1)
 

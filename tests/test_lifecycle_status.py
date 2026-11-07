@@ -5,10 +5,21 @@ from separate sections.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from iagent_mesh.lifecycle_status import ImpactRow, LifecycleStatus, LtbDecision
+from iagent_mesh.lifecycle_status import (
+    ImpactRow,
+    LifecycleStatus,
+    LifecycleStatusError,
+    LtbDecision,
+    UnknownLifecycleStatus,
+    load_lifecycle_status_vocabulary,
+    validate_status_known,
+)
 
 
 def test_lifecycle_status_requires_source_and_as_of():
@@ -91,3 +102,43 @@ def test_impact_row_is_frozen_and_forbids_unknown_fields():
         row.quantity = 5
     with pytest.raises(ValidationError):
         ImpactRow(part_ref="part:1234", used_by="program:alpha", extra_field="x")
+
+
+def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):
+    p = tmp_path / "lifecycle_status.yaml"
+    p.write_text(
+        yaml.safe_dump({"statuses": ["active", "last-time-buy", "obsolete"]}), encoding="utf-8",
+    )
+    assert load_lifecycle_status_vocabulary(p) == ("active", "last-time-buy", "obsolete")
+
+
+def test_load_lifecycle_status_vocabulary_refuses_an_empty_file(tmp_path: Path):
+    p = tmp_path / "empty.yaml"
+    p.write_text("", encoding="utf-8")
+    with pytest.raises(LifecycleStatusError):
+        load_lifecycle_status_vocabulary(p)
+
+
+def test_load_lifecycle_status_vocabulary_refuses_a_missing_statuses_key(tmp_path: Path):
+    p = tmp_path / "broken.yaml"
+    p.write_text(yaml.safe_dump({"other": ["active"]}), encoding="utf-8")
+    with pytest.raises(LifecycleStatusError):
+        load_lifecycle_status_vocabulary(p)
+
+
+def test_load_lifecycle_status_vocabulary_refuses_a_blank_entry(tmp_path: Path):
+    p = tmp_path / "blank.yaml"
+    p.write_text(yaml.safe_dump({"statuses": ["active", ""]}), encoding="utf-8")
+    with pytest.raises(LifecycleStatusError):
+        load_lifecycle_status_vocabulary(p)
+
+
+def test_validate_status_known_accepts_a_member_and_refuses_a_stranger():
+    vocabulary = ("active", "last-time-buy", "obsolete")
+    validate_status_known("active", vocabulary)  # does not raise
+    with pytest.raises(UnknownLifecycleStatus):
+        validate_status_known("retired-typo", vocabulary)
+
+
+def test_validate_status_known_never_checks_none():
+    validate_status_known(None, ())  # "assessed, none known" -- never a membership question

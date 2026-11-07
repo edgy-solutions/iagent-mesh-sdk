@@ -41,12 +41,28 @@ to the architect via Chris, cheap to reshape now since nothing downstream import
   two levels: a present ``LifecycleStatus(status=None, ...)`` is not the same claim as no
   ``LifecycleStatus`` at all.
 
-This module ships the row shapes only — not the emitter, the registry, or the
-``obsolescence_resolution`` workflow runner, the same division every other row-shape module in
-this SDK draws (:mod:`iagent_mesh.maintenance_bridge`, :mod:`iagent_mesh.asset_contract`).
+This module ships the row shapes and the emitter does not — but unlike
+:func:`iagent_mesh.systems_of_record.validate_connectors_known` (which takes an
+ALREADY-LOADED ``known_connectors`` iterable because that registry is arbitrary per deployment),
+``status``'s vocabulary lives at a FIXED, served path — ``policy/registry/lifecycle_status.yaml``
+— so this module reads that file itself (v0.9.16, per the architect's correction: "reads the
+served registry file; it does not define the vocabulary"). "Reads" and "defines" are different
+things: :func:`load_lifecycle_status_vocabulary` performs the file I/O; the FILE'S CONTENTS are
+still the deployment's own (IEC 62402 / EIA-724 wording — ``active``,
+``not-recommended-for-new-design``, ``last-time-buy``, ``obsolete``, ``unknown`` — is a
+documentation example, not a shipped default; this module ships zero rows). Checking a
+``LifecycleStatus.status`` against the loaded vocabulary is :func:`validate_status_known`, a free
+function rather than a field validator, for the same reason :func:`iagent_mesh.asset_contract.validate`
+is free-standing: the frozen row does not have the file path at construction time, and a row may
+exist before the vocabulary is loaded.
+
+This module does not ship the emitter or the ``obsolescence_resolution`` workflow runner, the
+same division every other row-shape module in this SDK draws
+(:mod:`iagent_mesh.maintenance_bridge`, :mod:`iagent_mesh.asset_contract`).
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -55,7 +71,17 @@ __all__ = [
     "LifecycleStatus",
     "LtbDecision",
     "ImpactRow",
+    "LifecycleStatusError",
+    "UnknownLifecycleStatus",
+    "load_lifecycle_status_vocabulary",
+    "validate_status_known",
 ]
+
+
+class LifecycleStatusError(ValueError):
+    """``policy/registry/lifecycle_status.yaml`` is malformed. Always names the file, same
+    reasoning as :class:`iagent_mesh.declarations.DeclarationError`: "a vocabulary file is
+    invalid" is not actionable at load time."""
 
 
 class LifecycleStatus(BaseModel):
@@ -66,9 +92,12 @@ class LifecycleStatus(BaseModel):
 
     status: Optional[str] = None
     """An open string against a deployment's own ``policy/registry/lifecycle_status.yaml`` —
-    never an enum here, per generic-at-birth. ``None`` means assessed, none known (see module
-    docstring); it is a positive fact, not an absence — the absence case is one level up, on
-    whatever record carries this field at all."""
+    never an enum here, per generic-at-birth. Check membership with :func:`validate_status_known`
+    against a vocabulary loaded by :func:`load_lifecycle_status_vocabulary`; this field itself is
+    never checked at construction time (the row does not have the registry path). ``None`` means
+    assessed, none known (see module docstring); it is a positive fact, not an absence — the
+    absence case is one level up, on whatever record carries this field at all, and is NEVER
+    checked against the vocabulary (see :func:`validate_status_known`)."""
     source: str
     """Who or what produced this assessment, e.g. a board or a catalog feed."""
     as_of: str
@@ -113,3 +142,53 @@ class ImpactRow(BaseModel):
     quantity: Optional[int] = None
     """Quantity-per-``used_by``. ``None`` when the survey has not yet quantified this usage —
     distinct from ``0``, which would claim a quantified-zero usage."""
+
+
+class UnknownLifecycleStatus(LookupError):
+    """A ``status`` value is not in the loaded vocabulary. Raised by :func:`validate_status_known`
+    — never silently: a typo'd or retired status must halt a reader, the same way
+    :class:`iagent_mesh.ingest.ContentKindUnregistered` halts rather than resolving as if the
+    kind simply never matches."""
+
+
+def load_lifecycle_status_vocabulary(path: Path | str) -> tuple[str, ...]:
+    """Read one deployment's ``policy/registry/lifecycle_status.yaml`` and return its vocabulary
+    of legal :attr:`LifecycleStatus.status` values, in file order.
+
+    This module READS the file; it does not DEFINE what is in it — the expected shape is a
+    mapping with a ``statuses`` key naming a non-empty list of non-blank strings. The values
+    themselves (``active``, ``obsolete``, whatever a deployment names) are the deployment's own;
+    this function does not validate them against IEC 62402/EIA-724 or any other fixed list.
+    """
+    import yaml
+
+    p = Path(path)
+    raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if raw is None:
+        raise LifecycleStatusError(
+            f"{p.name} is empty — an empty vocabulary file is not a vocabulary"
+        )
+    statuses = raw.get("statuses") if isinstance(raw, dict) else None
+    if not isinstance(statuses, list) or not statuses or not all(
+        isinstance(s, str) and s.strip() for s in statuses
+    ):
+        raise LifecycleStatusError(
+            f"{p.name}: expected a mapping with a non-empty `statuses` list of non-blank strings"
+        )
+    return tuple(statuses)
+
+
+def validate_status_known(status: Optional[str], vocabulary: tuple[str, ...]) -> None:
+    """Raise :class:`UnknownLifecycleStatus` if ``status`` is not ``None`` and not in
+    ``vocabulary`` (as loaded by :func:`load_lifecycle_status_vocabulary`).
+
+    ``status=None`` is NEVER checked — it means "assessed, none known" (see the module
+    docstring's absent/null distinction), a positive fact independent of the vocabulary's
+    contents, not a value the vocabulary could contain or omit.
+    """
+    if status is not None and status not in vocabulary:
+        raise UnknownLifecycleStatus(
+            f"status={status!r} is not in the deployment's lifecycle-status vocabulary "
+            f"{list(vocabulary)} — a typo'd or retired status must halt, not resolve as if "
+            f"unassessed"
+        )

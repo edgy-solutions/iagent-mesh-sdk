@@ -401,7 +401,17 @@ from .measure_series import MeasureSeries, MeasureSeriesReference
 # rename of LtbDecision -- they are separate shapes from separate sections, per the architect's
 # 2026-11-06 correction. See the module docstring for the absent/null distinction and for
 # ImpactRow's own fields being this module's own flagged judgment call, not a recovered spec.
-from .lifecycle_status import ImpactRow, LifecycleStatus, LtbDecision
+# load_lifecycle_status_vocabulary/validate_status_known (v0.9.16): this module READS the served
+# policy/registry/lifecycle_status.yaml file; it does not DEFINE the vocabulary inside it.
+from .lifecycle_status import (
+    ImpactRow,
+    LifecycleStatus,
+    LifecycleStatusError,
+    LtbDecision,
+    UnknownLifecycleStatus,
+    load_lifecycle_status_vocabulary,
+    validate_status_known,
+)
 
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
@@ -716,6 +726,10 @@ __all__ = [
     "LifecycleStatus",
     "LtbDecision",
     "ImpactRow",
+    "LifecycleStatusError",
+    "UnknownLifecycleStatus",
+    "load_lifecycle_status_vocabulary",
+    "validate_status_known",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",
