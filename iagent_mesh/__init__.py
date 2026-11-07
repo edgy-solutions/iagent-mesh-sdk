@@ -396,6 +396,12 @@ from .asset_contract import validate as validate_asset_contract
 # an instruction to accumulate.
 from .measure_series import MeasureSeries, MeasureSeriesReference
 
+# LifecycleStatus / ImpactRow (ADR-0065 section D, provisional number) — the two field kinds the
+# obsolescence_resolution workflow carries; ImpactRow generalizes section D's own `ltb_decision`
+# past last-time-buy alone. See the module docstring for the absent/null distinction and the
+# rename's reasoning.
+from .lifecycle_status import ImpactRow, LifecycleStatus
+
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
 # might eventually agree on only resolves to one thing from one import path.
@@ -705,6 +711,9 @@ __all__ = [
     # MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05)
     "MeasureSeries",
     "MeasureSeriesReference",
+    # LifecycleStatus / ImpactRow (ADR-0065 section D, provisional number)
+    "LifecycleStatus",
+    "ImpactRow",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",
