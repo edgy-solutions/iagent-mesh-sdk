@@ -135,11 +135,31 @@ class HumanAwaitStep(_Step):
     role: Optional[str] = None
     approves: tuple[str, ...] = ()
     chooses_from: Optional[str] = None
+    options: tuple[str, ...] = ()
+    """The decide step's vocabulary of answers, e.g. a disposition list. A row a deployment
+    supplies -- never a `Literal`/`Enum` here. Left open whether a step carries this alongside or
+    instead of `chooses_from`; that's lane 74's call, after the Socratic bar work (see
+    invincible-agent#276 ruling 3). `policy/option_deciders.yaml` keys `<workflow_id>.<option>` by
+    splitting on the first `.`, which is why `.` is refused below alongside `:` and whitespace."""
 
     @model_validator(mode="after")
     def _id_and_audience_are_present(self) -> "HumanAwaitStep":
         _required_str("HumanAwaitStep", "id", self.id)
         _required_str("HumanAwaitStep", "audience", self.audience)
+        return self
+
+    @model_validator(mode="after")
+    def _options_are_well_formed(self) -> "HumanAwaitStep":
+        seen: set[str] = set()
+        for value in self.options:
+            if not value or any(c.isspace() for c in value) or ":" in value or "." in value:
+                raise ValueError(
+                    f"step {self.id}: `options` value {value!r} must be non-empty with no "
+                    "whitespace, `:`, or `.`"
+                )
+            if value in seen:
+                raise ValueError(f"step {self.id}: `options` value {value!r} is not unique")
+            seen.add(value)
         return self
 
     @model_validator(mode="after")
@@ -155,6 +175,11 @@ class HumanAwaitStep(_Step):
             raise ValueError(
                 f"step {self.id}: `excludes` on a grouped await is NOT implemented -- the grouped "
                 "path neither routes around nor refuses an excluded actor"
+            )
+        if self.options and self.completion.mode == "grouped":
+            raise ValueError(
+                f"step {self.id}: `options` on a grouped await is declarable but NOT implemented "
+                "-- a grouped review resolves N rows, not one decision"
             )
         return self
 

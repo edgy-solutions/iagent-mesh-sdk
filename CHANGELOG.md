@@ -6,7 +6,41 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.15 — 2026-11-05 (draft, uncut)
+## 0.9.16 — 2026-11-06 (draft, uncut)
+
+### Added
+- `options` on `HumanAwaitStep` (`iagent_mesh/workflow_definition.py`) — a decide step's open
+  vocabulary of answers (e.g. a disposition list), per the architect's ruling 3 on
+  `invincible-agent#276` ("options live on the decide step... `steps[id=…].options`"). A plain
+  `tuple[str, ...]`, never `Literal`/`Enum`, per generic-at-birth. Validated non-empty, no
+  whitespace/`:`/`.`, and unique within the step — `policy/option_deciders.yaml` keys
+  `<workflow_id>.<option>` by splitting on the first `.`. Extends the existing "declarable but
+  NOT implemented" refusal on a grouped await to cover `options` too. Relationship to
+  `chooses_from` (both/either/replacing) is left open for lane 74, after the Socratic bar work.
+- `level` on `AssetContractColumn` and `max_level` on `AssetContractDataset`
+  (`iagent_mesh/asset_contract.py`) — ADR-0064's per-column/per-dataset classification, per the
+  architect's ruling 4 on `invincible-agent#276`. Both open strings against a deployment's
+  `policy/classification/dimensions.yaml`; `None` means unlabelled. The vocabulary and the
+  most-restrictive-when-unlabelled ordering check both stay on gov's side, not this SDK's, per
+  gov's 2026-11-06 packet to ca.
+- `LifecycleStatus`, `LtbDecision`, and `ImpactRow` (`iagent_mesh/lifecycle_status.py`, new
+  module) — three row shapes for the `obsolescence_resolution` workflow, split across two
+  ADR-0065 sections (provisional number; the ADR is not yet committed anywhere). Section D
+  (recovered from a doc-tools packet) names `lifecycle_status {status, source, as_of,
+  successor?}` and `ltb_decision {quantity, by, rationale, approved_by}` — both ship unchanged,
+  under their own names, as `LifecycleStatus` and `LtbDecision`. `ImpactRow` is a separate shape
+  from section E — "the where-used impact-table row" — per the architect's 2026-11-06 correction
+  (via Chris) of an earlier draft that had wrongly renamed `ltb_decision` to `ImpactRow`; section
+  E has no recovered field-level spec anywhere, so `ImpactRow {part_ref, used_by, quantity?}` is
+  this module's own flagged judgment call, not a recovered one. Documents the absent-vs-null
+  distinction ("status absent = not assessed, status null = assessed, none known") across the two
+  levels it actually applies at. `load_lifecycle_status_vocabulary(path)` reads the served
+  `policy/registry/lifecycle_status.yaml` file and returns its vocabulary; `validate_status_known`
+  checks a `status` against it (never checking `None`, per the absent/null distinction) — this
+  module reads the registry, it does not define the vocabulary inside it. Ships row shapes plus
+  that one reader — no emitter or workflow runner.
+
+## 0.9.15 — 2026-11-05 (tagged v0.9.15 at 5a526b6 via PR #1)
 
 ### Added
 - `AssetContract` (`iagent_mesh/asset_contract.py`) — the Pydantic mirror of a

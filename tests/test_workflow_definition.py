@@ -255,6 +255,31 @@ def test_grouped_mode_refuses_approves_chooses_from_and_excludes():
             kind="human_await", id="a", audience="promotion:X", excludes=["user:1"],
             completion=CompletionPolicy(mode="grouped"),
         )
+    with pytest.raises(ValidationError, match="declarable but NOT implemented"):
+        HumanAwaitStep(
+            kind="human_await", id="a", audience="promotion:X", options=["archive", "ltb"],
+            completion=CompletionPolicy(mode="grouped"),
+        )
+
+
+def test_options_accepts_a_plain_string_list():
+    step = HumanAwaitStep(
+        kind="human_await", id="a", audience="promotion:X", options=["archive", "ltb", "redesign"],
+    )
+    assert step.options == ("archive", "ltb", "redesign")
+
+
+@pytest.mark.parametrize("bad", ["", "has space", "a:b", "a.b"])
+def test_options_refuses_whitespace_colon_or_dot(bad):
+    with pytest.raises(ValidationError, match="must be non-empty"):
+        HumanAwaitStep(kind="human_await", id="a", audience="promotion:X", options=[bad])
+
+
+def test_options_must_be_unique_within_the_step():
+    with pytest.raises(ValidationError, match="is not unique"):
+        HumanAwaitStep(
+            kind="human_await", id="a", audience="promotion:X", options=["archive", "archive"],
+        )
 
 
 # ── SignalAwaitStep ──────────────────────────────────────────────────────────────────────────
