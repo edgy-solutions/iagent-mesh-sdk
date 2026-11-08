@@ -6,7 +6,7 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.16 — 2026-11-06 (draft, uncut)
+## 0.9.16 — 2026-11-08 (tagged `v0.9.16`, merged to `master` at `db08aa2`)
 
 ### Added
 - `options` on `HumanAwaitStep` (`iagent_mesh/workflow_definition.py`) — a decide step's open
@@ -39,6 +39,16 @@ version field — it stays at the value it forked from until a release ceremony 
   checks a `status` against it (never checking `None`, per the absent/null distinction) — this
   module reads the registry, it does not define the vocabulary inside it. Ships row shapes plus
   that one reader — no emitter or workflow runner.
+
+### Fixed
+- CI's `Test` job pinned to Python 3.13 via a new `.python-version` file. With no pin and no
+  upper bound on `requires-python` (`>=3.10`), `uv run` silently rode onto Python 3.14 the
+  moment it became available on `ubuntu-latest` — a version this SDK has never declared support
+  for (classifiers stop at 3.13). Under 3.14, `nest-asyncio`'s event-loop patch hands `anyio`'s
+  threadpool wrapper a `None` task from `asyncio.current_task()`, crashing every FastAPI/Starlette
+  test that bridges sync-to-async. Pre-existing and repo-wide: `master`'s own CI had already been
+  red since the v0.9.15 merge (`5a526b6`), unrelated to anything in this release — surfaced when
+  Chris pasted PR #2's failing-checks UI.
 
 ## 0.9.15 — 2026-11-05 (tagged v0.9.15 at 5a526b6 via PR #1)
 
