@@ -6,6 +6,23 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.17 — 2026-11-08
+
+### Fixed
+- `ImpactRow` (`iagent_mesh/lifecycle_status.py`) reshaped from v0.9.16's three-field
+  `{part_ref, used_by, quantity}` to the architect's 2026-11-07 ruling (via Chris, ruling 4 on
+  `invincible-agent#299`, ADR-0065 section 4 — not section E, as v0.9.16 had guessed): `{end_item,
+  program, component, qty_per, population, stock, configuration, as_of, data_provenance}`.
+  `population`/`stock` are `Optional[int]`, absent-is-not-zero. `configuration` is an open string
+  (`as_designed`/`as_built`/`as_maintained`, default `as_designed`), never a `Literal`/`Enum`, per
+  generic-at-birth. `data_provenance` is a new nested `DataProvenance` shape
+  (`dataset_urn`/`as_of`/`ticket_id`) — no existing shared shape for that triple was found
+  anywhere in this SDK. **Why this exists as a separate release**: the ruling's own packets
+  (placed in `sessions/` 2026-11-07 16:41 and 17:09, recommending/then ruling the reshape "before
+  v0.9.16 is tagged") were sitting unread when v0.9.16 was tagged and published to PyPI. PyPI does
+  not allow re-uploading a version, so v0.9.16 stays published with the superseded shape; this
+  release is the forward fix.
+
 ## 0.9.16 — 2026-11-08 (tagged `v0.9.16`, merged to `master` at `db08aa2`)
 
 ### Added

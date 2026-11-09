@@ -1,5 +1,5 @@
-"""`LifecycleStatus` / `LtbDecision` (ADR-0065 section D) / `ImpactRow` (ADR-0065 section E,
-provisional number). See `iagent_mesh/lifecycle_status.py`'s module docstring for the absent/null
+"""`LifecycleStatus` / `LtbDecision` (ADR-0065 section D) / `ImpactRow` (ADR-0065 section 4,
+ruled 2026-11-07). See `iagent_mesh/lifecycle_status.py`'s module docstring for the absent/null
 distinction and for why `ImpactRow` is NOT a rename of `LtbDecision` — they are separate shapes
 from separate sections.
 """
@@ -12,6 +12,7 @@ import yaml
 from pydantic import ValidationError
 
 from iagent_mesh.lifecycle_status import (
+    DataProvenance,
     ImpactRow,
     LifecycleStatus,
     LifecycleStatusError,
@@ -80,28 +81,65 @@ def test_ltb_decision_is_frozen_and_forbids_unknown_fields():
         LtbDecision(quantity=1, by="svc:x", rationale="r", approved_by="role:y", extra_field="x")
 
 
-def test_impact_row_requires_part_ref_and_used_by():
-    row = ImpactRow(part_ref="part:1234", used_by="program:alpha")
-    assert row.part_ref == "part:1234"
-    assert row.used_by == "program:alpha"
-    assert row.quantity is None
+def _impact_row(**overrides):
+    fields = dict(
+        end_item="end-item:f-35",
+        program="program:alpha",
+        component="part:1234",
+        qty_per=4,
+        as_of="2026-11-07T00:00:00Z",
+        data_provenance=DataProvenance(
+            dataset_urn="urn:dataset:bom-rollup", as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
+        ),
+    )
+    fields.update(overrides)
+    return ImpactRow(**fields)
+
+
+def test_impact_row_requires_its_identity_and_quantity_fields():
+    row = _impact_row()
+    assert row.end_item == "end-item:f-35"
+    assert row.program == "program:alpha"
+    assert row.component == "part:1234"
+    assert row.qty_per == 4
     with pytest.raises(ValidationError):
-        ImpactRow(part_ref="part:1234")  # missing used_by
+        ImpactRow(
+            program="program:alpha", component="part:1234", qty_per=4,
+            as_of="2026-11-07T00:00:00Z",
+            data_provenance=DataProvenance(
+                dataset_urn="urn:x", as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
+            ),
+        )  # missing end_item
 
 
-def test_impact_row_quantity_defaults_to_none_and_accepts_zero():
-    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=4)
-    assert row.quantity == 4
-    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=0)
-    assert row.quantity == 0
+def test_impact_row_population_and_stock_absent_is_not_zero():
+    row = _impact_row()
+    assert row.population is None
+    assert row.stock is None
+    row = _impact_row(population=0, stock=0)
+    assert row.population == 0
+    assert row.stock == 0
+
+
+def test_impact_row_configuration_defaults_to_as_designed():
+    row = _impact_row()
+    assert row.configuration == "as_designed"
+    row = _impact_row(configuration="as_built")
+    assert row.configuration == "as_built"
+
+
+def test_impact_row_data_provenance_carries_urn_as_of_and_ticket_id():
+    row = _impact_row()
+    assert row.data_provenance.dataset_urn == "urn:dataset:bom-rollup"
+    assert row.data_provenance.ticket_id == "T-1"
 
 
 def test_impact_row_is_frozen_and_forbids_unknown_fields():
-    row = ImpactRow(part_ref="part:1234", used_by="program:alpha", quantity=4)
+    row = _impact_row()
     with pytest.raises(ValidationError):
-        row.quantity = 5
+        row.qty_per = 5
     with pytest.raises(ValidationError):
-        ImpactRow(part_ref="part:1234", used_by="program:alpha", extra_field="x")
+        _impact_row(extra_field="x")
 
 
 def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):

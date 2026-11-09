@@ -396,14 +396,17 @@ from .asset_contract import validate as validate_asset_contract
 # an instruction to accumulate.
 from .measure_series import MeasureSeries, MeasureSeriesReference
 
-# LifecycleStatus / LtbDecision (ADR-0065 section D) / ImpactRow (ADR-0065 section E, provisional
-# number) — three row shapes the obsolescence_resolution workflow carries. ImpactRow is NOT a
-# rename of LtbDecision -- they are separate shapes from separate sections, per the architect's
-# 2026-11-06 correction. See the module docstring for the absent/null distinction and for
-# ImpactRow's own fields being this module's own flagged judgment call, not a recovered spec.
+# LifecycleStatus / LtbDecision (ADR-0065 section D) / ImpactRow (ADR-0065 section 4,
+# invincible-agent#299) — three row shapes the obsolescence_resolution workflow carries.
+# ImpactRow is NOT a rename of LtbDecision -- they are separate shapes from separate sections.
+# v0.9.17: ImpactRow reshaped to the architect's 2026-11-07 ruling (nine fields, DataProvenance
+# nested) -- supersedes the three-field judgment-call shape v0.9.16 shipped before that ruling
+# reached ca. See the module docstring for the absent/null distinction and for how the ruling was
+# missed before tagging.
 # load_lifecycle_status_vocabulary/validate_status_known (v0.9.16): this module READS the served
 # policy/registry/lifecycle_status.yaml file; it does not DEFINE the vocabulary inside it.
 from .lifecycle_status import (
+    DataProvenance,
     ImpactRow,
     LifecycleStatus,
     LifecycleStatusError,
@@ -722,10 +725,11 @@ __all__ = [
     # MeasureSeries / MeasureSeriesReference (Fork A1, ruled 2026-11-05)
     "MeasureSeries",
     "MeasureSeriesReference",
-    # LifecycleStatus / LtbDecision (ADR-0065 section D) / ImpactRow (ADR-0065 section E)
+    # LifecycleStatus / LtbDecision (ADR-0065 section D) / ImpactRow (ADR-0065 section 4, ruled)
     "LifecycleStatus",
     "LtbDecision",
     "ImpactRow",
+    "DataProvenance",
     "LifecycleStatusError",
     "UnknownLifecycleStatus",
     "load_lifecycle_status_vocabulary",
