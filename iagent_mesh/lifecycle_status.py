@@ -18,16 +18,18 @@ one disposition (last-time-buy) violated generic-at-birth; the architect's 2026-
 (via Chris) ruled that reading wrong — ``LtbDecision`` is section D's own shape, under its own
 name, and ``ImpactRow`` is a *different* type entirely, from a *different* section:
 
-``ImpactRow`` is "the where-used impact-table row," ADR-0065 **section E** — a distinct shape
-from section D's two field kinds, per the same correction. Section E has no committed text
-anywhere either; a search of ``invincible-agent`` (board items, ``sessions/*.md``) and
-``doc-tools`` (git history, working tree, including a grep for where-used/cross-reference-shaped
-field names) found zero field-level spec — only confirmation that "where-used" IS section E
-(lane 01's 2026-11-06 reassignment-table packet: *"where-used (ADR directive item E) has no item
-yet... I'd send it to 74..."*). **The three fields below are this module's own judgment call, not
-a recovered spec** — the minimal shape a where-used/impact row cannot do its job without: which
-part, where it is used, how many. Same discipline as the earlier (wrong) call: flagged explicitly
-to the architect via Chris, cheap to reshape now since nothing downstream imports this module yet.
+``ImpactRow`` is "the where-used impact-table row" — the architect's 2026-11-06 correction named
+it section E with no field-level text findable anywhere at the time, so v0.9.16 shipped a
+three-field ``{part_ref, used_by, quantity}`` judgment call, explicitly flagged as not a
+recovered spec. **That shape was wrong, and shipped anyway** — ADR-0065 was drafted the same day
+as invincible-agent#299, its real section is **section 4** (not E), and lane 01's two 2026-11-07
+packets (16:41, then a superseding 17:09 ruling) were sitting unread in ``sessions/`` when ca
+tagged and published v0.9.16 to PyPI. The architect ruled on #299's four questions 2026-11-07, via
+Chris — ruling 4 replaces the three-field shape with the nine fields below. PyPI does not allow
+re-uploading a version, so the fix is forward: this module now ships the ruled shape as of
+v0.9.17, and v0.9.16 stays published with the superseded one (see ``CHANGELOG.md``). Lesson: a
+tag is a live-state claim too — check for unread packets before cutting one, not just before
+writing a handoff.
 
 ── THE ABSENT/NULL DISTINCTION (section D's one detail worth not losing) ──────────────────────
 "status absent = not assessed, status null = assessed, none known." This is two levels, not one:
@@ -71,6 +73,7 @@ __all__ = [
     "LifecycleStatus",
     "LtbDecision",
     "ImpactRow",
+    "DataProvenance",
     "LifecycleStatusError",
     "UnknownLifecycleStatus",
     "load_lifecycle_status_vocabulary",
@@ -125,23 +128,58 @@ class LtbDecision(BaseModel):
     SDK."""
 
 
-class ImpactRow(BaseModel):
-    """The where-used impact-table row, ADR-0065 section E. No field-level spec for section E
-    exists anywhere this module's docstring could cite — these three fields are this module's own
-    minimal, explicitly-flagged judgment call (see module docstring): which part is being assessed
-    for obsolescence impact, where it is used, and how many units that use consumes."""
+class DataProvenance(BaseModel):
+    """Dataset URN, as-of, and ticket id — the triple the architect's ruling says rides on
+    :attr:`ImpactRow.data_provenance` "as on every served table." No existing shared shape for
+    this triple was found anywhere in this SDK (checked :mod:`iagent_mesh.provenance`'s own,
+    richer ``ProvenanceBlock``, :mod:`iagent_mesh.measure_series`, :mod:`mcp_server.bff_tools`);
+    this is this module's own minimal typed mirror of the ruling's three nouns, flagged in case a
+    shared one already exists elsewhere that this search missed."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    part_ref: str
-    """The part/asset being surveyed for obsolescence impact."""
-    used_by: str
-    """The consuming program/assembly/product, named generically per generic-at-birth — never a
-    specific program name in code. One row per (``part_ref``, ``used_by``) pair; a part used by
-    three programs is three rows, not one row with a list."""
-    quantity: Optional[int] = None
-    """Quantity-per-``used_by``. ``None`` when the survey has not yet quantified this usage —
-    distinct from ``0``, which would claim a quantified-zero usage."""
+    dataset_urn: str
+    as_of: str
+    """ISO-8601, this SDK's house convention for a wire timestamp — never ``datetime``."""
+    ticket_id: str
+
+
+class ImpactRow(BaseModel):
+    """The where-used impact-table row, ADR-0065 **section 4** (invincible-agent#299), ruled by
+    the architect 2026-11-07 via Chris — ruling 4 on #299's four questions. One row per
+    (``end_item``, ``program``, ``component``) triple. Supersedes the three-field
+    ``{part_ref, used_by, quantity}`` shape v0.9.16 shipped before this ruling reached ca; see the
+    module docstring for how that happened."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    end_item: str
+    """The end item's identity."""
+    program: str
+    """The program the end item is sustained under — joined from openddil ADR-0056 section 8's
+    sustained-under relation, never from the BOM."""
+    component: str
+    """The part the where-used question was asked about, by identity."""
+    qty_per: int
+    """The part's rolled-up quantity per end item, through every level."""
+    population: Optional[int] = None
+    """The fielded count of that end item on that program. ``None`` means no source for this
+    count exists today — NEVER reported as ``0``, which would claim a sourced, counted-zero
+    population."""
+    stock: Optional[int] = None
+    """The part's stock on hand for that program. Same absent-is-not-zero rule as
+    :attr:`population`."""
+    configuration: str = "as_designed"
+    """``as_designed``, ``as_built``, or ``as_maintained`` per the ruling — an open string, not a
+    ``Literal``/``Enum``, per generic-at-birth, matching :attr:`LifecycleStatus.status`'s own
+    reasoning. Also an argument of the where-used query this row answers; the ruling's default is
+    ``as_designed``. A configuration with no data for the end item must be refused loudly by
+    whatever resolver answers the query, never served as an empty table — this module ships the
+    row only, not that refusal (see the module docstring's emitter/runner split)."""
+    as_of: str
+    """ISO-8601. When the data this row was answered from was current."""
+    data_provenance: DataProvenance
+    """Dataset URN, as-of, and ticket id — see :class:`DataProvenance`."""
 
 
 class UnknownLifecycleStatus(LookupError):

@@ -6,7 +6,24 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.16 — 2026-11-06 (draft, uncut)
+## 0.9.17 — 2026-11-08
+
+### Fixed
+- `ImpactRow` (`iagent_mesh/lifecycle_status.py`) reshaped from v0.9.16's three-field
+  `{part_ref, used_by, quantity}` to the architect's 2026-11-07 ruling (via Chris, ruling 4 on
+  `invincible-agent#299`, ADR-0065 section 4 — not section E, as v0.9.16 had guessed): `{end_item,
+  program, component, qty_per, population, stock, configuration, as_of, data_provenance}`.
+  `population`/`stock` are `Optional[int]`, absent-is-not-zero. `configuration` is an open string
+  (`as_designed`/`as_built`/`as_maintained`, default `as_designed`), never a `Literal`/`Enum`, per
+  generic-at-birth. `data_provenance` is a new nested `DataProvenance` shape
+  (`dataset_urn`/`as_of`/`ticket_id`) — no existing shared shape for that triple was found
+  anywhere in this SDK. **Why this exists as a separate release**: the ruling's own packets
+  (placed in `sessions/` 2026-11-07 16:41 and 17:09, recommending/then ruling the reshape "before
+  v0.9.16 is tagged") were sitting unread when v0.9.16 was tagged and published to PyPI. PyPI does
+  not allow re-uploading a version, so v0.9.16 stays published with the superseded shape; this
+  release is the forward fix.
+
+## 0.9.16 — 2026-11-08 (tagged `v0.9.16`, merged to `master` at `db08aa2`)
 
 ### Added
 - `options` on `HumanAwaitStep` (`iagent_mesh/workflow_definition.py`) — a decide step's open
@@ -39,6 +56,16 @@ version field — it stays at the value it forked from until a release ceremony 
   checks a `status` against it (never checking `None`, per the absent/null distinction) — this
   module reads the registry, it does not define the vocabulary inside it. Ships row shapes plus
   that one reader — no emitter or workflow runner.
+
+### Fixed
+- CI's `Test` job pinned to Python 3.13 via a new `.python-version` file. With no pin and no
+  upper bound on `requires-python` (`>=3.10`), `uv run` silently rode onto Python 3.14 the
+  moment it became available on `ubuntu-latest` — a version this SDK has never declared support
+  for (classifiers stop at 3.13). Under 3.14, `nest-asyncio`'s event-loop patch hands `anyio`'s
+  threadpool wrapper a `None` task from `asyncio.current_task()`, crashing every FastAPI/Starlette
+  test that bridges sync-to-async. Pre-existing and repo-wide: `master`'s own CI had already been
+  red since the v0.9.15 merge (`5a526b6`), unrelated to anything in this release — surfaced when
+  Chris pasted PR #2's failing-checks UI.
 
 ## 0.9.15 — 2026-11-05 (tagged v0.9.15 at 5a526b6 via PR #1)
 
