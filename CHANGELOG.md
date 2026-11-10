@@ -6,7 +6,7 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.18 — 2026-11-10
+## 0.9.18 — 2026-11-10 (tagged `v0.9.18`, merged to `master` at `2f47e9e`)
 
 ### Added
 - `attestation` on `ContentKindRegistration` (`iagent_mesh/ingest.py`), answering
