@@ -6,6 +6,22 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.18 — 2026-11-10
+
+### Added
+- `attestation` on `ContentKindRegistration` (`iagent_mesh/ingest.py`), answering
+  invincible-agent/lane/01's 2026-11-10 question of which row carries separation-of-duties for a
+  document promotion, ruled by gov the same day: `Optional[Literal["self", "second_party"]] =
+  None`. `self` means the kind's own dropper may attest it; `second_party` means promotion
+  requires an attester other than whoever dropped it — ADR-0057/ADR-0062 declare
+  `second_party`, PCN/PDN review declares `self`. `None` (the default) means undeclared; the
+  mapping of undeclared to `self` stays in iagent's own `attestation_for`, not duplicated here.
+  Unlike `domain`/`review_shape`/`label`, this is a deliberate exception to generic-at-birth: a
+  closed `Literal`, per gov's own reasoning that the Literal is the validator, so a third value
+  is a load error rather than an unnoticed typo reaching the act. `extra="forbid"` had been
+  refusing any overlay row carrying this key until now. Optional for every branch, no exceptions
+  — `_branch_shape_is_consistent` does not reference it.
+
 ## 0.9.17 — 2026-11-08
 
 ### Fixed

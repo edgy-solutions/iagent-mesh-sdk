@@ -539,6 +539,38 @@ def test_event_branch_may_also_declare_persists():
     assert row.persists.classes[0].output_class == "mfg:Fault"
 
 
+# ── attestation, ADDED 0.9.18 (gov's ruling, 2026-11-10) ─────────────────────────────────
+
+def test_attestation_defaults_to_none_a_kind_declares_no_attestation_rule():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.attestation is None
+
+
+def test_a_kind_declares_self_attestation():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "attestation": "self"})
+    assert row.attestation == "self"
+
+
+def test_a_kind_declares_second_party_attestation():
+    row = ContentKindRegistration(**{**VALID_REGISTRATION, "attestation": "second_party"})
+    assert row.attestation == "second_party"
+
+
+def test_attestation_is_a_closed_literal_not_an_open_string():
+    """Unlike domain/review_shape/label, gov's own reasoning is that the Literal IS the
+    validator — any other value is a load error and never reaches the promotion act."""
+    with pytest.raises(ValidationError, match="attestation"):
+        ContentKindRegistration(**{**VALID_REGISTRATION, "attestation": "third_party"})
+
+
+def test_event_branch_may_also_declare_attestation():
+    """attestation does not interact with branch — _branch_shape_is_consistent never
+    references it, same "optional for every branch, no exceptions" precedent
+    domain/arrives_as/label/persists draw."""
+    row = ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "attestation": "second_party"})
+    assert row.attestation == "second_party"
+
+
 # ── ArtifactRevision, ADDED 0.9.7 ────────────────────────────────────────────────────────
 
 def test_a_valid_rev_1_builds_with_no_supersedes():

@@ -454,6 +454,37 @@ class ContentKindRegistration(BaseModel):
     :mod:`iagent_mesh.persistence`'s own module docstring — this is a type, not behavior; the
     origin-rule/verb-generation machinery ADR-0060 describes is unbuilt."""
 
+    attestation: Optional[Literal["self", "second_party"]] = None
+    """ADDED 0.9.18, gov's ruling (2026-11-10), answering invincible-agent/lane/01's question of
+    which row carries separation-of-duties for a document promotion. ``self`` means the kind's own
+    dropper may attest it; ``second_party`` means promotion requires an attester other than
+    whoever dropped it — ADR-0057 and ADR-0062 declare ``second_party``; PCN/PDN review declares
+    ``self``. ``None`` (the default) means this kind declares no attestation rule — every kind
+    before this field existed, and any kind no ruling has named yet.
+
+    **THE DEFAULT IS NOT BAKED IN HERE, ON PURPOSE.** ``None`` reaching the act is deliberate: the
+    served default (``self``) lives in iagent's own ``attestation_for``, which already maps an
+    undeclared row to it. Duplicating that mapping here would put the same rule in two places —
+    gov's packet asks this field leave it to the one that already has it.
+
+    **A CLOSED `Literal`, NOT THIS MODULE'S USUAL OPEN STRING** — a deliberate exception to the
+    "generic-at-birth" pattern :attr:`domain`/:attr:`review_shape`/:attr:`label` all follow: gov's
+    own reasoning is that the Literal IS the validator, so a third value is a load error here
+    rather than an unnoticed typo reaching a promotion act. Widen it only on a ruling that names a
+    third value, the same way :attr:`review_shape` was later ruled open once a review shape needed
+    a row rather than a release — see that field's own docstring for the contrast.
+
+    **OPTIONAL FOR EVERY BRANCH AND EVERY `domain`, NO EXCEPTIONS** — same "ruled optional, not
+    required" precedent :attr:`domain`/:attr:`arrives_as`/:attr:`label`/:attr:`persists` all draw,
+    and :func:`_branch_shape_is_consistent` does not reference it: an ``event`` row is as free to
+    carry one as a ``document`` row.
+
+    **THIS MODULE DOES NOT RESOLVE, GRANT, OR ENFORCE ANYTHING ON IT.** It declares the fact; Lane
+    1's ``promotion._declared_attestation`` reads it (``getattr(content_kinds.by_kind(kind),
+    "attestation", None)``), and the served ``TaskPayload.attestation: {mode, excluded[]}`` block
+    and the act's own refusal are built from there — same split every field in this class draws
+    between declaring a fact about a kind and consuming it."""
+
     @field_validator("kind")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
