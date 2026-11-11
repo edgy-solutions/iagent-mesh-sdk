@@ -6,7 +6,7 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
-## 0.9.20 — 2026-11-11
+## 0.9.20 — 2026-11-11 (tagged `v0.9.20`, merged to `master` at `1aa6423`)
 
 ### Changed
 - `verify_bearer` (`iagent_mesh/transport_auth.py`) is `RS256`-only now — `HS256` is dropped.
