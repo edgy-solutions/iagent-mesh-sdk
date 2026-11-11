@@ -6,6 +6,30 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.19 — 2026-11-10
+
+### Added
+- `WorkOrder.option` and `WorkOrder.readiness` (`iagent_mesh/maintenance_bridge.py`), and
+  `ActionProvenance.case_definition`, `ActionProvenance.case_id`, `ActionProvenance.emitted_by`
+  (same file) — the architect's 2026-11-10 ruling via invincible-agent/lane/01 (case `9418f245`).
+  All five are `Optional[str] = None`, no `Literal`/`Enum` — the ruling's own words, "optional
+  strings, no enum. Values are whatever the workflow definition serves." `extra="forbid"` stays
+  on both models; unknown fields are still refused. `TaskRef.graph_uri` and
+  `ActionProvenance.manual_nodes_consulted` are unchanged — those are writer-side bugs Lane 1
+  fixes on its own 0.4.85 train, out of this SDK's scope.
+- `ACTION_CONTRACT_VERSION = "2"` (`iagent_mesh/maintenance_bridge.py`), named per the ruling's
+  "bump the action contract version" instruction. No prior named version existed anywhere in this
+  SDK or the week-1 contract packet to bump instead — checked both — so `"1"` is assigned
+  retroactively to the shape this module shipped from its first OVERNIGHT packet through 0.9.18,
+  and `"2"` is this change. Lane 1's seal and the OpenDDIL packet cite this name.
+- `DataProvenance.dataset_urn` and `DataProvenance.ticket_id`
+  (`iagent_mesh/lifecycle_status.py`) are now `Optional[str] = None`, meaning absent rather than a
+  placeholder string — answering lane 74's `#337` packet: a served row with no catalogue entry has
+  no dataset URN, and a row with no broker read has no ticket. `DataProvenance.as_of` stays
+  required. **Scope note:** this ships absence-marking only. Holding more than one provenance
+  entry per `ImpactRow` (lane 74's other `#337` ask, the fleet's own `{inputs: [...], absent:
+  {...}}` shape) is a separate, still-unruled question — not part of this release.
+
 ## 0.9.18 — 2026-11-10 (tagged `v0.9.18`, merged to `master` at `2f47e9e`)
 
 ### Added

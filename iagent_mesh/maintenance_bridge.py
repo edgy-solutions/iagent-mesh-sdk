@@ -70,6 +70,7 @@ __all__ = [
     "PartRow",
     "APPROVAL_OUTCOMES",
     "ApprovalOutcome",
+    "ACTION_CONTRACT_VERSION",
     "WorkOrder",
     "ApprovalChainEntry",
     "ActionProvenance",
@@ -419,6 +420,15 @@ class PartRow(BaseModel):
 APPROVAL_OUTCOMES = ("approved", "rejected")
 ApprovalOutcome = Literal[APPROVAL_OUTCOMES]  # type: ignore[valid-type]
 
+ACTION_CONTRACT_VERSION = "2"
+"""Names the shape of `WorkOrder`/`ActionProvenance`/`ActionRecord` together, bumped on the
+architect's 2026-11-10 ruling (case `9418f245`, ADDED 0.9.19): `work_order` gains `option` and
+`readiness`; `provenance` gains `case_definition`, `case_id`, and `emitted_by`. No prior named
+version existed to bump — checked this module and `invincible-agent/sessions/2026-10-02-packet-
+to-openddil-the-maintenance-bridge-contract-week-1.md`, neither names one — so `"1"` is assigned
+retroactively to the shape this module shipped from its first OVERNIGHT packet through 0.9.18,
+and `"2"` is this change. Lane 1's seal and the OpenDDIL packet cite this name."""
+
 
 class WorkOrder(BaseModel):
     """`ActionRecord.work_order`."""
@@ -435,11 +445,29 @@ class WorkOrder(BaseModel):
     """**Final values only — no pending state is representable here, by construction** (packet
     §4, verbatim)."""
 
+    option: Optional[str] = None
+    """Which option the work order executed, e.g. `"replace_now"` (case `9418f245`). ADDED 0.9.19,
+    the architect's ruling verbatim: "optional strings, no enum. Values are whatever the workflow
+    definition serves" — an open string, not a `Literal`/`Enum`, deliberately unlike
+    `ApprovalOutcome` above. `None` means the record names no option, true of every `WorkOrder`
+    before this field existed."""
+
+    readiness: Optional[str] = None
+    """The asset's readiness code the work order left it in, e.g. `"FMC"` (case `9418f245`). Same
+    open-string, no-enum posture as :attr:`option`, same ruling. ADDED 0.9.19."""
+
     @field_validator("task")
     @classmethod
     def _task_is_present(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("WorkOrder.task='' — required, cannot be blank")
+        return v
+
+    @field_validator("option", "readiness")
+    @classmethod
+    def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(f"WorkOrder.{info.field_name}='' — optional, but not blank when present")
         return v
 
 
@@ -499,11 +527,32 @@ class ActionProvenance(BaseModel):
     manual_nodes_consulted: tuple[str, ...]
     """Graph URIs."""
 
+    case_definition: Optional[str] = None
+    """Which case definition emitted this action, e.g. `"maintenance_fault"` (case `9418f245`).
+    Optional string, no enum — same posture as :attr:`WorkOrder.option`, same 2026-11-10 ruling.
+    ADDED 0.9.19."""
+
+    case_id: Optional[str] = None
+    """The case instance's own id, e.g. `"9418f245-3eda-5fea-9b03-ab4d9e943158"`. ADDED 0.9.19."""
+
+    emitted_by: Optional[str] = None
+    """Which emitter produced this action, e.g. `"maint_release"` (case `9418f245`). ADDED
+    0.9.19."""
+
     @field_validator("workflow_definition_id", "workflow_definition_version", "workflow_instance_id")
     @classmethod
     def _required_string_is_present(cls, v: str, info) -> str:
         if not v.strip():
             raise ValueError(f"ActionProvenance.{info.field_name}='' — required, cannot be blank")
+        return v
+
+    @field_validator("case_definition", "case_id", "emitted_by")
+    @classmethod
+    def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"ActionProvenance.{info.field_name}='' — optional, but not blank when present"
+            )
         return v
 
 

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from iagent_mesh.maintenance_bridge import (
+    ACTION_CONTRACT_VERSION,
     ActionProvenance,
     ActionRecord,
     ApprovalChainEntry,
@@ -187,6 +188,94 @@ def test_part_row_quantity_must_be_positive():
 def test_work_order_outcome_is_closed_to_approved_or_rejected():
     with pytest.raises(ValidationError):
         WorkOrder(task="t", task_refs=(), parts=(), outcome="pending")
+
+
+# ── WorkOrder.option / .readiness, ActionProvenance.case_definition / .case_id / .emitted_by,
+#    ADDED 0.9.19 (architect's 2026-11-10 ruling, case 9418f245) ───────────────────────────
+
+def test_work_order_option_and_readiness_default_to_none():
+    order = WorkOrder(task="t", task_refs=(), parts=(), outcome="approved")
+    assert order.option is None
+    assert order.readiness is None
+
+
+def test_work_order_accepts_the_real_case_values():
+    order = WorkOrder(
+        task="t", task_refs=(), parts=(), outcome="approved",
+        option="replace_now", readiness="FMC",
+    )
+    assert order.option == "replace_now"
+    assert order.readiness == "FMC"
+
+
+def test_work_order_option_is_an_open_string_not_an_enum():
+    """Unlike `outcome`, the ruling is explicit: "optional strings, no enum" — any string
+    passes, there is no closed vocabulary to be rejected from."""
+    order = WorkOrder(
+        task="t", task_refs=(), parts=(), outcome="approved", option="some-future-option",
+    )
+    assert order.option == "some-future-option"
+
+
+def test_work_order_option_and_readiness_reject_blank_but_not_none():
+    with pytest.raises(ValidationError, match="optional, but not blank"):
+        WorkOrder(task="t", task_refs=(), parts=(), outcome="approved", option="")
+    with pytest.raises(ValidationError, match="optional, but not blank"):
+        WorkOrder(task="t", task_refs=(), parts=(), outcome="approved", readiness="")
+
+
+def test_action_provenance_new_fields_default_to_none():
+    provenance = ActionProvenance(
+        workflow_definition_id="wf-def-1", workflow_definition_version="1",
+        workflow_instance_id="wf-inst-1", manual_nodes_consulted=(),
+    )
+    assert provenance.case_definition is None
+    assert provenance.case_id is None
+    assert provenance.emitted_by is None
+
+
+def test_action_provenance_accepts_the_real_case_values():
+    provenance = ActionProvenance(
+        workflow_definition_id="wf-def-1", workflow_definition_version="1",
+        workflow_instance_id="wf-inst-1", manual_nodes_consulted=(),
+        case_definition="maintenance_fault",
+        case_id="9418f245-3eda-5fea-9b03-ab4d9e943158",
+        emitted_by="maint_release",
+    )
+    assert provenance.case_definition == "maintenance_fault"
+    assert provenance.case_id == "9418f245-3eda-5fea-9b03-ab4d9e943158"
+    assert provenance.emitted_by == "maint_release"
+
+
+def test_action_provenance_new_fields_reject_blank_but_not_none():
+    with pytest.raises(ValidationError, match="optional, but not blank"):
+        ActionProvenance(
+            workflow_definition_id="wf-def-1", workflow_definition_version="1",
+            workflow_instance_id="wf-inst-1", manual_nodes_consulted=(), case_id="",
+        )
+
+
+def test_action_record_still_refuses_unknown_fields_with_the_new_fields_present():
+    action = _action(
+        work_order=WorkOrder(task="t", task_refs=(), parts=(), outcome="approved",
+                             option="replace_now", readiness="FMC"),
+        provenance=ActionProvenance(
+            workflow_definition_id="wf-def-1", workflow_definition_version="1",
+            workflow_instance_id="wf-inst-1", manual_nodes_consulted=(),
+            case_definition="maintenance_fault",
+            case_id="9418f245-3eda-5fea-9b03-ab4d9e943158", emitted_by="maint_release",
+        ),
+    )
+    with pytest.raises(ValidationError):
+        ActionRecord(**{**action.model_dump(exclude={"label", "work_order", "approval_chain",
+                                                       "provenance"}),
+                       "label": action.label, "work_order": action.work_order,
+                       "approval_chain": action.approval_chain,
+                       "provenance": action.provenance, "extra_field": "x"})
+
+
+def test_action_contract_version_is_named_and_bumped_for_this_change():
+    assert ACTION_CONTRACT_VERSION == "2"
 
 
 # ── ApprovalChainEntry: does not itself check approver_sub resolution ──────────────────────

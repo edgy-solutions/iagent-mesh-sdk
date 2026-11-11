@@ -299,6 +299,7 @@ from .systems_of_record import (
 # `ApprovalChainEntry` and their nested rows, mirroring ADR-0046 §1/§4 per the week-1 contract
 # packet. `CaseState` is deliberately absent — see the module docstring for why.
 from .maintenance_bridge import (
+    ACTION_CONTRACT_VERSION,
     APPROVAL_OUTCOMES,
     EVENT_KINDS,
     EVENT_SOURCES,
@@ -656,6 +657,7 @@ __all__ = [
     "match_system_of_record",
     "validate_connectors_known",
     # the maintenance bridge wire shapes (0.9.8) — ADR-0046 §1/§4 mirror; CaseState deliberately absent
+    "ACTION_CONTRACT_VERSION",
     "APPROVAL_OUTCOMES",
     "EVENT_KINDS",
     "EVENT_SOURCES",
