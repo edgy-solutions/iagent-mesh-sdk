@@ -45,7 +45,13 @@ dependencies = [
     # was reported as a caller-side reason string.
     # `[crypto]` extra declared explicitly: RS256 is now the ONLY algorithm verify_bearer
     # accepts (v0.9.20), and RS256 needs the `cryptography` backend to verify at all.
-    "pyjwt[crypto]>=2.0.0",
+    # Floor raised to 2.9.0 (v0.9.20): `issuer=` only started accepting a list of acceptable
+    # issuers in that release (PyJWT changelog, PR #913) — below it, `iss` is compared to the
+    # whole list as one value and every token is refused. `!=2.10.0` excludes the one release
+    # where that same list check used `isinstance(x, Sequence)` instead of `isinstance(x, list)`,
+    # which also matches a single-string issuer (a str IS a Sequence) and turns equality into a
+    # substring check — GHSA-75c5-xw7c-p5pm / CVE-2024-53861, fixed in 2.10.1.
+    "pyjwt[crypto]>=2.9.0,!=2.10.0",
     # DataHub emitter for predicate-graph registration (ADR-0004/0006).
     # Lazy-imported in core.py — only loaded when MESH_REGISTER_ON_STARTUP=true.
     "acryl-datahub>=0.13.0",

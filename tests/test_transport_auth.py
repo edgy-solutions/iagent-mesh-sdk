@@ -89,6 +89,10 @@ def _clean_env(monkeypatch):
               "USER_ENTITLEMENT_CLAIM", "MESH_JWT_ACCEPTED_ISSUERS",
               "MESH_JWT_ACCEPTED_AUDIENCES", "MESH_JWT_JWKS_URL"):
         monkeypatch.delenv(k, raising=False)
+    # One `jwt.PyJWKClient` is now cached per URL across calls (see `_jwks_client_for`), so a
+    # test that monkeypatches `jwt.PyJWKClient` must not leak its stub into a later test that
+    # reuses the same URL string — cleared before every test, never in production.
+    ta._clear_jwks_client_cache()
 
 
 # --- posture resolution + the announcement ----------------------------------
@@ -283,6 +287,82 @@ def test_jwks_url_takes_precedence_over_static_key_when_both_set(monkeypatch):
     tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
     c = ta.verify_bearer(tok)
     assert c.verified is True, "JWKS must win; the wrong static key must never be used"
+
+
+def test_jwks_client_is_reused_across_verifications_one_fetch_per_kid(monkeypatch):
+    """Lane 1's review of d5ab283e: a fresh `jwt.PyJWKClient` per call has an empty cache every
+    time, so every verification was an HTTP round-trip to the realm's certs endpoint — on the
+    event loop. `_jwks_client_for` now keeps one client per URL so ITS OWN cache (and its
+    refetch-once-on-an-unknown-`kid`, which PyJWKClient already implements) has something to
+    work with. Seal: two verifications with the same `kid` cause one fetch. Control: a third
+    verification with an unknown `kid` is the one case that cache is supposed to miss — a second
+    fetch, not a rebuilt client."""
+    jwt = pytest.importorskip("jwt")
+
+    class _FakeSigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class FakeClient:
+        """Mirrors the one thing about the real `PyJWKClient` this test needs: it fetches the
+        whole JWK set over the network and caches it by `kid`, so resolving an already-seen `kid`
+        costs nothing further — only an unseen `kid` triggers another fetch. `fetch_count` stands
+        in for the network call; `get_signing_key_from_jwt` stands in for the cache-aware resolve
+        that PyJWT itself provides and that `_jwks_client_for` exists to let actually run."""
+
+        instances = 0
+
+        def __init__(self, url):
+            self.url = url
+            self.fetch_count = 0
+            self._known_kids: set = set()
+            FakeClient.instances += 1
+
+        def get_signing_key_from_jwt(self, token):
+            kid = jwt.get_unverified_header(token).get("kid")
+            if kid not in self._known_kids:
+                self.fetch_count += 1
+                self._known_kids.add(kid)
+            return _FakeSigningKey(_PUBLIC_PEM)
+
+    monkeypatch.setattr(jwt, "PyJWKClient", FakeClient)
+    url = "https://issuer.example.com/jwks"
+    monkeypatch.setenv("MESH_JWT_JWKS_URL", url)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    tok_a1 = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256", headers={"kid": "kid-a"})
+    tok_a2 = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256", headers={"kid": "kid-a"})
+    tok_b = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256", headers={"kid": "kid-b"})
+
+    assert ta.verify_bearer(tok_a1).verified is True
+    assert ta.verify_bearer(tok_a2).verified is True
+    assert FakeClient.instances == 1, "one PyJWKClient per URL, not rebuilt per call"
+    client = ta._jwks_client_for(url)
+    assert client.fetch_count == 1, "two verifications, same kid: one fetch"
+
+    assert ta.verify_bearer(tok_b).verified is True
+    assert FakeClient.instances == 1, "still the same client — an unknown kid is refetched, not rebuilt"
+    assert client.fetch_count == 2, "control: a different kid, a second fetch"
+
+
+def test_two_accepted_issuers_admits_a_token_whose_iss_is_the_second_entry(monkeypatch):
+    """Sandbox serves TWO accepted issuers — the in-cluster realm URL and the public one, since
+    Keycloak has no fixed hostname — per Lane 1's packet
+    (sessions/2026-11-11-packet-to-ca-from-lane-01-v0-9-20-review-two-changes-then-ask-chris-to-
+    merge-now.md). Every other test in this module configures a single issuer; this is the
+    two-element shape that will actually run, and the reason the `pyjwt` floor had to move at
+    all — below 2.9.0, `issuer=["a", "b"]` is compared to the whole list as one value, so every
+    token is refused regardless of which of the two issuers minted it."""
+    jwt = pytest.importorskip("jwt")
+    second_issuer = "https://issuer-internal.example.svc.cluster.local/realm"
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", f"{ISSUER},{second_issuer}")
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    tok = jwt.encode(_claims(iss=second_issuer), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is True and c.authz_id == "svc:supervisor"
 
 
 # --- the double-sided behaviour proof ----------------------------------------

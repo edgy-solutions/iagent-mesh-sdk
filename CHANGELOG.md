@@ -29,6 +29,29 @@ version field — it stays at the value it forked from until a release ceremony 
   now makes the `cryptography` backend load-bearing rather than incidental, so it is declared.
 - Env vars sourced per Lane 1's own proposal (invincible-agent/lane/01, accepted in ca's reply
   packet): `MESH_JWT_ACCEPTED_ISSUERS`, `MESH_JWT_ACCEPTED_AUDIENCES`, `MESH_JWT_JWKS_URL`.
+- Lane 1's review of the first cut (`d5ab283e`,
+  `sessions/2026-11-11-packet-to-ca-from-lane-01-v0-9-20-review-two-changes-then-ask-chris-to-
+  merge-now.md`) found two gaps, both fixed before this tag:
+  - **The JWKS signing key was re-fetched over the network on every single request.**
+    `verify_bearer` built a fresh `jwt.PyJWKClient` per call, which has an empty cache every
+    time — and `transport_auth`'s FastAPI dependency is `async def`, calling `verify_bearer`
+    directly on the event loop. Fixed by `_jwks_client_for`: one client per URL, cached for the
+    process, so PyJWKClient's own cache (and its refetch-once-on-an-unknown-`kid`) actually has
+    something to work with. Seal + control in `tests/test_transport_auth.py`:
+    `test_jwks_client_is_reused_across_verifications_one_fetch_per_kid`.
+  - **The `pyjwt` floor (`>=2.0.0`) admitted versions that refuse every token outright.**
+    `issuer=` only started accepting a list of acceptable issuers in **PyJWT 2.9.0** (PyJWT
+    changelog, PR #913, "Update jwt-api to accept either a string or list of strings for issuer
+    validation") — below it, `iss` is compared to the whole configured list as a single value,
+    so sandbox's two-issuer `MESH_JWT_ACCEPTED_ISSUERS` would refuse every caller. Raised to
+    `pyjwt[crypto]>=2.9.0,!=2.10.0`: the excluded release checked `isinstance(issuer, Sequence)`
+    rather than `isinstance(issuer, list)`, and a plain string is also a `Sequence`, so a
+    single-string `issuer=` (as `mcp_server/bff_tools.py`'s `TokenVerifier` passes it) degraded
+    into a substring match instead of equality — **GHSA-75c5-xw7c-p5pm / CVE-2024-53861**, fixed
+    in 2.10.1. Seal: `test_two_accepted_issuers_admits_a_token_whose_iss_is_the_second_entry`.
+  - Not done: running the cold JWKS fetch off the event loop via `run_in_threadpool`. Lane 1
+    offered it as optional; deferred, since the caching fix already turns "every request" into
+    "once per JWK-set lifespan, plus a rate-limited refetch on key rotation."
 
 ## 0.9.19 — 2026-11-10 (tagged `v0.9.19`, merged to `master` at `ef7a6f3`)
 
