@@ -12,23 +12,46 @@ Every test here fails against the pre-fix SDK. That is the point: they were writ
 the fixed code and confirming each goes red for its own reason, not as a set.
 """
 import os
+import time
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from iagent_mesh import CallerIdentity, current_caller
 from iagent_mesh.core import MeshTool
 from iagent_mesh.models import ToolInput, ToolOutput
 
-# HS256 with a known secret: a REAL signature check, so `verified=True` means the token was
+# RS256 with a known keypair: a REAL signature check, so `verified=True` means the token was
 # actually verified rather than decoded. A test that only ever exercises the unverified path
-# cannot tell a working verifier from an absent one.
-_SECRET = "test-signing-secret"
+# cannot tell a working verifier from an absent one. v0.9.20 made RS256 the only accepted
+# algorithm and added issuer/audience allow-lists — see `verifying_env` below.
+_ISSUER = "https://issuer.example.com/realm"
+_AUDIENCE = "iagent-mesh"
+
+
+def _rsa_keypair():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return private_pem, public_pem
+
+
+_PRIVATE_PEM, _PUBLIC_PEM = _rsa_keypair()
 
 
 def _token(claims: dict) -> str:
     import jwt
-    return jwt.encode(claims, _SECRET, algorithm="HS256")
+    payload = {"iss": _ISSUER, "aud": _AUDIENCE, "exp": int(time.time()) + 3600, **claims}
+    return jwt.encode(payload, _PRIVATE_PEM, algorithm="RS256")
 
 
 class Q(ToolInput):
@@ -41,7 +64,9 @@ class A(ToolOutput):
 
 @pytest.fixture
 def verifying_env(monkeypatch):
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _SECRET)
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", _ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", _AUDIENCE)
     monkeypatch.delenv("REQUIRE_TRANSPORT_AUTH", raising=False)
     monkeypatch.delenv("USER_ENTITLEMENT_CLAIM", raising=False)
 

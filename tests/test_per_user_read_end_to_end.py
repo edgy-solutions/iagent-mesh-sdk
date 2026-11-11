@@ -17,19 +17,44 @@ SUBJECT ARRIVE AT THE CONSTRUCTOR? Everything downstream of that already worked.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from iagent_mesh import CallerIdentity
 from iagent_mesh.core import MeshTool
 from iagent_mesh.models import ToolInput, ToolOutput
 
-_SECRET = "test-signing-secret"
+# v0.9.20 made RS256 the only accepted algorithm and added issuer/audience allow-lists — see
+# `_verifying` below.
+_ISSUER = "https://issuer.example.com/realm"
+_AUDIENCE = "iagent-mesh"
+
+
+def _rsa_keypair():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return private_pem, public_pem
+
+
+_PRIVATE_PEM, _PUBLIC_PEM = _rsa_keypair()
 
 
 def _token(claims: dict) -> str:
     import jwt
-    return jwt.encode(claims, _SECRET, algorithm="HS256")
+    payload = {"iss": _ISSUER, "aud": _AUDIENCE, "exp": int(time.time()) + 3600, **claims}
+    return jwt.encode(payload, _PRIVATE_PEM, algorithm="RS256")
 
 
 class _FakeCortexDataClient:
@@ -74,7 +99,9 @@ class Rows(ToolOutput):
 
 @pytest.fixture(autouse=True)
 def _verifying(monkeypatch):
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _SECRET)
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", _ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", _AUDIENCE)
     monkeypatch.delenv("REQUIRE_TRANSPORT_AUTH", raising=False)
     monkeypatch.delenv("USER_ENTITLEMENT_CLAIM", raising=False)
     _FakeCortexDataClient.last = {}

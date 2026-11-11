@@ -335,6 +335,14 @@ def _entitlement_claim() -> str:
     return os.getenv("USER_ENTITLEMENT_CLAIM", "email")
 
 
+def _accepted_list(env_var: str) -> list:
+    """Comma-separated, parsed the way the BFF parses its own accepted lists: split, strip, drop
+    blanks. An empty result is not "unconfigured, allow anything" — callers of this helper must
+    refuse rather than skip the check it backs."""
+    raw = os.getenv(env_var, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def verify_bearer(token: Optional[str]) -> CallerIdentity:
     """Validate a bearer token and extract the mint-contract subject.
 
@@ -359,6 +367,17 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     ``[[dag-tools-gateway-unverified-subject]]``, blocked on the OBSERVE reading and on
     ``[[da-sends-no-user-token]]``. This module's verification does not fix that hop; it is what
     makes fixing it possible.
+
+    v0.9.20 ([[transport-flip]]'s sibling gap, flagged by an external audit): the verified branch
+    below used to decode with no `issuer`/`audience` check at all and accepted `RS256` or `HS256`
+    interchangeably — a token signed with the RSA PUBLIC key, used as an HMAC secret, verified
+    clean. Now it is `RS256` only, and `iss`/`aud` are checked against configured LISTS
+    (`MESH_JWT_ACCEPTED_ISSUERS` / `MESH_JWT_ACCEPTED_AUDIENCES`), mirroring
+    `mcp_server/bff_tools.py`'s `TokenVerifier`. An empty accepted-list is a refusal, never a
+    fall-through to "unconfigured means allow". `MESH_JWT_JWKS_URL`, when set, resolves the
+    signing key per-token via `jwt.PyJWKClient` and takes precedence over the static
+    `MESH_JWT_PUBLIC_KEY`/`KEYCLOAK_PUBLIC_KEY`; the static key stays as the fallback path when no
+    JWKS URL is configured. Both paths get the same three checks.
     """
     if not token:
         return CallerIdentity(None, False, "absent")
@@ -368,8 +387,10 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     except ImportError:  # pragma: no cover — environment without PyJWT
         return CallerIdentity(None, False, "pyjwt-missing")
 
+    jwks_url = os.getenv("MESH_JWT_JWKS_URL")
     key = os.getenv("MESH_JWT_PUBLIC_KEY") or os.getenv("KEYCLOAK_PUBLIC_KEY")
-    if not key:
+
+    if not jwks_url and not key:
         # Honest-unverified: we can read who it CLAIMS to be, and we say so. This value is
         # legal to LOG and illegal to authorize on — REQUIRE mode refuses it below, and
         # admitting it meanwhile is the OBSERVE posture tracked as [[transport-flip]].
@@ -379,9 +400,28 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
             return CallerIdentity(None, False, f"undecodable: {type(exc).__name__}")
         return CallerIdentity(claims.get(_entitlement_claim()), False, "no-verification-key")
 
+    issuers = _accepted_list("MESH_JWT_ACCEPTED_ISSUERS")
+    audiences = _accepted_list("MESH_JWT_ACCEPTED_AUDIENCES")
+    if not issuers:
+        return CallerIdentity(None, False, "no accepted issuers configured")
+    if not audiences:
+        return CallerIdentity(None, False, "no accepted audiences configured")
+
     try:
-        claims = jwt.decode(token, key, algorithms=["RS256", "HS256"],
-                            options={"verify_aud": False})
+        if jwks_url:
+            # Constructed fresh per call, deliberately NOT cached by url. Caching would let one
+            # test's monkeypatched `jwt.PyJWKClient` stub leak into another test that reuses the
+            # same url string — a real deployment resolves this rarely enough that the
+            # per-call construction cost does not matter next to that isolation property.
+            signing_key = jwt.PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+            resolved_key = signing_key.key
+        else:
+            resolved_key = key
+        claims = jwt.decode(
+            token, resolved_key, algorithms=["RS256"],
+            issuer=issuers, audience=audiences,
+            options={"require": ["exp", "iss", "aud"]},
+        )
     except Exception as exc:  # noqa: BLE001
         return CallerIdentity(None, False, f"invalid: {type(exc).__name__}")
 
