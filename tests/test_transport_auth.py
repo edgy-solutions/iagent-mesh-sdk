@@ -11,20 +11,83 @@ once via an SDK bump:
 
 A guard that has never failed has not been shown to guard anything — and here BOTH the
 failing and the not-failing behaviours are the guarantee, so both get a test.
+
+v0.9.20 added a second double-sided property to prove: RS256-only + issuer/audience allow-lists
++ JWKS key resolution. Each refusal arm below is paired with a positive control using the SAME
+shapes, correctly configured — a harness must prove it can fail, never just that it can pass.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import importlib
+import json
+import time
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 ta = importlib.import_module("iagent_mesh.transport_auth")
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _craft_hs256_token(payload: dict, secret: str) -> str:
+    """Build an HS256 JWT by hand, bypassing PyJWT's own `encode()` — which, as of the
+    installed version, refuses to use a PEM-shaped string as an HMAC secret
+    (`InvalidKeyError: ... should not be used as an HMAC secret`). That guard is exactly the
+    mitigation this change's own defense is about, but it means `jwt.encode(..., algorithm=
+    "HS256")` can no longer be used to PRODUCE the audit's attack token: an attacker crafting a
+    forged JWT by hand is not bound by pyjwt's client-side encode-time guard, and the server-side
+    `verify_bearer` must refuse such a token on its own — which is what this test actually
+    proves."""
+    header = {"alg": "HS256", "typ": "JWT"}
+    signing_input = (
+        _b64url(json.dumps(header, separators=(",", ":")).encode())
+        + "." + _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    )
+    sig = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+    return signing_input + "." + _b64url(sig)
+
+
+def _rsa_keypair():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return private_pem, public_pem
+
+
+# One keypair per module is enough — generation is ~tens of ms, no need to repeat it per test.
+_PRIVATE_PEM, _PUBLIC_PEM = _rsa_keypair()
+# A SECOND, unrelated keypair for the tampered-signature case.
+_OTHER_PRIVATE_PEM, _OTHER_PUBLIC_PEM = _rsa_keypair()
+
+ISSUER = "https://issuer.example.com/realm"
+AUDIENCE = "iagent-mesh"
+
+
+def _claims(**overrides):
+    base = {"email": "svc:supervisor", "iss": ISSUER, "aud": AUDIENCE, "exp": int(time.time()) + 3600}
+    base.update(overrides)
+    return base
 
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("REQUIRE_TRANSPORT_AUTH", "MESH_JWT_PUBLIC_KEY", "KEYCLOAK_PUBLIC_KEY",
-              "USER_ENTITLEMENT_CLAIM"):
+              "USER_ENTITLEMENT_CLAIM", "MESH_JWT_ACCEPTED_ISSUERS",
+              "MESH_JWT_ACCEPTED_AUDIENCES", "MESH_JWT_JWKS_URL"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -51,7 +114,9 @@ def test_absent_token_is_absent_not_invalid():
 
 def test_unsigned_read_is_reported_unverified_never_trusted():
     """Without a verification key we may READ the claim and must NOT trust it. A decode
-    without signature checking is the presence-check defect wearing a JWT's clothes."""
+    without signature checking is the presence-check defect wearing a JWT's clothes. This is the
+    one test allowed to keep an HS256-"signed" token: this branch never checks a signature at
+    all (no key, no JWKS URL configured), so the algorithm used to produce it is irrelevant."""
     jwt = pytest.importorskip("jwt")
     tok = jwt.encode({"email": "svc:impostor"}, "k", algorithm="HS256")
     c = ta.verify_bearer(tok)
@@ -62,16 +127,22 @@ def test_unsigned_read_is_reported_unverified_never_trusted():
 
 def test_valid_signature_yields_a_verified_subject(monkeypatch):
     jwt = pytest.importorskip("jwt")
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "topsecret")
-    tok = jwt.encode({"email": "svc:supervisor"}, "topsecret", algorithm="HS256")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+    tok = jwt.encode(_claims(email="svc:supervisor"), _PRIVATE_PEM, algorithm="RS256")
     c = ta.verify_bearer(tok)
     assert c.verified is True and c.authz_id == "svc:supervisor"
 
 
 def test_tampered_token_is_invalid(monkeypatch):
+    """Signed with a DIFFERENT RSA private key than the one configured — same claimed
+    issuer/audience, wrong signature."""
     jwt = pytest.importorskip("jwt")
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "topsecret")
-    tok = jwt.encode({"email": "svc:supervisor"}, "WRONG-KEY", algorithm="HS256")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+    tok = jwt.encode(_claims(), _OTHER_PRIVATE_PEM, algorithm="RS256")
     c = ta.verify_bearer(tok)
     assert c.verified is False and c.reason.startswith("invalid")
 
@@ -81,10 +152,137 @@ def test_subject_comes_from_the_entitlement_claim(monkeypatch):
     employee-id claim, and hardcoding `email` is the email-as-identity defect."""
     jwt = pytest.importorskip("jwt")
     monkeypatch.setenv("USER_ENTITLEMENT_CLAIM", "employee_id")
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "k")
-    tok = jwt.encode({"employee_id": "E01234567", "email": "ignored@example.com"},
-                     "k", algorithm="HS256")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+    tok = jwt.encode(
+        _claims(employee_id="E01234567", email="ignored@example.com"),
+        _PRIVATE_PEM, algorithm="RS256",
+    )
     assert ta.verify_bearer(tok).authz_id == "E01234567"
+
+
+# --- v0.9.20 seals: RS256-only, issuer/audience allow-lists, JWKS ------------
+def test_HS256_token_is_refused_RS256_control_is_admitted(monkeypatch):
+    """The audit's own phrasing: "including one signed with a key that would pass as an HMAC
+    secret" — the RSA PUBLIC PEM string itself, used as an HMAC secret, used to verify clean.
+    Crafted by hand (`_craft_hs256_token`) because PyJWT's own `encode()` now refuses to use a
+    PEM-shaped string as an HMAC secret — an attacker forging a token is not bound by that
+    client-side guard, so `verify_bearer` must refuse it on its own."""
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    hs_tok = _craft_hs256_token(_claims(), _PUBLIC_PEM)
+    c_hs = ta.verify_bearer(hs_tok)
+    assert c_hs.verified is False and c_hs.reason.startswith("invalid")
+
+    rs_tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
+    c_rs = ta.verify_bearer(rs_tok)
+    assert c_rs.verified is True
+
+
+def test_wrong_issuer_is_refused_correct_issuer_is_the_control(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    wrong_tok = jwt.encode(_claims(iss="https://not-accepted.example.com"), _PRIVATE_PEM,
+                           algorithm="RS256")
+    c_wrong = ta.verify_bearer(wrong_tok)
+    assert c_wrong.verified is False and c_wrong.reason.startswith("invalid")
+
+    right_tok = jwt.encode(_claims(iss=ISSUER), _PRIVATE_PEM, algorithm="RS256")
+    c_right = ta.verify_bearer(right_tok)
+    assert c_right.verified is True
+
+
+def test_wrong_audience_is_refused_correct_audience_is_the_control(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    wrong_tok = jwt.encode(_claims(aud="not-accepted"), _PRIVATE_PEM, algorithm="RS256")
+    c_wrong = ta.verify_bearer(wrong_tok)
+    assert c_wrong.verified is False and c_wrong.reason.startswith("invalid")
+
+    right_tok = jwt.encode(_claims(aud=AUDIENCE), _PRIVATE_PEM, algorithm="RS256")
+    c_right = ta.verify_bearer(right_tok)
+    assert c_right.verified is True
+
+
+def test_empty_accepted_issuers_refuses_an_otherwise_correct_token(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+    # MESH_JWT_ACCEPTED_ISSUERS left unset — _clean_env already delenv'd it.
+    tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is False and c.reason == "no accepted issuers configured"
+
+
+def test_empty_accepted_audiences_refuses_an_otherwise_correct_token(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    # MESH_JWT_ACCEPTED_AUDIENCES left unset.
+    tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is False and c.reason == "no accepted audiences configured"
+
+
+def test_jwks_url_resolves_the_signing_key(monkeypatch):
+    """Proves the JWKS path is actually exercised, not silently falling through to
+    "no-verification-key" because MESH_JWT_PUBLIC_KEY was never set."""
+    jwt = pytest.importorskip("jwt")
+
+    class _FakeSigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class FakeClient:
+        def __init__(self, url):
+            self.url = url
+
+        def get_signing_key_from_jwt(self, token):
+            return _FakeSigningKey(_PUBLIC_PEM)
+
+    monkeypatch.setattr(jwt, "PyJWKClient", FakeClient)
+    monkeypatch.setenv("MESH_JWT_JWKS_URL", "https://issuer.example.com/jwks")
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is True and c.authz_id == "svc:supervisor"
+
+
+def test_jwks_url_takes_precedence_over_static_key_when_both_set(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+
+    class _FakeSigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class FakeClient:
+        def __init__(self, url):
+            self.url = url
+
+        def get_signing_key_from_jwt(self, token):
+            return _FakeSigningKey(_PUBLIC_PEM)  # the CORRECT key
+
+    monkeypatch.setattr(jwt, "PyJWKClient", FakeClient)
+    monkeypatch.setenv("MESH_JWT_JWKS_URL", "https://issuer.example.com/jwks")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _OTHER_PUBLIC_PEM)  # the WRONG key
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+
+    tok = jwt.encode(_claims(), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is True, "JWKS must win; the wrong static key must never be used"
 
 
 # --- the double-sided behaviour proof ----------------------------------------
@@ -109,7 +307,10 @@ def test_OBSERVE_serves_a_request_with_no_token_at_all():
 
 
 def test_OBSERVE_serves_a_request_with_an_INVALID_token(monkeypatch):
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "right-key")
+    """Invalid because RS256 is configured+accepted but the token is HS256-signed."""
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
     jwt = pytest.importorskip("jwt")
     bad = jwt.encode({"email": "svc:x"}, "wrong-key", algorithm="HS256")
     r = _client_with_dependency().get("/ping", headers={"Authorization": f"Bearer {bad}"})
@@ -126,7 +327,9 @@ def test_REQUIRE_refuses_invalid_with_403(monkeypatch):
     could not trust' are different operator problems, and collapsing them costs an
     incident's first hour."""
     monkeypatch.setenv("REQUIRE_TRANSPORT_AUTH", "true")
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "right-key")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
     jwt = pytest.importorskip("jwt")
     bad = jwt.encode({"email": "svc:x"}, "wrong-key", algorithm="HS256")
     r = _client_with_dependency().get("/ping", headers={"Authorization": f"Bearer {bad}"})
@@ -135,9 +338,11 @@ def test_REQUIRE_refuses_invalid_with_403(monkeypatch):
 
 def test_REQUIRE_admits_a_verified_caller(monkeypatch):
     monkeypatch.setenv("REQUIRE_TRANSPORT_AUTH", "true")
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", "k")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
     jwt = pytest.importorskip("jwt")
-    good = jwt.encode({"email": "svc:supervisor"}, "k", algorithm="HS256")
+    good = jwt.encode(_claims(email="svc:supervisor"), _PRIVATE_PEM, algorithm="RS256")
     r = _client_with_dependency().get("/ping", headers={"Authorization": f"Bearer {good}"})
     assert r.status_code == 200
 

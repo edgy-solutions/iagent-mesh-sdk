@@ -19,14 +19,38 @@ forms take genuinely different code paths through `typing.get_type_hints`.
 """
 from __future__ import annotations           # <- THE WHOLE POINT OF THIS FILE
 
+import time
+
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from iagent_mesh import CallerIdentity
 from iagent_mesh.core import MeshTool
 from iagent_mesh.models import ToolInput, ToolOutput
 
-_SECRET = "test-signing-secret"
+# v0.9.20 made RS256 the only accepted algorithm and added issuer/audience allow-lists — see
+# `test_caller_injection_also_works_under_postponed_annotations` below.
+_ISSUER = "https://issuer.example.com/realm"
+_AUDIENCE = "iagent-mesh"
+
+
+def _rsa_keypair():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return private_pem, public_pem
+
+
+_PRIVATE_PEM, _PUBLIC_PEM = _rsa_keypair()
 
 
 class Reading(ToolInput):
@@ -75,7 +99,9 @@ def test_validation_still_rejects_a_bad_body_for_the_RIGHT_reason():
 
 def test_caller_injection_also_works_under_postponed_annotations(monkeypatch):
     """`CallerIdentity` is a string annotation here too, and must still be recognised."""
-    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _SECRET)
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", _ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", _AUDIENCE)
     monkeypatch.delenv("REQUIRE_TRANSPORT_AUTH", raising=False)
     monkeypatch.delenv("USER_ENTITLEMENT_CLAIM", raising=False)
     import jwt
@@ -83,7 +109,11 @@ def test_caller_injection_also_works_under_postponed_annotations(monkeypatch):
     def handler(data: Reading, caller: CallerIdentity) -> Verdict:
         return Verdict(sensor=data.sensor, caller=caller.require_authz_id())
 
-    token = jwt.encode({"email": "pep563@corp.com"}, _SECRET, algorithm="HS256")
+    token = jwt.encode(
+        {"email": "pep563@corp.com", "iss": _ISSUER, "aud": _AUDIENCE,
+         "exp": int(time.time()) + 3600},
+        _PRIVATE_PEM, algorithm="RS256",
+    )
     r = _tool(handler, name="pep563-caller").post(
         "/execute", json={"sensor": "pump-7"},
         headers={"Authorization": f"Bearer {token}"})

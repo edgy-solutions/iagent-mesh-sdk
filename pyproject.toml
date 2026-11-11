@@ -7,7 +7,7 @@
 # rename turns every one of those into a metadata-name mismatch. Free name + zero downstream
 # churn, so the name stays.
 name = "iagent_mesh"
-version = "0.9.19"
+version = "0.9.20"
 description = "Universal contracts and infrastructure wrapper for the iagent Mesh — typed predicate registration, transport auth, and per-caller identity for mesh tools"
 readme = "README.md"
 license = "MIT"
@@ -43,7 +43,9 @@ dependencies = [
     # "pyjwt-missing"`) but never declared, so the REQUIRE posture's verification silently
     # degraded to unverified on any install that lacked it — a security control whose absence
     # was reported as a caller-side reason string.
-    "pyjwt>=2.0.0",
+    # `[crypto]` extra declared explicitly: RS256 is now the ONLY algorithm verify_bearer
+    # accepts (v0.9.20), and RS256 needs the `cryptography` backend to verify at all.
+    "pyjwt[crypto]>=2.0.0",
     # DataHub emitter for predicate-graph registration (ADR-0004/0006).
     # Lazy-imported in core.py — only loaded when MESH_REGISTER_ON_STARTUP=true.
     "acryl-datahub>=0.13.0",

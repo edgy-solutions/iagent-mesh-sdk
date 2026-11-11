@@ -6,6 +6,30 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.20 — 2026-11-11
+
+### Changed
+- `verify_bearer` (`iagent_mesh/transport_auth.py`) is `RS256`-only now — `HS256` is dropped.
+  The prior code accepted either algorithm and checked neither `iss` nor `aud`, so a token
+  signed with the configured RSA PUBLIC key used as an HMAC secret verified clean; flagged by an
+  external audit, ruled by the architect to ship in its own release rather than bundled with
+  v0.9.19. See `sessions/2026-11-11-packet-to-ca-from-lane-01-transport-auth-checks-no-audience-
+  or-issuer.md`.
+- `iss`/`aud` are now checked against configured lists — `MESH_JWT_ACCEPTED_ISSUERS` /
+  `MESH_JWT_ACCEPTED_AUDIENCES`, comma-separated, mirroring `mcp_server/bff_tools.py`'s
+  `TokenVerifier`. An empty (or unset) list refuses every token — fail closed, never
+  "unconfigured means allow".
+- New JWKS-based key resolution: when `MESH_JWT_JWKS_URL` is set, the signing key is resolved
+  per-token via `jwt.PyJWKClient`, same as `TokenVerifier`'s `PyJWKClientKeySource`. It takes
+  precedence over the static key when both are configured.
+- The pre-existing static-key path (`MESH_JWT_PUBLIC_KEY` / `KEYCLOAK_PUBLIC_KEY`) stays as the
+  fallback for when `MESH_JWT_JWKS_URL` is not set — both paths now get the same three checks
+  (RS256-only, issuer list, audience list).
+- `pyjwt>=2.0.0` → `pyjwt[crypto]>=2.0.0` (`pyproject.toml`) — RS256 being the only algorithm
+  now makes the `cryptography` backend load-bearing rather than incidental, so it is declared.
+- Env vars sourced per Lane 1's own proposal (invincible-agent/lane/01, accepted in ca's reply
+  packet): `MESH_JWT_ACCEPTED_ISSUERS`, `MESH_JWT_ACCEPTED_AUDIENCES`, `MESH_JWT_JWKS_URL`.
+
 ## 0.9.19 — 2026-11-10 (tagged `v0.9.19`, merged to `master` at `ef7a6f3`)
 
 ### Added
