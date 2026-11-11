@@ -142,6 +142,35 @@ def test_impact_row_is_frozen_and_forbids_unknown_fields():
         _impact_row(extra_field="x")
 
 
+# ── DataProvenance absence-marking, ADDED 0.9.19 (lane 74's #337: no catalogue entry → no
+#    dataset URN; no broker read → no ticket) ──────────────────────────────────────────────
+
+def test_data_provenance_dataset_urn_and_ticket_id_default_to_none_meaning_absent():
+    provenance = DataProvenance(as_of="2026-11-07T00:00:00Z")
+    assert provenance.dataset_urn is None
+    assert provenance.ticket_id is None
+
+
+def test_data_provenance_as_of_stays_required():
+    with pytest.raises(ValidationError):
+        DataProvenance()  # missing as_of
+
+
+def test_data_provenance_rejects_blank_but_not_none_for_the_absent_capable_fields():
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(as_of="2026-11-07T00:00:00Z", dataset_urn="")
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(as_of="2026-11-07T00:00:00Z", ticket_id="")
+
+
+def test_impact_row_accepts_a_data_provenance_with_an_absent_dataset_urn_and_ticket():
+    row = _impact_row(
+        data_provenance=DataProvenance(as_of="2026-11-07T00:00:00Z"),
+    )
+    assert row.data_provenance.dataset_urn is None
+    assert row.data_provenance.ticket_id is None
+
+
 def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):
     p = tmp_path / "lifecycle_status.yaml"
     p.write_text(

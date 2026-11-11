@@ -67,7 +67,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 __all__ = [
     "LifecycleStatus",
@@ -134,14 +134,36 @@ class DataProvenance(BaseModel):
     this triple was found anywhere in this SDK (checked :mod:`iagent_mesh.provenance`'s own,
     richer ``ProvenanceBlock``, :mod:`iagent_mesh.measure_series`, :mod:`mcp_server.bff_tools`);
     this is this module's own minimal typed mirror of the ruling's three nouns, flagged in case a
-    shared one already exists elsewhere that this search missed."""
+    shared one already exists elsewhere that this search missed.
+
+    **`dataset_urn`/`ticket_id` can say ABSENT, ADDED 0.9.19** — lane 74's `#337` packet named the
+    real gap: a served row with no catalogue entry has no dataset URN, and a row with no broker
+    read has no ticket; re-exporting that row forced inventing both as placeholder strings.
+    ``None`` on either field means absent, never a placeholder. `as_of` stays required — this row
+    is only ever answered from data that was current as of SOME moment, absent sourcing or not;
+    only the two sourcing facts, not the timestamp, can be missing. **This ships absence-marking
+    only.** Holding more than one provenance entry per row (lane 74's other `#337` ask, the
+    fleet's own ``{inputs: [...], absent: {...}}`` shape) is a separate, still-unruled question —
+    not part of this change."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    dataset_urn: str
+    dataset_urn: Optional[str] = None
+    """``None`` means absent — no catalogue entry — never a placeholder string. ADDED 0.9.19."""
     as_of: str
-    """ISO-8601, this SDK's house convention for a wire timestamp — never ``datetime``."""
-    ticket_id: str
+    """ISO-8601, this SDK's house convention for a wire timestamp — never ``datetime``. Stays
+    required: unlike :attr:`dataset_urn`/:attr:`ticket_id`, this is never the fact that's absent."""
+    ticket_id: Optional[str] = None
+    """``None`` means absent — no broker read — never a placeholder string. ADDED 0.9.19."""
+
+    @field_validator("dataset_urn", "ticket_id")
+    @classmethod
+    def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"DataProvenance.{info.field_name}='' — use None for absent, not a blank string"
+            )
+        return v
 
 
 class ImpactRow(BaseModel):
@@ -179,7 +201,8 @@ class ImpactRow(BaseModel):
     as_of: str
     """ISO-8601. When the data this row was answered from was current."""
     data_provenance: DataProvenance
-    """Dataset URN, as-of, and ticket id — see :class:`DataProvenance`."""
+    """Dataset URN, as-of, and ticket id — see :class:`DataProvenance`, including the 0.9.19
+    absence-marking it gained and that change's explicit scope line."""
 
 
 class UnknownLifecycleStatus(LookupError):
