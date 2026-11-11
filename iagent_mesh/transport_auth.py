@@ -343,6 +343,40 @@ def _accepted_list(env_var: str) -> list:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+_jwks_clients: dict = {}
+
+
+def _jwks_client_for(jwks_url: str):
+    """One `jwt.PyJWKClient` per URL, kept for the life of the process.
+
+    A client built fresh per call has an empty JWK-set cache every time, so every verification
+    became an HTTP GET to the realm's certs endpoint — on the event loop, since
+    `make_transport_auth_dependency`'s `transport_auth` is `async def` and calls `verify_bearer`
+    (this function's caller) directly, with no `run_in_threadpool`. Reusing one client per URL
+    lets PyJWKClient's OWN cache (and its refetch-once-on-an-unknown-`kid`) do its job: flagged by
+    Lane 1's review of d5ab283e
+    (sessions/2026-11-11-packet-to-ca-from-lane-01-v0-9-20-review-two-changes-then-ask-chris-to-
+    merge-now.md). Running the first, cold fetch off the loop too was offered as optional; not
+    done here — the caching fix already turns "every request" into "once per JWK-set lifespan
+    (plus a rate-limited refetch on a rotated key)", which is the blocking frequency that matters.
+    """
+    import jwt  # PyJWT
+
+    client = _jwks_clients.get(jwks_url)
+    if client is None:
+        client = jwt.PyJWKClient(jwks_url)
+        _jwks_clients[jwks_url] = client
+    return client
+
+
+def _clear_jwks_client_cache() -> None:
+    """Test-only: drop every cached `PyJWKClient`. A test that monkeypatches `jwt.PyJWKClient`
+    calls this first (via the `_clean_env` fixture in `tests/test_transport_auth.py`) so its
+    stub class cannot leak into a later test that reuses the same URL string. Production code
+    never calls this — the cache is meant to outlive a single request."""
+    _jwks_clients.clear()
+
+
 def verify_bearer(token: Optional[str]) -> CallerIdentity:
     """Validate a bearer token and extract the mint-contract subject.
 
@@ -378,6 +412,11 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     signing key per-token via `jwt.PyJWKClient` and takes precedence over the static
     `MESH_JWT_PUBLIC_KEY`/`KEYCLOAK_PUBLIC_KEY`; the static key stays as the fallback path when no
     JWKS URL is configured. Both paths get the same three checks.
+
+    v0.9.20, revised after Lane 1's review of d5ab283e: the JWKS client is cached one-per-URL
+    (`_jwks_client_for`) rather than rebuilt per call, so it is not making a network round-trip
+    on the event loop for every single request. `pyjwt` is also now floored at 2.9.0, excluding
+    2.10.0 — see the pyproject.toml comment for why.
     """
     if not token:
         return CallerIdentity(None, False, "absent")
@@ -409,11 +448,10 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
 
     try:
         if jwks_url:
-            # Constructed fresh per call, deliberately NOT cached by url. Caching would let one
-            # test's monkeypatched `jwt.PyJWKClient` stub leak into another test that reuses the
-            # same url string — a real deployment resolves this rarely enough that the
-            # per-call construction cost does not matter next to that isolation property.
-            signing_key = jwt.PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+            # One client per URL (see `_jwks_client_for`), not a fresh one per call — a fresh
+            # client has an empty cache every time, which made every verification a blocking
+            # network round-trip to the realm's certs endpoint.
+            signing_key = _jwks_client_for(jwks_url).get_signing_key_from_jwt(token)
             resolved_key = signing_key.key
         else:
             resolved_key = key
