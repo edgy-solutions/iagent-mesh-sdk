@@ -6,6 +6,30 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.21 — 2026-11-15
+
+### Changed
+- `ImpactRow.data_provenance` (`iagent_mesh/lifecycle_status.py`) is now a non-empty
+  `list[DataProvenance]` instead of a single `DataProvenance` — a row answered from more than
+  one input (e.g. `product_structure` and `sustained_under`) can now carry one provenance entry
+  per input, instead of forcing a single triple to describe all of them. This is the
+  multiplicity half of lane 74's `#337` ask, scoped out of both v0.9.18 and v0.9.19 (which
+  shipped only the absence-marking half); ruled by the architect 2026-11-11, timed to start
+  after `invincible-agent`'s `0.4.85` train cut (confirmed cut at `4e6e833e`).
+- `DataProvenance` gains `name: Optional[str] = None`, identifying which input an entry
+  describes (e.g. `"product_structure"`) so entries in a multi-input list can be told apart.
+  `None` is fine for a single-entry row with nothing to distinguish it from. Subject to the same
+  blank-string rejection as `dataset_urn`/`ticket_id`.
+- This is this SDK's own shape for the multiplicity, informed by but not copying lane 74's own
+  `{inputs: [...], absent: {...}}` candidate — that packet offered it as "one way to do both...
+  yours and the architect's to rule," not a fixed spec. A plain list of the existing
+  `DataProvenance` triple was favored over a second, fleet-shaped wrapper type, per
+  generic-at-birth.
+- `invincible-agent`'s own local `ImpactRow` (`agent_fleet/ontology_service/where_used.py`) and
+  its `test_impact_row_is_the_ruled_row.py` tripwire re-export are NOT updated by this release —
+  that re-export is lane 74's/gov's own follow-up action once this ships, not part of this SDK
+  change.
+
 ## 0.9.20 — 2026-11-11 (tagged `v0.9.20`, merged to `master` at `1aa6423`)
 
 ### Changed

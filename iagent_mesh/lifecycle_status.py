@@ -67,7 +67,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 __all__ = [
     "LifecycleStatus",
@@ -141,13 +141,22 @@ class DataProvenance(BaseModel):
     read has no ticket; re-exporting that row forced inventing both as placeholder strings.
     ``None`` on either field means absent, never a placeholder. `as_of` stays required — this row
     is only ever answered from data that was current as of SOME moment, absent sourcing or not;
-    only the two sourcing facts, not the timestamp, can be missing. **This ships absence-marking
-    only.** Holding more than one provenance entry per row (lane 74's other `#337` ask, the
-    fleet's own ``{inputs: [...], absent: {...}}`` shape) is a separate, still-unruled question —
-    not part of this change."""
+    only the two sourcing facts, not the timestamp, can be missing. **ADDED 0.9.21:**
+    :attr:`ImpactRow.data_provenance` now holds a LIST of these entries, one per input the row was
+    answered from — lane 74's other `#337` ask ("hold more than one input"), the multiplicity half
+    left unruled at 0.9.19. A :class:`DataProvenance` entry itself is still this one triple (plus
+    :attr:`name`, below); the multiplicity lives one level up, on :attr:`ImpactRow.data_provenance`
+    itself. This is this module's own shape for the multiplicity, informed by but not copying the
+    fleet's own ``{inputs: [...], absent: {...}}`` candidate (lane 74's packet offered that as "one
+    way to do both... yours and the architect's to rule," not a fixed spec) — generic-at-birth
+    favors a plain list of the existing triple over inventing a second, fleet-shaped wrapper type."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    name: Optional[str] = None
+    """Which input this entry describes, e.g. ``"product_structure"`` or ``"sustained_under"`` —
+    ADDED 0.9.21, so entries in a multi-input :attr:`ImpactRow.data_provenance` list can be told
+    apart. ``None`` is fine when a row has exactly one entry and nothing to distinguish it from."""
     dataset_urn: Optional[str] = None
     """``None`` means absent — no catalogue entry — never a placeholder string. ADDED 0.9.19."""
     as_of: str
@@ -156,7 +165,7 @@ class DataProvenance(BaseModel):
     ticket_id: Optional[str] = None
     """``None`` means absent — no broker read — never a placeholder string. ADDED 0.9.19."""
 
-    @field_validator("dataset_urn", "ticket_id")
+    @field_validator("name", "dataset_urn", "ticket_id")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
@@ -200,9 +209,12 @@ class ImpactRow(BaseModel):
     row only, not that refusal (see the module docstring's emitter/runner split)."""
     as_of: str
     """ISO-8601. When the data this row was answered from was current."""
-    data_provenance: DataProvenance
-    """Dataset URN, as-of, and ticket id — see :class:`DataProvenance`, including the 0.9.19
-    absence-marking it gained and that change's explicit scope line."""
+    data_provenance: list[DataProvenance] = Field(min_length=1)
+    """One :class:`DataProvenance` entry per input the row was answered from. A single-input row
+    (the only shape through 0.9.20) is a one-element list; **ADDED 0.9.21:** more than one input
+    is now representable — lane 74's `#337` multiplicity ask, see :class:`DataProvenance`'s own
+    docstring. Never empty: this row is always answered from at least one input, even one with
+    nothing but an absent :attr:`DataProvenance.dataset_urn`/:attr:`DataProvenance.ticket_id`."""
 
 
 class UnknownLifecycleStatus(LookupError):
