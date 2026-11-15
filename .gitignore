@@ -8,3 +8,7 @@ venv/
 build/
 dist/
 *.egg-info/
+
+# Session files (lane packets and handoffs) are PLACED, NEVER COMMITTED -- ruled 2026-11-12,
+# all repos. They stay local files under sessions/; see CLAUDE.md.
+sessions/

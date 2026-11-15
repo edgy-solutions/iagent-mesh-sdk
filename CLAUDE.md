@@ -69,6 +69,14 @@ state, and a second file would diverge silently. Find the current one with
 
 Also present, a narrower one: `docs/HANDOFF-meshtool-execute.md`.
 
+**Session files are placed, never committed** (ruled 2026-11-12, all repos). `sessions/` is
+gitignored; a lane packet or handoff is a local file on disk, never staged or pushed. Before
+merging master into a branch that still tracks files under `sessions/`: `git rm -r --cached
+sessions` and commit that first, *then* merge — merging master's untrack directly would record
+your tracked copies as deletions and remove them from disk. If that already happened, restore
+with `git archive ORIG_HEAD sessions | tar -x` (or `HEAD^1` if `ORIG_HEAD` has since moved) —
+never `git checkout ORIG_HEAD -- sessions`, which re-stages them.
+
 ## Conventions and gotchas visible from the survey
 
 - **Handoffs live in `sessions/`, dated + slugged**, not in a single rolling file. Lane packets
