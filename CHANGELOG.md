@@ -31,7 +31,7 @@ version field — it stays at the value it forked from until a release ceremony 
   (ADR-0070 section 3) — those continue to go through `iagent_mesh.refusal`'s existing
   `Refusal`/`PartialRefusal` shapes.
 
-## 0.9.21 — 2026-11-15
+## 0.9.21 — 2026-11-15 (tagged `v0.9.21`, merged to `master` at `8814cb3`)
 
 ### Changed
 - `ImpactRow.data_provenance` (`iagent_mesh/lifecycle_status.py`) is now a non-empty
