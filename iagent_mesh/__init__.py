@@ -417,6 +417,17 @@ from .lifecycle_status import (
     validate_status_known,
 )
 
+# PagedAnswer — the one envelope for the nine mesh:mfg* verbs, ADR-0070 section 3
+# (invincible-agent PR #379). TS mirror is cortex's own generated artifact, not shipped here —
+# see the module docstring. Refusals stay out of scope — they go through `refusal` instead.
+from .paged_answer import (
+    AnswerProvenance,
+    Downsample,
+    PagedAnswer,
+    RowCitation,
+    SuppressedStatistic,
+)
+
 # ADR-0060 types, UNWIRED — see the module docstring: shapes only, no behavior, pending an
 # architect ruling. Re-exported at root for the same reason `refusal` is: a shape two repos
 # might eventually agree on only resolves to one thing from one import path.
@@ -736,6 +747,12 @@ __all__ = [
     "UnknownLifecycleStatus",
     "load_lifecycle_status_vocabulary",
     "validate_status_known",
+    # PagedAnswer — the one envelope for the nine mesh:mfg* verbs (ADR-0070 section 3)
+    "PagedAnswer",
+    "RowCitation",
+    "SuppressedStatistic",
+    "Downsample",
+    "AnswerProvenance",
     # ADR-0060 types, UNWIRED — shapes only, no behavior, pending an architect ruling
     "ArtifactRef",
     "BlobRef",

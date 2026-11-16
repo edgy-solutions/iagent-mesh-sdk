@@ -90,7 +90,8 @@ _EXPORTED = {
     "asset_contract", "conformance", "declarations", "discovery", "edge_types", "enumeration",
     "export_profile", "graph_manifest", "ingest", "interfaces", "lifecycle_status",
     "maintenance_bridge",
-    "measure_series", "normalize", "pdp_answer", "persistence", "provenance", "refusal",
+    "measure_series", "normalize", "paged_answer", "pdp_answer", "persistence", "provenance",
+    "refusal",
     "results", "review_coverage", "rows", "shapes", "systems_of_record", "task_kinds",
     "workflow_case", "workflow_definition", "write_results",
 }

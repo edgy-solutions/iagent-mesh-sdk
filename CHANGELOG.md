@@ -6,6 +6,31 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.22 — 2026-11-15
+
+### Added
+- `PagedAnswer` (`iagent_mesh/paged_answer.py`), with `RowCitation`, `SuppressedStatistic`,
+  `Downsample`, and `AnswerProvenance` — the one envelope for all nine `mesh:mfg*` verbs,
+  ADR-0070 section 3 (`invincible-agent` PR #379, merged 2026-11-15; the ADR's own five open
+  questions ruled by the architect 2026-11-14, section 10, but the ADR itself stays "Proposed",
+  not ratified). The ADR's own words: "If the SDK has no typed paged answer of this shape, ca
+  adds it, with the TS mirror." This release is the Python half; the TS mirror is cortex's own
+  generated artifact (`cortex-ui/src/api/generated/bff.ts`, "DO NOT EDIT — run npm run
+  gen:api"), produced once `lane/mt` (ADR-0070 section 7, not yet built) types its
+  `POST /mfg/{verb}` BFF route against this shape — not something this release ships by hand.
+- `PagedAnswer.reason`/`PagedAnswer.withheld` are open strings/dicts, not closed
+  `Literal`s/schemas — their real vocabularies are deployment-served (`GET /mfg/declarations`)
+  and verb-varying, per generic-at-birth, the same posture `LifecycleStatus.status` already
+  takes against its own served registry file.
+- `AnswerProvenance.as_of` is `Optional[str] = None` rather than the ADR's literal
+  `"as_of_unavailable"` sentinel (section 5's ClickHouse gap) — a deliberate divergence to stay
+  consistent with this SDK's own `None`-means-absent convention
+  (`DataProvenance`'s v0.9.19 absence-marking); a caller needing the ADR's exact wire string can
+  still set it, since the field is open.
+- Refusals stay out of this type's scope — "a contract refusal is a refusal, never a 200"
+  (ADR-0070 section 3) — those continue to go through `iagent_mesh.refusal`'s existing
+  `Refusal`/`PartialRefusal` shapes.
+
 ## 0.9.21 — 2026-11-15
 
 ### Changed
