@@ -88,9 +88,9 @@ def _impact_row(**overrides):
         component="part:1234",
         qty_per=4,
         as_of="2026-11-07T00:00:00Z",
-        data_provenance=DataProvenance(
+        data_provenance=[DataProvenance(
             dataset_urn="urn:dataset:bom-rollup", as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
-        ),
+        )],
     )
     fields.update(overrides)
     return ImpactRow(**fields)
@@ -106,9 +106,9 @@ def test_impact_row_requires_its_identity_and_quantity_fields():
         ImpactRow(
             program="program:alpha", component="part:1234", qty_per=4,
             as_of="2026-11-07T00:00:00Z",
-            data_provenance=DataProvenance(
+            data_provenance=[DataProvenance(
                 dataset_urn="urn:x", as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
-            ),
+            )],
         )  # missing end_item
 
 
@@ -130,8 +130,8 @@ def test_impact_row_configuration_defaults_to_as_designed():
 
 def test_impact_row_data_provenance_carries_urn_as_of_and_ticket_id():
     row = _impact_row()
-    assert row.data_provenance.dataset_urn == "urn:dataset:bom-rollup"
-    assert row.data_provenance.ticket_id == "T-1"
+    assert row.data_provenance[0].dataset_urn == "urn:dataset:bom-rollup"
+    assert row.data_provenance[0].ticket_id == "T-1"
 
 
 def test_impact_row_is_frozen_and_forbids_unknown_fields():
@@ -165,10 +165,44 @@ def test_data_provenance_rejects_blank_but_not_none_for_the_absent_capable_field
 
 def test_impact_row_accepts_a_data_provenance_with_an_absent_dataset_urn_and_ticket():
     row = _impact_row(
-        data_provenance=DataProvenance(as_of="2026-11-07T00:00:00Z"),
+        data_provenance=[DataProvenance(as_of="2026-11-07T00:00:00Z")],
     )
-    assert row.data_provenance.dataset_urn is None
-    assert row.data_provenance.ticket_id is None
+    assert row.data_provenance[0].dataset_urn is None
+    assert row.data_provenance[0].ticket_id is None
+
+
+# ── DataProvenance multiplicity, ADDED 0.9.21 (lane 74's #337: a served row carries one
+#    provenance entry per input; the fixture that triggered the ask has two) ───────────────────
+
+def test_data_provenance_name_identifies_which_input_and_defaults_to_none():
+    provenance = DataProvenance(as_of="2026-11-07T00:00:00Z")
+    assert provenance.name is None
+    provenance = DataProvenance(name="product_structure", as_of="2026-11-07T00:00:00Z")
+    assert provenance.name == "product_structure"
+
+
+def test_data_provenance_name_rejects_blank():
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(name="", as_of="2026-11-07T00:00:00Z")
+
+
+def test_impact_row_data_provenance_holds_more_than_one_input():
+    row = _impact_row(
+        data_provenance=[
+            DataProvenance(
+                name="product_structure", dataset_urn="urn:dataset:bom-rollup",
+                as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
+            ),
+            DataProvenance(name="sustained_under", as_of="2026-11-06T00:00:00Z"),
+        ],
+    )
+    assert [p.name for p in row.data_provenance] == ["product_structure", "sustained_under"]
+    assert row.data_provenance[1].dataset_urn is None
+
+
+def test_impact_row_data_provenance_refuses_an_empty_list():
+    with pytest.raises(ValidationError):
+        _impact_row(data_provenance=[])
 
 
 def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):
