@@ -6,6 +6,23 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.23 — 2026-11-17
+
+### Added
+- `OnPromotion` (`iagent_mesh/ingest.py`) and `ContentKindRegistration.on_promotion` — a
+  document-branch kind can now name the workflow its promotion starts, Chris's ruling
+  2026-11-16 answering `invincible-agent`/lane/74's packet
+  (`sessions/2026-11-16-packet-to-ca-from-lane-74-a-promotion-can-name-the-workflow-it-starts.md`):
+  "Declare it as a row on the content kind … on promotion, start the named workflow. No kind
+  is named in code; a kind without the row behaves as today." `None` (the default) is every
+  kind before this field existed. One required field, `starts` (a workflow id, non-empty);
+  forbidden on `branch="event"` rows (an event kind is never promoted), same shape of refusal
+  as `parent_link_field`. The SDK checks only the shape — not that the named workflow exists,
+  and not how it starts: the architect ruled 2026-11-16 that the start mode (e.g.
+  `start: {from: extraction}`) lives on the workflow's own YAML, lane 74's own recommendation,
+  keeping this field at `{starts}` only. For the train after 0.4.90 — Lane 1 bumps the SDK
+  pin, then lane 74's PR starts the named workflow on promotion.
+
 ## 0.9.22 — 2026-11-15
 
 ### Added
