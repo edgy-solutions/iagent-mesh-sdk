@@ -27,6 +27,11 @@ def test_is_structurally_a_meshgraph():
     assert isinstance(client, MeshGraph)
 
 
+def test_construction_warns_deprecated():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        MeshGraphRemoteClient(BASE_URL, _client_for(lambda r: httpx.Response(200)))
+
+
 # ── success mapping ─────────────────────────────────────────────────────────────────────────
 
 

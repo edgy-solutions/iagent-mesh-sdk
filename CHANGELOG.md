@@ -6,6 +6,17 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.25 — 2026-11-19
+
+### Deprecated
+- `MeshGraphRemoteClient` (`iagent_mesh/remote_clients.py`) — roadmap row 8, architect's ruling
+  2026-11-18: retire rather than build a server end. The gateway it posts to has never existed;
+  enumeration of the dag-tools repo at a pinned commit found zero graph or vector routes
+  anywhere in it. Constructing an instance now emits a `DeprecationWarning` naming the ruling.
+  In-process readers (e.g. `invincible-agent/agent_fleet/ontology_service/mesh_graph.py`'s
+  `Neo4jGraph`, the SDK's only live `MeshGraph` caller, predating this module) are the supported
+  shape. Removal lands in the next minor, not this release.
+
 ## 0.9.24 — 2026-11-19
 
 ### Added
