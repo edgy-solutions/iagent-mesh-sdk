@@ -273,6 +273,60 @@ def test_impact_row_accepts_a_data_provenance_entry_with_a_stated_absent_as_of()
     assert row.data_provenance[0].absent_reason == {"as_of": "no source"}
 
 
+# ── ImpactRow row-level as_of/absent_reason, ADDED 0.9.26 (lane 74's reply to the
+#    DataProvenance shape proposal, confirming the per-input entry and asking for the same
+#    discipline one level up, on the row itself) ──────────────────────────────────────────────
+
+def test_impact_row_as_of_is_now_nullable_but_still_a_required_key():
+    row = _impact_row(as_of=None)  # absence stated, not defaulted
+    assert row.as_of is None
+    with pytest.raises(ValidationError):
+        _impact_row_without_as_of()
+
+
+def _impact_row_without_as_of():
+    return ImpactRow(
+        end_item="end-item:f-35", program="program:alpha", component="part:1234", qty_per=4,
+        data_provenance=[DataProvenance(
+            dataset_urn="urn:x", as_of="2026-11-07T00:00:00Z", ticket_id="T-1",
+        )],
+    )  # missing as_of
+
+
+def test_impact_row_rejects_a_blank_as_of():
+    with pytest.raises(ValidationError, match="use None for absent"):
+        _impact_row(as_of="")
+
+
+def test_impact_row_absent_reason_names_why_a_row_level_field_is_absent():
+    row = _impact_row(as_of=None, absent_reason={"as_of": "no source"})
+    assert row.absent_reason == {"as_of": "no source"}
+    row = _impact_row(absent_reason={"population": "no source", "stock": "no source"})
+    assert row.absent_reason == {"population": "no source", "stock": "no source"}
+
+
+def test_impact_row_absent_reason_defaults_to_none_and_refuses_an_empty_dict():
+    row = _impact_row()
+    assert row.absent_reason is None
+    with pytest.raises(ValidationError, match="use None"):
+        _impact_row(absent_reason={})
+
+
+def test_impact_row_absent_reason_refuses_a_blank_phrase():
+    with pytest.raises(ValidationError, match="never blank"):
+        _impact_row(as_of=None, absent_reason={"as_of": ""})
+
+
+def test_impact_row_absent_reason_refuses_a_key_outside_its_own_absence_capable_fields():
+    with pytest.raises(ValidationError, match="not one of this row's own absence-capable fields"):
+        _impact_row(absent_reason={"component": "no source"})
+
+
+def test_impact_row_absent_reason_refuses_a_key_naming_a_field_that_is_present():
+    with pytest.raises(ValidationError, match="is present on this same row"):
+        _impact_row(absent_reason={"as_of": "no source"})  # as_of is set on the default fixture
+
+
 def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):
     p = tmp_path / "lifecycle_status.yaml"
     p.write_text(

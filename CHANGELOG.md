@@ -28,6 +28,15 @@ version field — it stays at the value it forked from until a release ceremony 
   - `as_of` is now `Optional[str]` — **not defaulted**: the field stays a required key, so a
     caller states absence with `as_of=None` rather than omitting it. Through 0.9.25 this was the
     one field on this entry that could never be absent.
+- `ImpactRow` (`iagent_mesh/lifecycle_status.py`) gains the same two things one level up, per
+  invincible-agent/lane/74's reply confirming the `DataProvenance` shape above and asking for
+  these on the row itself:
+  - `as_of` is now `Optional[str]` — not defaulted, same discipline as `DataProvenance.as_of`.
+  - `absent_reason: Optional[dict[str, str]] = None` — row-level reasons, keyed by one of this
+    row's own absence-capable fields (`population`, `stock`, `as_of`), mirroring the where-used
+    card's own envelope/row split (invincible-agent PR #448). Distinct from a reason inside one
+    of the row's `data_provenance` entries, which explains why an input lacked something, not
+    why the row's own served field is absent.
 
 ## 0.9.25 — 2026-11-19
 

@@ -269,7 +269,22 @@ class ImpactRow(BaseModel):
     the architect 2026-11-07 via Chris — ruling 4 on #299's four questions. One row per
     (``end_item``, ``program``, ``component``) triple. Supersedes the three-field
     ``{part_ref, used_by, quantity}`` shape v0.9.16 shipped before this ruling reached ca; see the
-    module docstring for how that happened."""
+    module docstring for how that happened.
+
+    **ADDED 0.9.26** — lane 74's reply to the :class:`DataProvenance` shape proposal, confirming
+    the per-input entry and asking for two more things one level up, on the row itself:
+
+    * :attr:`as_of` is now ``Optional[str]``, **not defaulted** — same discipline as
+      :attr:`DataProvenance.as_of`: the key stays required, so a caller states absence with
+      ``as_of=None`` rather than omitting it. Through 0.9.25 this row's own ``as_of`` could never
+      be absent, only its per-input entries' could.
+    * :attr:`absent_reason` — row-level reasons, the same shape as
+      :attr:`DataProvenance.absent_reason` one level up: keyed by one of this row's own
+      absence-capable fields (:attr:`population`, :attr:`stock`, :attr:`as_of`), valued by a
+      short fixed phrase. Mirrors the where-used card's own envelope/row split (invincible-agent
+      PR #448): a reason at this level is this row's own, distinct from (and not overridden or
+      overridden-by) any reason inside one of its :attr:`data_provenance` entries, which explain
+      why an INPUT lacked something, not why this row's own served field is absent."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -296,14 +311,68 @@ class ImpactRow(BaseModel):
     ``as_designed``. A configuration with no data for the end item must be refused loudly by
     whatever resolver answers the query, never served as an empty table — this module ships the
     row only, not that refusal (see the module docstring's emitter/runner split)."""
-    as_of: str
-    """ISO-8601. When the data this row was answered from was current."""
+    as_of: Optional[str]
+    """ISO-8601. When the data this row was answered from was current. REQUIRED (no default): a
+    caller states absence with ``as_of=None`` rather than omitting the key. Nullable since
+    0.9.26 — see the class docstring; through 0.9.25 this row's own ``as_of`` could never be
+    absent."""
     data_provenance: list[DataProvenance] = Field(min_length=1)
     """One :class:`DataProvenance` entry per input the row was answered from. A single-input row
     (the only shape through 0.9.20) is a one-element list; **ADDED 0.9.21:** more than one input
     is now representable — lane 74's `#337` multiplicity ask, see :class:`DataProvenance`'s own
     docstring. Never empty: this row is always answered from at least one input, even one with
     nothing but an absent :attr:`DataProvenance.dataset_urn`/:attr:`DataProvenance.ticket_id`."""
+    absent_reason: Optional[dict[str, str]] = None
+    """Keyed by one of this row's own absence-capable field names (:attr:`population`,
+    :attr:`stock`, :attr:`as_of`), valued by a short, fixed phrase naming why that field is
+    absent on THIS row. ``None`` means no reasons given. ADDED 0.9.26."""
+
+    _ABSENCE_CAPABLE_FIELDS: ClassVar[tuple[str, ...]] = ("population", "stock", "as_of")
+
+    @field_validator("as_of")
+    @classmethod
+    def _as_of_is_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("ImpactRow.as_of='' — use None for absent, not a blank string")
+        return v
+
+    @field_validator("absent_reason")
+    @classmethod
+    def _absent_reason_is_well_formed(
+        cls, v: Optional[dict[str, str]],
+    ) -> Optional[dict[str, str]]:
+        if v is None:
+            return v
+        if not v:
+            raise ValueError(
+                "ImpactRow.absent_reason={} — use None, not an empty dict, for "
+                "'no reasons given'"
+            )
+        for key, reason in v.items():
+            if key not in cls._ABSENCE_CAPABLE_FIELDS:
+                raise ValueError(
+                    f"ImpactRow.absent_reason names {key!r}, which is not one of this row's "
+                    f"own absence-capable fields {cls._ABSENCE_CAPABLE_FIELDS}"
+                )
+            if not reason or not reason.strip():
+                raise ValueError(
+                    f"ImpactRow.absent_reason[{key!r}]='' — a reason is a short, fixed phrase "
+                    f"(e.g. 'no source'), never blank"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _absent_reason_names_only_fields_that_are_actually_absent(self) -> "ImpactRow":
+        if self.absent_reason is None:
+            return self
+        for key in self.absent_reason:
+            if getattr(self, key) is not None:
+                raise ValueError(
+                    f"ImpactRow.absent_reason names {key!r}, but {key}={getattr(self, key)!r} "
+                    f"is present on this same row — a reason explains an absence, it does not "
+                    f"ride alongside a served value"
+                )
+        return self
 
 
 class UnknownLifecycleStatus(LookupError):
