@@ -60,6 +60,7 @@ __all__ = [
     "WaitStep",
     "EmitStep",
     "Step",
+    "WorkflowStart",
     "WorkflowDefinition",
     "load_workflow_definition",
 ]
@@ -322,6 +323,23 @@ Step = Annotated[
 ]
 
 
+class WorkflowStart(_Declared):
+    """How a run begins other than by its own definition's default trigger — e.g.
+    ``start: {from: extraction}`` lets a promotion row (``ContentKindRegistration.on_promotion``)
+    name which engine's event begins this workflow. The SDK checks only that ``from`` is a
+    non-empty string; it keeps no list of start modes — the consumer (the BFF) refuses an unknown
+    mode at load, the same split `on_promotion` draws for the workflow id itself (the SDK
+    validates shape, never that the mode is one anything recognizes). A model rather than a bare
+    string because a later key is then additive — invincible-agent/lane/74, 2026-11-17 amendment."""
+
+    from_: str = Field(..., alias="from")
+
+    @model_validator(mode="after")
+    def _from_is_present(self) -> "WorkflowStart":
+        _required_str("WorkflowStart", "from", self.from_)
+        return self
+
+
 class WorkflowDefinition(_Declared):
     """A git-asserted process workflow. `classification` gates who may OBSERVE (the 3-audience
     tiers); `participants`/`domain_stages` feed observation. Carries no execution state of its
@@ -335,6 +353,7 @@ class WorkflowDefinition(_Declared):
     domain_stages: tuple[str, ...] = ()
     steps: tuple[Step, ...]  # type: ignore[valid-type]
     observable_state: Optional[dict] = None
+    start: Optional[WorkflowStart] = None
 
     @model_validator(mode="after")
     def _id_and_name_are_present(self) -> "WorkflowDefinition":

@@ -6,6 +6,21 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.24 — 2026-11-19
+
+### Added
+- `WorkflowStart` (`iagent_mesh/workflow_definition.py`) and `WorkflowDefinition.start` —
+  invincible-agent/lane/74's 2026-11-17 amendment to the 0.9.23 packet corrects "the SDK field
+  stays `{starts}` only": the architect's 2026-11-16 ruling that a workflow's start mode
+  (`start: {from: extraction}`) lives on the workflow's own YAML still needs the SDK to carry
+  that field, since `WorkflowDefinition` inherits `_Declared` (`extra="forbid", frozen=True`) —
+  an unrecognized `start:` key would refuse the whole definition at load, not drop it. `start` is
+  optional, absent by default; `WorkflowStart.from_` (yaml alias `from`) is its one required,
+  non-empty field. The SDK checks only that `from` is present and non-blank — it keeps no list of
+  start modes; the consumer (the BFF) refuses an unknown mode at load, the same split
+  `on_promotion` draws for the workflow id itself. One release carries both fields lane 74 asked
+  for (`on_promotion` already shipped 0.9.23); Lane 1 bumps the pin once this is tagged.
+
 ## 0.9.23 — 2026-11-17
 
 ### Added

@@ -358,6 +358,7 @@ from .workflow_definition import (
     WaitStep,
     WorkflowDefinition,
     WorkflowDefinitionError,
+    WorkflowStart,
     load_workflow_definition,
 )
 
@@ -716,6 +717,7 @@ __all__ = [
     "SpoOperationStep",
     "Step",
     "WaitStep",
+    "WorkflowStart",
     "WorkflowDefinition",
     "WorkflowDefinitionError",
     "load_workflow_definition",
