@@ -65,9 +65,9 @@ same division every other row-shape module in this SDK draws
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
     "LifecycleStatus",
@@ -139,9 +139,7 @@ class DataProvenance(BaseModel):
     **`dataset_urn`/`ticket_id` can say ABSENT, ADDED 0.9.19** — lane 74's `#337` packet named the
     real gap: a served row with no catalogue entry has no dataset URN, and a row with no broker
     read has no ticket; re-exporting that row forced inventing both as placeholder strings.
-    ``None`` on either field means absent, never a placeholder. `as_of` stays required — this row
-    is only ever answered from data that was current as of SOME moment, absent sourcing or not;
-    only the two sourcing facts, not the timestamp, can be missing. **ADDED 0.9.21:**
+    ``None`` on either field means absent, never a placeholder. **ADDED 0.9.21:**
     :attr:`ImpactRow.data_provenance` now holds a LIST of these entries, one per input the row was
     answered from — lane 74's other `#337` ask ("hold more than one input"), the multiplicity half
     left unruled at 0.9.19. A :class:`DataProvenance` entry itself is still this one triple (plus
@@ -149,7 +147,39 @@ class DataProvenance(BaseModel):
     itself. This is this module's own shape for the multiplicity, informed by but not copying the
     fleet's own ``{inputs: [...], absent: {...}}`` candidate (lane 74's packet offered that as "one
     way to do both... yours and the architect's to rule," not a fixed spec) — generic-at-birth
-    favors a plain list of the existing triple over inventing a second, fleet-shaped wrapper type."""
+    favors a plain list of the existing triple over inventing a second, fleet-shaped wrapper type.
+
+    **ADDED 0.9.26, architect's ruling via Chris 2026-11-19: "the provenance entry on an impact
+    row must be able to carry what is served."** Proposed to lane 74 (who serves the where-used
+    row) for agreement before release — see the packet this ships alongside.
+
+    * :attr:`as_of` is now ``Optional[str]``, **not defaulted** — the field stays REQUIRED (no
+      default value), so a caller must pass ``as_of=None`` to state absence; omitting the key
+      entirely still raises, the same way it always has. Before 0.9.26 this was the one field on
+      this row that could never be absent; lane 74's where-used producer can now genuinely lack an
+      as-of for an entry (same reasoning :data:`iagent_mesh.provenance.AS_OF_UNKNOWN` states for
+      the richer :class:`iagent_mesh.provenance.ProvenanceBlock`, applied here as ``None`` instead
+      of a sentinel string, matching this row's own ``dataset_urn``/``ticket_id`` convention).
+    * :attr:`locator` — ADDED. Pinpoints the specific record this entry was read from (a row id,
+      document id, or query key), finer-grained than :attr:`dataset_urn`, which names the dataset,
+      not the record within it. ``None`` means absent, same discipline as every other field here.
+    * :attr:`classification` — ADDED. This entry's own place on the classification hierarchy
+      (ADR-0064), the same open-string vocabulary
+      :attr:`iagent_mesh.asset_contract.AssetContractColumn.level` already carries — never an
+      ``Enum``/``Literal``, per generic-at-birth. ``None`` means not stated, never defaulted to
+      the least-restrictive label.
+    * :attr:`notional` — ADDED. ``True`` when this entry's value is notional (planned or
+      estimated, never measured); ``False`` when it is a real reading; ``None`` means the
+      distinction itself was never stated — NOT a claim that the value is actual.
+    * :attr:`absent_reason` — ADDED. Carries WHY a field on this same entry is absent, not just
+      THAT it is — the gap cortex and lane 74 hit on the where-used card today (invincible-agent
+      PR #448's `absent_reason: {<column key>: <phrase>}`, serving the card's own
+      ``population``/``stock`` columns). Same shape, one level down: keyed by one of this row's
+      own absence-capable field names, valued by a short, fixed phrase ("no source"), per Chris's
+      ruling the same day — "a reason that reaches a person is a code and a bounded message."
+      ``None`` means no reasons given. A key naming a field that is NOT actually absent on this
+      same entry is refused — a reason explains an absence, it does not ride alongside a served
+      value."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -159,13 +189,34 @@ class DataProvenance(BaseModel):
     apart. ``None`` is fine when a row has exactly one entry and nothing to distinguish it from."""
     dataset_urn: Optional[str] = None
     """``None`` means absent — no catalogue entry — never a placeholder string. ADDED 0.9.19."""
-    as_of: str
-    """ISO-8601, this SDK's house convention for a wire timestamp — never ``datetime``. Stays
-    required: unlike :attr:`dataset_urn`/:attr:`ticket_id`, this is never the fact that's absent."""
+    as_of: Optional[str]
+    """ISO-8601, this SDK's house convention for a wire timestamp — never ``datetime``. REQUIRED
+    (no default): a caller states absence with ``as_of=None`` rather than omitting the key, so
+    absence is a stated fact, never a silently-defaulted one. Nullable since 0.9.26 — see the
+    class docstring; through 0.9.25 this was the one field on this row that could never be
+    absent."""
     ticket_id: Optional[str] = None
     """``None`` means absent — no broker read — never a placeholder string. ADDED 0.9.19."""
+    locator: Optional[str] = None
+    """Pinpoints the specific record within the dataset this entry was read from — a row id,
+    document id, or query key. ``None`` means absent. ADDED 0.9.26."""
+    classification: Optional[str] = None
+    """This entry's place on the classification hierarchy (ADR-0064), open-string vocabulary.
+    ``None`` means not stated. ADDED 0.9.26."""
+    notional: Optional[bool] = None
+    """``True`` for a planned/estimated value, ``False`` for a measured one, ``None`` when the
+    distinction was never stated. ADDED 0.9.26."""
+    absent_reason: Optional[dict[str, str]] = None
+    """Keyed by one of this entry's own absence-capable field names
+    (:attr:`dataset_urn`/:attr:`as_of`/:attr:`ticket_id`/:attr:`locator`/:attr:`classification`/
+    :attr:`notional`), valued by a short, fixed phrase naming why that field is absent on THIS
+    entry. ``None`` means no reasons given. ADDED 0.9.26."""
 
-    @field_validator("name", "dataset_urn", "ticket_id")
+    _ABSENCE_CAPABLE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "dataset_urn", "as_of", "ticket_id", "locator", "classification", "notional",
+    )
+
+    @field_validator("name", "dataset_urn", "ticket_id", "as_of", "locator", "classification")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
@@ -173,6 +224,44 @@ class DataProvenance(BaseModel):
                 f"DataProvenance.{info.field_name}='' — use None for absent, not a blank string"
             )
         return v
+
+    @field_validator("absent_reason")
+    @classmethod
+    def _absent_reason_is_well_formed(
+        cls, v: Optional[dict[str, str]],
+    ) -> Optional[dict[str, str]]:
+        if v is None:
+            return v
+        if not v:
+            raise ValueError(
+                "DataProvenance.absent_reason={} — use None, not an empty dict, for "
+                "'no reasons given'"
+            )
+        for key, reason in v.items():
+            if key not in cls._ABSENCE_CAPABLE_FIELDS:
+                raise ValueError(
+                    f"DataProvenance.absent_reason names {key!r}, which is not one of this "
+                    f"row's own absence-capable fields {cls._ABSENCE_CAPABLE_FIELDS}"
+                )
+            if not reason or not reason.strip():
+                raise ValueError(
+                    f"DataProvenance.absent_reason[{key!r}]='' — a reason is a short, fixed "
+                    f"phrase (e.g. 'no source'), never blank"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _absent_reason_names_only_fields_that_are_actually_absent(self) -> "DataProvenance":
+        if self.absent_reason is None:
+            return self
+        for key in self.absent_reason:
+            if getattr(self, key) is not None:
+                raise ValueError(
+                    f"DataProvenance.absent_reason names {key!r}, but {key}="
+                    f"{getattr(self, key)!r} is present on this same entry — a reason explains "
+                    f"an absence, it does not ride alongside a served value"
+                )
+        return self
 
 
 class ImpactRow(BaseModel):

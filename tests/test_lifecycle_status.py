@@ -205,6 +205,74 @@ def test_impact_row_data_provenance_refuses_an_empty_list():
         _impact_row(data_provenance=[])
 
 
+# ── DataProvenance, ADDED 0.9.26 (architect's ruling via Chris 2026-11-19: "the provenance
+#    entry on an impact row must be able to carry what is served") ───────────────────────────
+
+def test_data_provenance_as_of_is_now_nullable_but_still_a_required_key():
+    provenance = DataProvenance(as_of=None)  # absence stated, not defaulted
+    assert provenance.as_of is None
+    with pytest.raises(ValidationError):
+        DataProvenance()  # omitting the key entirely still raises
+
+
+def test_data_provenance_locator_classification_notional_default_to_none():
+    provenance = DataProvenance(as_of="2026-11-19T00:00:00Z")
+    assert provenance.locator is None
+    assert provenance.classification is None
+    assert provenance.notional is None
+    provenance = DataProvenance(
+        as_of="2026-11-19T00:00:00Z",
+        locator="row:42", classification="internal-only", notional=True,
+    )
+    assert provenance.locator == "row:42"
+    assert provenance.classification == "internal-only"
+    assert provenance.notional is True
+
+
+def test_data_provenance_rejects_blank_as_of_and_locator_and_classification():
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(as_of="")
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(as_of="2026-11-19T00:00:00Z", locator="")
+    with pytest.raises(ValidationError, match="use None for absent"):
+        DataProvenance(as_of="2026-11-19T00:00:00Z", classification="")
+
+
+def test_data_provenance_absent_reason_names_why_a_field_is_absent():
+    provenance = DataProvenance(as_of=None, absent_reason={"as_of": "no source"})
+    assert provenance.absent_reason == {"as_of": "no source"}
+
+
+def test_data_provenance_absent_reason_defaults_to_none_and_refuses_an_empty_dict():
+    provenance = DataProvenance(as_of="2026-11-19T00:00:00Z")
+    assert provenance.absent_reason is None
+    with pytest.raises(ValidationError, match="use None"):
+        DataProvenance(as_of=None, absent_reason={})
+
+
+def test_data_provenance_absent_reason_refuses_a_blank_phrase():
+    with pytest.raises(ValidationError, match="never blank"):
+        DataProvenance(as_of=None, absent_reason={"as_of": ""})
+
+
+def test_data_provenance_absent_reason_refuses_a_key_outside_its_own_absence_capable_fields():
+    with pytest.raises(ValidationError, match="not one of this row's own absence-capable fields"):
+        DataProvenance(as_of=None, absent_reason={"program": "no source"})
+
+
+def test_data_provenance_absent_reason_refuses_a_key_naming_a_field_that_is_present():
+    with pytest.raises(ValidationError, match="is present on this same entry"):
+        DataProvenance(as_of="2026-11-19T00:00:00Z", absent_reason={"as_of": "no source"})
+
+
+def test_impact_row_accepts_a_data_provenance_entry_with_a_stated_absent_as_of():
+    row = _impact_row(
+        data_provenance=[DataProvenance(as_of=None, absent_reason={"as_of": "no source"})],
+    )
+    assert row.data_provenance[0].as_of is None
+    assert row.data_provenance[0].absent_reason == {"as_of": "no source"}
+
+
 def test_load_lifecycle_status_vocabulary_from_a_file(tmp_path: Path):
     p = tmp_path / "lifecycle_status.yaml"
     p.write_text(

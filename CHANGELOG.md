@@ -6,6 +6,29 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.26 — 2026-11-19
+
+### Added
+- `DataProvenance` (`iagent_mesh/lifecycle_status.py`) extended per the architect's ruling via
+  Chris this morning: "the provenance entry on an impact row must be able to carry what is
+  served." Proposed to invincible-agent/lane/74 (who serves the where-used row) for agreement
+  before this release.
+  - `locator: Optional[str] = None` — pinpoints the specific record within the dataset this
+    entry was read from (a row id, document id, or query key), finer-grained than `dataset_urn`.
+  - `classification: Optional[str] = None` — this entry's place on the ADR-0064 classification
+    hierarchy, open string against `policy/classification/dimensions.yaml`, mirroring
+    `AssetContractColumn.level`'s existing convention.
+  - `notional: Optional[bool] = None` — `True` for a planned/estimated value, `False` for a
+    measured one, `None` when the distinction was never stated.
+  - `absent_reason: Optional[dict[str, str]] = None` — keyed by one of this entry's own
+    absence-capable field names, valued by a short fixed phrase naming why that field is absent
+    on this entry (e.g. `{"as_of": "no source"}`). Refused if empty, if a key names a field that
+    is not one of this model's own absence-capable fields, or if a key names a field that is
+    actually present on the same entry.
+  - `as_of` is now `Optional[str]` — **not defaulted**: the field stays a required key, so a
+    caller states absence with `as_of=None` rather than omitting it. Through 0.9.25 this was the
+    one field on this entry that could never be absent.
+
 ## 0.9.25 — 2026-11-19
 
 ### Deprecated
