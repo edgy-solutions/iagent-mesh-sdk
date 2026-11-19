@@ -19,6 +19,7 @@ from iagent_mesh.workflow_definition import (
     WaitStep,
     WorkflowDefinition,
     WorkflowDefinitionError,
+    WorkflowStart,
     load_workflow_definition,
 )
 
@@ -42,6 +43,7 @@ def test_a_minimal_definition_is_valid():
     assert d.participants == ()
     assert d.domain_stages == ()
     assert d.observable_state is None
+    assert d.start is None
     assert len(d.steps) == 1
 
 
@@ -77,6 +79,22 @@ def test_a_single_bad_step_reports_only_its_own_error_not_a_phantom_empty_steps(
 def test_an_unknown_step_kind_fails_the_discriminator_loudly():
     with pytest.raises(ValidationError):
         _definition(steps=[{"kind": "mystery", "id": "x"}])
+
+
+def test_start_accepts_a_from_mode():
+    d = _definition(start={"from": "extraction"})
+    assert d.start == WorkflowStart(**{"from": "extraction"})
+    assert d.start.from_ == "extraction"
+
+
+def test_start_with_an_empty_from_is_refused():
+    with pytest.raises(ValidationError, match="from='' — required"):
+        _definition(start={"from": ""})
+
+
+def test_start_rejects_an_extra_key():
+    with pytest.raises(ValidationError):
+        _definition(start={"from": "extraction", "mode": "eager"})
 
 
 def test_the_definition_itself_rejects_an_unknown_top_level_key():
@@ -366,6 +384,17 @@ def test_load_workflow_definition_round_trips_a_yaml_file(tmp_path):
     d = load_workflow_definition(p)
     assert d.id == "safety-check"
     assert d.steps[0].kind == "wait"
+
+
+def test_load_workflow_definition_round_trips_a_start_mode(tmp_path):
+    p = tmp_path / "grouped-review.yaml"
+    p.write_text(
+        "id: grouped-review\nname: Grouped Review\nstart:\n  from: extraction\nsteps:\n"
+        "  - kind: wait\n    id: settle\n    seconds: 60\n",
+        encoding="utf-8",
+    )
+    d = load_workflow_definition(p)
+    assert d.start.from_ == "extraction"
 
 
 def test_load_workflow_definition_wraps_a_parse_failure(tmp_path):
