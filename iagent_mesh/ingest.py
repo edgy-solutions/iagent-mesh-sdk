@@ -71,6 +71,7 @@ __all__ = [
     "IngestStatus",
     "ContentKindRegistration",
     "RefreshSpec",
+    "OnPromotion",
     "ArtifactRevision",
     "ContentKindUnregistered",
     "resolve_content_kind",
@@ -246,6 +247,42 @@ class RefreshSpec(BaseModel):
         return v
 
 
+class OnPromotion(BaseModel):
+    """What a document-branch kind's promotion starts, ADDED 0.9.23. Chris's ruling 2026-11-16:
+    "Promoting a notice starts its disposition review. Declare it as a row on the content kind …
+    on promotion, start the named workflow. No kind is named in code; a kind without the row
+    behaves as today." Lane 74's own packet (``sessions/2026-11-16-packet-to-ca-from-lane-74-...``)
+    asked for exactly this shape.
+
+    **ONE FIELD, ON PURPOSE.** ``starts`` names a workflow id — this model does not check that
+    the workflow exists; the consumer validates it against its own workflow registry at load and
+    refuses an unknown id, the same split :attr:`ContentKindRegistration.seeds_workflow` already
+    draws. A model rather than a bare string so a later key (e.g. a domain override) is additive,
+    not a field-type change.
+
+    **HOW THE NAMED WORKFLOW ACTUALLY STARTS IS NOT THIS MODEL'S QUESTION, AND NOT THIS SDK'S
+    ANSWER.** The architect ruled 2026-11-16: the start mode lives in the workflow's own YAML
+    (e.g. ``start: {from: extraction}`` on ``grouped_review.yaml``), not on this row — lane 74's
+    own recommendation, kept the SDK out of it. ``starts`` only names WHICH workflow; where that
+    workflow reads its input from is a fact the workflow definition carries, never this field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    starts: str
+    """The workflow id this kind's promotion starts, e.g. ``"grouped_review"``. Opaque to this
+    module — never matched against a workflow registry here; see the class docstring."""
+
+    @field_validator("starts")
+    @classmethod
+    def _starts_is_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "OnPromotion.starts='' — a promotion that starts nothing is not a declaration, "
+                "it is a row someone forgot to finish"
+            )
+        return v
+
+
 class ContentKindRegistration(BaseModel):
     """One row of ADR-0021's mapping table: ``(kind-source value → kind → extractor-config →
     BAML-set → target OntologyClass)``, collapsed to the fields a kind-source repo needs to
@@ -346,6 +383,19 @@ class ContentKindRegistration(BaseModel):
     for the event branch's own key: it only declares which field of the extracted output names
     the parent, not how a caller resolves that name to the parent's own node. Forbidden for
     ``branch="event"`` rows — see ``_branch_shape_is_consistent`` below."""
+
+    on_promotion: Optional[OnPromotion] = None
+    """ADDED 0.9.23, Chris's ruling 2026-11-16 answering lane 74's packet. ``None`` (the default)
+    means this kind's promotion starts nothing — every kind before this field existed, and any
+    kind no ruling has named a workflow for. Set, it names the workflow a promotion of this
+    kind's instances starts (see :class:`OnPromotion`).
+
+    **DOCUMENT BRANCH ONLY**, same reasoning :attr:`parent_link_field` already states: promotion
+    is a document-branch act (ADR-0041 §5); an event kind is never promoted, so a workflow to
+    start ON promotion has nothing to attach to. Forbidden for ``branch="event"`` rows — see
+    ``_branch_shape_is_consistent`` below. Does not widen :attr:`seeds_workflow` — that field
+    means "an event seeds a case" on arrival; this one means "a document's promotion starts a
+    workflow", a different act on a different branch."""
 
     id_namespaces: tuple[str, ...] = ()
     """ADDED 0.9.11. Generalizes invincible-agent/lane/74's PR #51 (``register_engine_to_mesh``'s
@@ -554,6 +604,12 @@ class ContentKindRegistration(BaseModel):
                     f"ContentKindRegistration(kind={self.kind!r}, branch='event') declares "
                     f"parent_link_field — an event kind runs no pass and produces no extracted "
                     f"output for a parent reference to live in; parent_link_field belongs to "
+                    f"branch='document' rows only"
+                )
+            if self.on_promotion is not None:
+                raise ValueError(
+                    f"ContentKindRegistration(kind={self.kind!r}, branch='event') declares "
+                    f"on_promotion — an event kind is never promoted; on_promotion belongs to "
                     f"branch='document' rows only"
                 )
             if self.seeds_workflow is None:

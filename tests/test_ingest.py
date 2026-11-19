@@ -30,6 +30,7 @@ from iagent_mesh.ingest import (
     ContentKindUnregistered,
     IngestRequest,
     IngestStatus,
+    OnPromotion,
     RefreshSpec,
     compose,
     load_content_kind_registrations,
@@ -360,6 +361,38 @@ def test_event_branch_forbids_parent_link_field():
     live in — same shape of refusal as seeds_workflow/identity_field's inverse above."""
     with pytest.raises(ValidationError, match="parent_link_field"):
         ContentKindRegistration(**{**VALID_EVENT_REGISTRATION, "parent_link_field": "parent_dmc"})
+
+
+# ── ContentKindRegistration.on_promotion, ADDED 0.9.23 (Chris's ruling, lane 74's packet) ─
+
+def test_on_promotion_is_optional_a_row_without_it_is_unchanged():
+    row = ContentKindRegistration(**VALID_REGISTRATION)
+    assert row.on_promotion is None
+
+
+def test_on_promotion_is_accepted_on_a_document_row():
+    row = ContentKindRegistration(
+        **{**VALID_REGISTRATION, "on_promotion": OnPromotion(starts="grouped_review")}
+    )
+    assert row.on_promotion.starts == "grouped_review"
+
+
+def test_on_promotion_starts_cannot_be_blank():
+    with pytest.raises(ValidationError, match="starts"):
+        OnPromotion(starts="")
+
+
+def test_on_promotion_forbids_an_extra_key():
+    with pytest.raises(ValidationError):
+        OnPromotion(starts="grouped_review", domain="SUSTAINMENT")
+
+
+def test_event_branch_forbids_on_promotion():
+    """An event kind is never promoted — same shape of refusal as parent_link_field above."""
+    with pytest.raises(ValidationError, match="on_promotion"):
+        ContentKindRegistration(
+            **{**VALID_EVENT_REGISTRATION, "on_promotion": OnPromotion(starts="grouped_review")}
+        )
 
 
 # ── ContentKindRegistration.id_namespaces, ADDED 0.9.11 (generalizes lane/74's PR #51) ────
