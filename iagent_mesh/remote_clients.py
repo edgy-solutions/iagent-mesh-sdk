@@ -39,10 +39,21 @@ and ``MeshOntology`` clients are deliberately NOT built here.
 
 No gateway route handler exists for any of these paths today. This client is a transport
 adapter whose other end has not been built.
+
+**DEPRECATED (architect's ruling, 2026-11-18, roadmap row 8).** Enumeration against the
+dag-tools gateway at a pinned commit found zero graph or vector routes anywhere in that repo —
+the route this client posts to has never existed, and no one has built it. The ruling: retire
+the remote client rather than build a server end for it. In-process readers (e.g.
+``invincible-agent/agent_fleet/ontology_service/mesh_graph.py``'s ``Neo4jGraph``, which predates
+this module and is the SDK's only live ``MeshGraph`` caller) are the supported shape going
+forward, not this HTTP adapter. This module is deprecated starting the release that carries this
+notice and will be REMOVED in the next minor — not simply left to bit-rot, since an import that
+still succeeds after the ruling would understate how settled the retirement is.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Sequence
 
 import httpx
@@ -65,6 +76,9 @@ class MeshGraphRemoteClient:
     this is what lets a test substitute a stub transport and never call a live gateway, and
     matches this SDK's existing synchronous ``httpx.Client`` convention (``client.py``,
     ``registration_transport.py``); nothing here is async.
+
+    **DEPRECATED, roadmap row 8 (architect's ruling, 2026-11-18): retire, don't build a server
+    end.** In-process readers are the supported shape. Removal lands in the next minor.
     """
 
     #: This interface answers one way, so its results carry no mode — same declaration as the
@@ -73,6 +87,13 @@ class MeshGraphRemoteClient:
     MODES: tuple[str, ...] = ()
 
     def __init__(self, base_url: str, client: httpx.Client) -> None:
+        warnings.warn(
+            "MeshGraphRemoteClient is deprecated and will be removed in the next minor "
+            "release (roadmap row 8: retire rather than build a server end — no gateway route "
+            "has ever served /mesh/graph/*). Use an in-process MeshGraph reader instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._base_url = base_url.rstrip("/")
         self._client = client
 
