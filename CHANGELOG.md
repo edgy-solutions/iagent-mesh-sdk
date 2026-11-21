@@ -6,6 +6,34 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.27 — draft, unreleased
+
+### Added
+- `AnswerProvenance` (`iagent_mesh/paged_answer.py`) extended per the architect's 11-20 ruling,
+  relayed via Chris: "when an as-of is unavailable, say so; never show a blank or a stale date as
+  current." Cortex's mfg-navigator design pass (gap #12) found that `AnswerProvenance.as_of`
+  (shipped 0.9.22) could not say so — a `PagedAnswer` whose caller never set `as_of` at all read
+  identically to one that read the source and found no as-of.
+  - `as_of` is now a required key with no default (type unchanged, `Optional[str]`) — a caller
+    states absence with `as_of=None` rather than omitting it, the same "stated, never defaulted"
+    discipline `DataProvenance.as_of` and `ImpactRow.as_of` already carry (0.9.19, 0.9.26).
+  - `as_of_unavailable: Optional[str] = None` — why `as_of` is `None`. Open string, not a closed
+    `Literal`, per generic-at-birth: fin's broker reports one of its own four constants
+    (`no_reader_for_source_type`, `reader_declined`, `reader_failed`,
+    `reader_returned_unusable_value`, PR #496) and a different domain's broker will report its
+    own vocabulary.
+  - `as_of_source: Optional[str] = None` — where a *present* `as_of` came from, when that
+    matters (fin's receipt distinguishes `read_at_authorize` from `advertised_at_load`). Same
+    open-string posture.
+  - A new cross-field check enforces the ruling both ways: `as_of=None` with
+    `as_of_unavailable=None` is refused (a blank with no reason is exactly what "say so"
+    forbids), and `as_of_unavailable` set while `as_of` is also present is refused (a reason
+    explains an absence, it does not ride alongside a served value).
+  - TS mirror: out of this module's scope, same as the rest of `AnswerProvenance` — generated
+    from invincible-agent's OpenAPI document once `lane/mt` types its BFF route against this
+    Python shape.
+- Draft only: not merged, not tagged, no release cut.
+
 ## 0.9.26 — 2026-11-19
 
 ### Added

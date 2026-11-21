@@ -1,6 +1,7 @@
 """`PagedAnswer` — the one envelope for the nine `mesh:mfg*` verbs (ADR-0070 section 3). See
 `iagent_mesh/paged_answer.py`'s module docstring for the envelope's verbatim shape and the
-`reason`/`withheld`/`as_of` design notes this module's tests exercise.
+`reason`/`withheld`/`as_of`/`as_of_unavailable`/`as_of_source` design notes this module's tests
+exercise.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from iagent_mesh.paged_answer import (
 
 
 def _provenance(**overrides) -> AnswerProvenance:
-    fields = {"issued_at": "2026-11-15T00:00:00Z"}
+    fields = {"issued_at": "2026-11-15T00:00:00Z", "as_of": "2026-11-15T00:00:00Z"}
     fields.update(overrides)
     return AnswerProvenance(**fields)
 
@@ -60,11 +61,12 @@ def test_answer_provenance_issued_at_is_required():
         AnswerProvenance(dataset_urn="urn:dataset:serial_unit")  # missing issued_at
 
 
-def test_answer_provenance_dataset_urn_as_of_ticket_id_default_to_none():
+def test_answer_provenance_dataset_urn_and_ticket_id_default_to_none():
     provenance = _provenance()
     assert provenance.dataset_urn is None
-    assert provenance.as_of is None
     assert provenance.ticket_id is None
+    assert provenance.as_of_unavailable is None
+    assert provenance.as_of_source is None
     assert provenance.issued_at == "2026-11-15T00:00:00Z"
 
 
@@ -73,12 +75,42 @@ def test_answer_provenance_rejects_blank_optional_fields():
         _provenance(dataset_urn="")
 
 
-def test_answer_provenance_as_of_unavailable_is_representable_but_not_the_default():
-    # Section 5's literal sentinel — this module defaults to None (see the module docstring) but
-    # a caller may still set the ADR's exact string itself.
-    provenance = _provenance(as_of="as_of_unavailable")
-    assert provenance.as_of == "as_of_unavailable"
-    assert _provenance().as_of is None
+def test_answer_provenance_as_of_is_required_no_default():
+    # 0.9.27: omitting the key is no longer the same as stating absence — a caller must say
+    # as_of=None, not leave the field out, so a never-set as_of can't read like a read-and-absent
+    # one.
+    with pytest.raises(ValidationError):
+        AnswerProvenance(issued_at="2026-11-15T00:00:00Z")  # missing as_of
+
+
+def test_answer_provenance_absent_as_of_with_no_reason_is_the_blank_the_ruling_forbids():
+    # The architect's 11-20 ruling: "when an as-of is unavailable, say so; never show a blank."
+    with pytest.raises(ValidationError):
+        _provenance(as_of=None)  # as_of_unavailable also None
+
+
+def test_answer_provenance_as_of_unavailable_says_why_as_of_is_absent():
+    provenance = _provenance(as_of=None, as_of_unavailable="no_reader_for_source_type")
+    assert provenance.as_of is None
+    assert provenance.as_of_unavailable == "no_reader_for_source_type"
+
+
+def test_answer_provenance_as_of_unavailable_cannot_ride_alongside_a_present_as_of():
+    with pytest.raises(ValidationError):
+        _provenance(as_of="2026-11-15T00:00:00Z", as_of_unavailable="reader_failed")
+
+
+def test_answer_provenance_as_of_source_labels_a_present_as_of():
+    provenance = _provenance(as_of_source="advertised_at_load")
+    assert provenance.as_of == "2026-11-15T00:00:00Z"
+    assert provenance.as_of_source == "advertised_at_load"
+
+
+def test_answer_provenance_rejects_blank_as_of_unavailable_and_as_of_source():
+    with pytest.raises(ValidationError):
+        _provenance(as_of=None, as_of_unavailable="")
+    with pytest.raises(ValidationError):
+        _provenance(as_of_source="")
 
 
 def test_paged_answer_requires_provenance():
