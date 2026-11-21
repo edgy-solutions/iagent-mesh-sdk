@@ -13,7 +13,7 @@ cortex says it is needed)."* This module is that addition. The envelope, verbati
       withheld: {...} | null,     # section 4
       suppressed: [{statistic, reason}],   # stats only
       downsampled: {from_n, to_n} | null,  # series only
-      provenance: {dataset_urn, as_of, ticket_id, issued_at} }
+      provenance: {dataset_urn, as_of, as_of_unavailable, as_of_source, ticket_id, issued_at} }
 
 Searched first for a reusable fit, same discipline :class:`iagent_mesh.lifecycle_status.DataProvenance`
 states for itself: :class:`iagent_mesh.results.MeshResult` is a three-state substrate-outcome
@@ -42,14 +42,25 @@ codes; ``withheld``'s exact keys vary per verb, e.g. ``mesh:containment``'s per-
 LifecycleStatus.status` already takes against its own served vocabulary file. Neither is a
 ``Literal`` or a closed schema here.
 
-**``as_of``: ``None`` means absent, not the ADR's literal ``"as_of_unavailable"`` string.** Section
-5: "``AS_OF_READERS`` ships empty for ClickHouse... every answer carries ``as_of_unavailable``.
-That is honest, and it is not a refusal." This is a deliberate, flagged divergence from the ADR's
-literal sentinel, to stay consistent with this SDK's own already-ruled convention
-(:class:`iagent_mesh.lifecycle_status.DataProvenance`'s v0.9.19 absence-marking: "``None`` on
-either field means absent, never a placeholder string"). A caller that must emit the ADR's exact
-string can still do so — this field is an open ``Optional[str]``, not a closed vocabulary — but
-this module's own default posture is ``None``.
+**``as_of``: ``None`` means absent; ``as_of_unavailable`` says why (0.9.27).** Section 5:
+"``AS_OF_READERS`` ships empty for ClickHouse... every answer carries ``as_of_unavailable``. That
+is honest, and it is not a refusal." 0.9.22 read that as a literal sentinel string the ADR wanted
+on ``as_of`` itself and deliberately diverged from it, in favor of this SDK's own ``None``-means-
+absent convention. That divergence quietly reopened the exact gap the ADR's sentinel existed to
+close: a caller that never set ``as_of`` at all and one that read its source and found no as-of
+both produced the identical ``as_of=None`` — cortex's own finding, from the mfg navigator's
+pre-build design pass (``sessions/2026-11-20-plan-...-the-mfg-navigator-plan.md`` §6 Q12) against
+the architect's 11-20 ruling: "when an as-of is unavailable, say so; never show a blank or a stale
+date as current." 0.9.27 resolves it the SDK's own way rather than adopting the ADR's sentinel
+string after all: ``as_of`` stays a required-but-nullable key (``None`` is still the absence
+marker, and is now REQUIRED rather than defaulted, so a caller must say ``as_of=None`` rather than
+omit the key — the same "stated, never defaulted" discipline as :class:`iagent_mesh.
+lifecycle_status.DataProvenance.as_of`), and a new, equally required-when-needed
+``as_of_unavailable`` carries the *reason*, enforced by a cross-field check: ``as_of=None`` with
+``as_of_unavailable=None`` is refused — a blank with no reason is exactly what "say so" forbids.
+``as_of_source`` (new, also 0.9.27) is the lesser sibling fact for a *present* ``as_of``: where it
+came from (fin's receipt distinguishes ``read_at_authorize`` from ``advertised_at_load``), open
+the same way.
 """
 from __future__ import annotations
 
@@ -175,12 +186,34 @@ class AnswerProvenance(BaseModel):
     dataset_urn: Optional[str] = None
     """``None`` means absent — no catalogue entry — never a placeholder string, same convention as
     :attr:`iagent_mesh.lifecycle_status.DataProvenance.dataset_urn`."""
-    as_of: Optional[str] = None
-    """``None`` means absent. Section 5's own gap: "``AS_OF_READERS`` ships empty for ClickHouse...
-    every answer carries ``as_of_unavailable``. That is honest, and it is not a refusal." This
-    module diverges from that literal sentinel string in favor of ``None`` — see the module
-    docstring's flagged note — while remaining an open string a caller may still set to
-    ``"as_of_unavailable"`` itself if it needs the ADR's exact wire value."""
+    as_of: Optional[str]
+    """ISO-8601, or ``None`` when no as-of was read. REQUIRED (no default): a caller states
+    absence with ``as_of=None`` rather than omitting the key, so absence is a stated fact, never a
+    silently-defaulted one — the same discipline :attr:`iagent_mesh.lifecycle_status.
+    DataProvenance.as_of` already takes, applied here because a missing key and an explicitly
+    ``None`` one were otherwise indistinguishable, which is exactly the gap cortex found: a
+    ``PagedAnswer`` whose caller never set this at all read identically to one that read the
+    source and found no as-of. ADDED (required, no default) 0.9.27.
+
+    The architect's 11-20 ruling: "when an as-of is unavailable, say so; never show a blank or a
+    stale date as current." ``None`` here is the "say so" — paired with :attr:`as_of_unavailable`
+    below, which carries *why*, since ``None`` alone does not say anything a UI could draw."""
+    as_of_unavailable: Optional[str] = None
+    """Why :attr:`as_of` is ``None`` — required whenever it is (see the cross-field check below),
+    ``None`` when :attr:`as_of` is present. An open string, not a ``Literal``, per generic-at-birth:
+    fin's broker reports one of four of its own constants (``no_reader_for_source_type``,
+    ``reader_declined``, ``reader_failed``, ``reader_returned_unusable_value``, PR #496) and a
+    different domain's broker will report its own vocabulary — the same served-vocabulary posture
+    :attr:`iagent_mesh.lifecycle_status.LifecycleStatus.status` and
+    :class:`iagent_mesh.paged_answer.PagedAnswer`'s own :attr:`~PagedAnswer.reason` already take.
+    ADDED 0.9.27."""
+    as_of_source: Optional[str] = None
+    """Where a *present* :attr:`as_of` came from, when that matters to the reader — fin's receipt
+    names ``read_at_authorize`` (read fresh for this ticket) versus ``advertised_at_load`` (the
+    source's own claimed timestamp, not re-read for this ticket); carried here under the same
+    names, open string for the same reason as :attr:`as_of_unavailable`. ``None`` means not
+    stated, which is not the same claim as ``read_at_authorize`` — a caller that knows which one
+    it is should say so, not default silently. ADDED 0.9.27."""
     ticket_id: Optional[str] = None
     """``None`` means absent — no broker read — never a placeholder string, same convention as
     :attr:`iagent_mesh.lifecycle_status.DataProvenance.ticket_id`."""
@@ -188,7 +221,8 @@ class AnswerProvenance(BaseModel):
     """ISO-8601. When the broker ticket this answer's provenance comes from was issued. Required —
     see the class docstring: this is the one envelope field the ADR never marks nullable."""
 
-    @field_validator("dataset_urn", "as_of", "ticket_id", "issued_at")
+    @field_validator("dataset_urn", "as_of", "as_of_unavailable", "as_of_source", "ticket_id",
+                      "issued_at")
     @classmethod
     def _optional_field_is_not_blank(cls, v: Optional[str], info) -> Optional[str]:
         if v is not None and not v.strip():
@@ -196,6 +230,22 @@ class AnswerProvenance(BaseModel):
                 f"AnswerProvenance.{info.field_name}='' — use None for absent, not a blank string"
             )
         return v
+
+    @model_validator(mode="after")
+    def _as_of_unavailable_says_so_exactly_when_as_of_is_absent(self) -> "AnswerProvenance":
+        if self.as_of is None and self.as_of_unavailable is None:
+            raise ValueError(
+                "AnswerProvenance.as_of=None with as_of_unavailable=None — the 11-20 ruling is "
+                "'when an as-of is unavailable, say so'; an absent as_of with no stated reason is "
+                "exactly the blank this field exists to forbid. Pass a reason, even an opaque one."
+            )
+        if self.as_of is not None and self.as_of_unavailable is not None:
+            raise ValueError(
+                f"AnswerProvenance.as_of={self.as_of!r} is present, but "
+                f"as_of_unavailable={self.as_of_unavailable!r} is also set — a reason explains an "
+                f"absence, it does not ride alongside a served value"
+            )
+        return self
 
 
 class PagedAnswer(BaseModel, Generic[T]):
