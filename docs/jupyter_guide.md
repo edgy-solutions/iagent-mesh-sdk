@@ -263,6 +263,13 @@ When scaffolding, you will be asked to select a template. Choose the one that fi
 ### Step 3: Publish to the Mesh
 Once you have filled in your business logic in the generated `app.py`, push the repository to Git (or ask the MCP server to `publish` it). Our GitOps pipeline will build, deploy, and dynamically register your Domain Node to the global Mesh!
 
+### Not building a mesh node? See the dashboard/API guide
+If what you're moving your notebook logic *into* is a dashboard panel or a REST route rather
+than a scaffolded Domain Node — for example, a team's own analysis surface reached directly over
+HTTP instead of through Engine O — the five templates above don't apply, but the same
+`CallerIdentity` / per-caller discipline does. See
+[`dashboard_and_api_guide.md`](dashboard_and_api_guide.md) (draft).
+
 ---
 
 > ### 💡 Platform Pro-Tip: `def` vs `async def`

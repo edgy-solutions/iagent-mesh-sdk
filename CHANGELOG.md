@@ -6,6 +6,33 @@ log` and `sessions/` for that history. Versions are `pyproject.toml`'s `version`
 `master` at the tag named below, never a lane branch's own (lane branches do not bump their own
 version field — it stays at the value it forked from until a release ceremony runs on `master`).
 
+## 0.9.28 — draft, unreleased
+
+### Added
+- `CallerIdentity` (`iagent_mesh/transport_auth.py`) gains `require_bearer_for_relay()` — the
+  durable, provider-generic form of a relay mechanism first built Engine-O-specific. A node that
+  cannot answer its own request in-process may now relay "the caller's own verified bearer,
+  captured from the request it received" to another registered provider endpoint, under the
+  proposal's four conditions: relayed only for that one request, never logged, never stored, and
+  refused as an expired session (not served as an anonymous answer) if the token has expired
+  since verification. Architect-approved to build as a draft PR on 2026-11-21; explicitly **no
+  release** — this stays a draft until a separate go-ahead.
+  - New private `_relay_bearer` slot on `CallerIdentity`, populated ONLY on `verify_bearer()`'s
+    fully-verified branch — never on an OBSERVE-admitted unverified caller.
+  - New `_bearer_is_expired()` helper (`transport_auth.py`) decodes the already-signature-
+    verified token without re-verifying it, to re-check `exp` at relay time rather than only at
+    mint time.
+  - Does NOT build: a registered-provider-endpoints registry (none exists in this SDK yet — the
+    predicate graph registers what a tool *offers*, not what it may *call*), the outbound relay
+    call itself (stays the calling tool's own code), or a declared relay posture convention (open
+    question, not decided here). See `sessions/2026-11-20-proposal-sdk-carries-verified-bearer-
+    for-relay.md` for the full proposal and its remaining open items.
+- `docs/dashboard_and_api_guide.md` (draft) — the dashboard/API-layer authorization pattern,
+  converted from proposal to guide per the architect's 2026-11-21 instruction. States explicitly,
+  as an **open question**, how a dashboard's own browser-session login exchanges for a mesh-
+  accepted bearer — two candidate shapes recorded, neither decided. Cross-linked from
+  `docs/jupyter_guide.md` §4.
+
 ## 0.9.26 — 2026-11-19
 
 ### Added

@@ -60,6 +60,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from contextvars import ContextVar
 from typing import Any, Optional
 
@@ -262,17 +263,72 @@ class CallerIdentity:
     decision may key on; `raw` exists for logging and nothing else.
     """
 
-    __slots__ = ("authz_id", "verified", "reason", "raw")
+    __slots__ = ("authz_id", "verified", "reason", "raw", "_relay_bearer")
 
-    def __init__(self, authz_id: Optional[str], verified: bool, reason: str, raw: Any = None):
+    def __init__(
+        self,
+        authz_id: Optional[str],
+        verified: bool,
+        reason: str,
+        raw: Any = None,
+        _relay_bearer: Optional[str] = None,
+    ):
         self.authz_id = authz_id
         self.verified = verified
         self.reason = reason
         self.raw = raw
+        # Leading underscore: not a public attribute. Read it only through
+        # `require_bearer_for_relay()`, never directly — see that method's docstring for why.
+        self._relay_bearer = _relay_bearer
 
     def __repr__(self) -> str:  # pragma: no cover — logging aid
         who = self.authz_id or "none"
         return f"<caller {who} verified={self.verified} ({self.reason})>"
+
+    def require_bearer_for_relay(self) -> str:
+        """The caller's own verified bearer, to relay to ANOTHER registered provider endpoint
+        for THIS request only — or a loud refusal.
+
+        0.9.28, the durable form of a ruling first built Engine-O-specific: a provider that
+        cannot answer its own request in-process may relay "the person's own verified bearer,
+        captured from the request it received" to another registered provider, under four
+        conditions — relayed only to a registered endpoint, for that one request; never logged;
+        never stored; an expired token is refused as an expired session, never served as an
+        anonymous answer in its place.
+
+        `.raw` holds decoded CLAIMS, never the encoded token — by design, since a logged claims
+        dict is a far smaller exposure than a logged bearer. Relaying the credential itself means
+        keeping a SECOND thing alive, under tighter rules than the first: this accessor is that
+        second thing's only legal exit.
+
+        Refuses (`PermissionError`, reason named) when: the caller never verified (OBSERVE-
+        admitted or absent — relaying an unverified token just moves the presence-check-wearing-
+        authentication's-clothes defect one hop downstream, onto a provider that will treat it as
+        trustworthy); or the token has since expired (checked again HERE, not only at mint time —
+        time passes between request receipt and a downstream call). Each is a different caller
+        problem, and collapsing them into one unresolved `None` is the defect `require_authz_id()`
+        already exists to refuse.
+
+        What this accessor does NOT do, left to the calling tool: check the relay target against
+        a "registered provider endpoints" registry (the predicate graph registers what a tool
+        *offers*, not what it may *call* — no such registry exists in this SDK yet); build the
+        outbound request (`headers={"Authorization": f"Bearer {caller.require_bearer_for_relay()}"}`
+        stays the calling tool's own code, same split `CortexDataClient(originator_email=...)`
+        already has for `authz_id`); or declare a tool's relay posture the way `caller_scoped` is
+        declared (open question, not decided here).
+        """
+        if not self.verified or self._relay_bearer is None:
+            raise PermissionError(
+                f"no verified bearer to relay ({self.reason}) — this caller has no live person "
+                "token for this request. If there is genuinely no live token, route through "
+                "declared delegation instead of inventing a relay for one."
+            )
+        if _bearer_is_expired(self._relay_bearer):
+            raise PermissionError(
+                "verified bearer has expired since this request began — refuse this relay as "
+                "an expired session, never serve an anonymous answer in its place."
+            )
+        return self._relay_bearer
 
     def require_authz_id(self) -> str:
         """The subject to authorize a DOWNSTREAM READ as — or a loud refusal.
@@ -466,7 +522,32 @@ def verify_bearer(token: Optional[str]) -> CallerIdentity:
     subject = claims.get(_entitlement_claim())
     if not subject:
         return CallerIdentity(None, False, f"no {_entitlement_claim()!r} claim")
-    return CallerIdentity(subject, True, "verified", raw=claims)
+    # `_relay_bearer` carries the raw token itself, not just its decoded claims — see
+    # `CallerIdentity.require_bearer_for_relay()`. Set ONLY on this verified branch, never on
+    # the OBSERVE-admitted-but-unverified branches above: relaying an unverified token just
+    # moves the presence-check defect one hop downstream.
+    return CallerIdentity(subject, True, "verified", raw=claims, _relay_bearer=token)
+
+
+def _bearer_is_expired(token: str) -> bool:
+    """Re-check `exp` at call time, no network round-trip. The token was already
+    signature-verified once this request (`verify_bearer`); re-verifying only costs a JWKS
+    round-trip for no new information — decoding without verification is sufficient to read a
+    claim that was itself already proven genuine this request. An undecodable token (should not
+    happen — it was decoded once already to get here) is treated as expired: fail closed, not
+    open, on a code path a relay depends on.
+    `verify_signature: False` below is not a weak gate — the signature check is already closed
+    by `verify_bearer`'s own JWKS-backed verification earlier this same request; this call only
+    rereads a claim from an already-trusted token."""
+    import jwt  # PyJWT
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:  # noqa: BLE001
+        return True
+    exp = claims.get("exp")
+    if exp is None:
+        return True
+    return time.time() >= exp
 
 
 def _bearer_from(header: Optional[str]) -> Optional[str]:

@@ -454,3 +454,71 @@ def test_the_diagnostic_header_can_never_authorize(monkeypatch):
     monkeypatch.setenv("REQUIRE_TRANSPORT_AUTH", "true")
     r = _client_with_dependency().get("/ping", headers={"X-Auth-Status": "verified:svc:admin"})
     assert r.status_code == 401, "a claimed status must never substitute for a token"
+
+
+# --- the relay bearer (0.9.28) -----------------------------------------------
+# The durable, generic form of a ruling first built Engine-O-specific: a verified caller's own
+# bearer, carried for relay to another registered provider for this one request — never logged,
+# never stored, same-request-only. See `CallerIdentity.require_bearer_for_relay()`.
+
+def test_verified_caller_can_relay_its_own_bearer(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    monkeypatch.setenv("MESH_JWT_PUBLIC_KEY", _PUBLIC_PEM)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_ISSUERS", ISSUER)
+    monkeypatch.setenv("MESH_JWT_ACCEPTED_AUDIENCES", AUDIENCE)
+    tok = jwt.encode(_claims(email="svc:supervisor"), _PRIVATE_PEM, algorithm="RS256")
+    c = ta.verify_bearer(tok)
+    assert c.require_bearer_for_relay() == tok
+
+
+def test_absent_caller_refuses_to_relay():
+    c = ta.verify_bearer(None)
+    with pytest.raises(PermissionError):
+        c.require_bearer_for_relay()
+
+
+def test_unverified_caller_refuses_to_relay():
+    """Relaying an unverified token just moves the presence-check defect one hop downstream,
+    onto a provider that will treat it as trustworthy."""
+    jwt = pytest.importorskip("jwt")
+    tok = jwt.encode({"email": "svc:impostor"}, "k", algorithm="HS256")
+    c = ta.verify_bearer(tok)
+    assert c.verified is False  # control: this IS the OBSERVE-admitted branch under test
+    with pytest.raises(PermissionError):
+        c.require_bearer_for_relay()
+
+
+def test_require_bearer_for_relay_refuses_a_bearer_that_expired_since_verification():
+    """Time passes between request receipt and a downstream relay call — re-checked here, not
+    only at mint time. Built directly, bypassing `verify_bearer` (which would itself refuse an
+    already-expired token at decode time): this proves the re-check `require_bearer_for_relay`
+    does on its own, for the case where the token was valid when `verify_bearer` ran and has
+    since expired."""
+    jwt = pytest.importorskip("jwt")
+    tok = jwt.encode(_claims(exp=int(time.time()) - 1), _PRIVATE_PEM, algorithm="RS256")
+    caller = ta.CallerIdentity("svc:supervisor", True, "verified", _relay_bearer=tok)
+    with pytest.raises(PermissionError):
+        caller.require_bearer_for_relay()
+
+
+def test_repr_never_contains_the_relay_bearer():
+    caller = ta.CallerIdentity("svc:x", True, "verified", _relay_bearer="super-secret-token")
+    assert "super-secret-token" not in repr(caller)
+
+
+def test_relay_bearer_is_not_assigned_anywhere_outside_this_module():
+    """'Never stored' is a NEGATIVE discipline: `_relay_bearer` must never be written into
+    anything with its own retention. A grep-based check: nothing under `iagent_mesh/` other than
+    `transport_auth.py` itself may assign to `._relay_bearer` — a call site may READ it (to make
+    one outbound call), never WRITE it onto something that outlives the request."""
+    import pathlib
+    import re
+
+    package_root = pathlib.Path(ta.__file__).resolve().parent
+    offenders = []
+    for path in package_root.rglob("*.py"):
+        if path.name == "transport_auth.py":
+            continue
+        if re.search(r"_relay_bearer\s*=", path.read_text(encoding="utf-8")):
+            offenders.append(str(path))
+    assert offenders == []
